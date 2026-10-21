@@ -1,0 +1,92 @@
+name: Build, test and deploy static site to GitHub Pages
+
+# SatoshiCore Web Platform v24.0
+#
+# NOTE ON ACTIVATION:
+# The deploy job below is gated behind `if: false` as an explicit safeguard
+# (deployment requirement #10). Nothing is published to GitHub Pages until the
+# owner flips that gate and enables Pages (Source: GitHub Actions) in the
+# repository settings. Build and test jobs run on every push/PR regardless.
+
+on:
+  push:
+    branches: [main, 'feature/**']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      custom_domain:
+        description: "Build for custom domain (satoshicore.org). Leave false for github.io preview builds."
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  # pages: write and id-token: write are required for deployment; they are
+  # scoped to the deploy job, which is currently disabled.
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  build:
+    name: Build static export
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build static export
+        env:
+          # github.io preview builds live under /satoshicore/; custom-domain
+          # builds (workflow_dispatch with custom_domain=true) live at the
+          # root of satoshicore.org.
+          NEXT_PUBLIC_BASE_PATH: ${{ github.event_name == 'workflow_dispatch' && inputs.custom_domain == true && '' || github.ref_name == 'main' && '/satoshicore' || '' }}
+        run: npm run build
+
+      - name: Apply custom-domain configuration
+        if: github.event_name == 'workflow_dispatch' && inputs.custom_domain == true
+        run: cp CNAME.reference out/CNAME
+
+      - name: Run static-export verification tests
+        run: npm test
+
+      - name: Security scan of static output
+        run: node tests/security-scan.mjs out
+
+      - name: Upload static output
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: out
+
+  deploy:
+    name: Deploy to GitHub Pages (owner-gated)
+    runs-on: ubuntu-latest
+    # SAFEGUARD: disabled until owner approval. To activate:
+    #  1. Change this to: if: github.ref_name == 'main'
+    #  2. Repository Settings -> Pages -> Source: GitHub Actions
+    #  3. Configure the custom domain per docs/DEPLOYMENT.md (DNS step
+    #     requires owner action and is intentionally not automated here).
+    if: false
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
