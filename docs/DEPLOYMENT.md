@@ -8,20 +8,49 @@
                     │   satoshicore.org           │   ← built by GitHub Actions
                     │   www.satoshicore.org       │     from Next.js static export
                     └──────────────┬──────────────┘
-                                   │ browser fetches (public, CORS-scoped)
+                                   │ browser fetches (CORS allowlist)
                     ┌──────────────┴──────────────┐
-                    │                             │
-      ┌─────────────▼─────────────┐   ┌───────────▼──────────────┐
-      │ Web Wallet API Gateway    │   │ Blockchain Indexer       │
-      │ (separate backend service)│   │ (separate backend service)│
-      │ - signed-tx relay only    │   │ - balances / history      │
-      │ - NEVER admin endpoints   │   │ - explorer data           │
-      └───────────────────────────┘   └──────────────────────────┘
+                                   │
+                    ┌──────────────▼──────────────┐
+                    │ Web Wallet API Gateway      │
+                    │ (services/api-gateway)      │
+                    │ - /api/v1/chain/info (read) │
+                    │ - /api/v1/tx (signed relay) │
+                    │ - holds no keys             │
+                    └──────────────┬──────────────┘
+                                   │ same-host/private network
+                                   │ :11626 (allowlisted routes only)
+                    ┌──────────────▼──────────────┐
+                    │ nsat-core node              │
+                    │ (SatoshiConnect/nsat-core)  │
+                    └─────────────────────────────┘
+
+      ┌───────────────────────────┐
+      │ Blockchain Indexer        │  ← separate future service
+      │ (balances / history)      │    (not yet built)
+      └───────────────────────────┘
 ```
 
 The website is a **fully static export** (`output: 'export'` in
 `next.config.js`). There is no Node.js server at the hosting layer. All
 public pages and the client-side Web Wallet interface run in the browser.
+
+## API Gateway ↔ nsat-core connection
+
+`services/api-gateway` is the production relay between the static site and
+the nsat-core node (see `SatoshiConnect/nsat-core`, branch
+`nsat/minimal-core-v40`):
+
+- **Read path:** `/api/v1/chain/info` proxies the core's public `/info`.
+- **Write path:** `/api/v1/tx` forwards base64 **signed** transaction
+  envelopes to the core's `tx` endpoint. Signing is client-side; the gateway
+  never touches key material.
+- **No admin surface:** the gateway has an explicit route allowlist — core
+  administrative/operational endpoints are not proxied.
+- The gateway should run on the same host or private network as the nsat-core
+  node; only the gateway's public endpoints are exposed to the internet.
+- Website integration: set `NEXT_PUBLIC_API_GATEWAY_URL` at build time. When
+  unset or unreachable, the site renders its offline/experimental state.
 
 ## GitHub Pages hosting
 

@@ -1,0 +1,14 @@
+{
+  "name": "satoshicore-api-gateway",
+  "version": "24.0.0",
+  "private": true,
+  "description": "Web Wallet API Gateway for SatoshiCore — relays signed transactions and read-only chain info to the nsat-core node. Holds no keys.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test tests/gateway.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
