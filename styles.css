@@ -1,0 +1,49 @@
+:root {
+  --bg: #090D18; --bg2: #111A2E; --card: #131C31; --line: #1F2B45;
+  --text: #E6EDF7; --dim: #8FA1BF; --accent: #4C8DFF;
+  --ok: #35C187; --warn: #FFB347; --bad: #FF5C6C;
+  font-family: -apple-system, "Segoe UI", Roboto, Inter, sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); }
+button {
+  background: var(--accent); color: #fff; border: 0; border-radius: 10px;
+  padding: 10px 16px; font-size: 15px; font-weight: 600; cursor: pointer;
+}
+button.ghost { background: transparent; border: 1px solid var(--line); color: var(--dim); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+input, select {
+  background: var(--bg2); color: var(--text); border: 1px solid var(--line);
+  border-radius: 10px; padding: 10px 12px; font-size: 15px; width: 100%;
+}
+.card {
+  background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+  padding: 18px; margin-bottom: 14px;
+}
+.muted { color: var(--dim); font-size: 13px; }
+.row { display: flex; gap: 10px; align-items: center; }
+.balance { font-size: 44px; font-weight: 700; letter-spacing: .5px; }
+.balance small { font-size: 16px; color: var(--dim); font-weight: 500; }
+.layout { display: flex; min-height: 100vh; }
+.sidebar { width: 220px; background: var(--bg2); padding: 20px 10px; flex: none; }
+.sidebar a { display: block; padding: 10px 12px; border-radius: 10px;
+  color: var(--dim); text-decoration: none; font-weight: 600; font-size: 14px; }
+.sidebar a.active { background: var(--card); color: var(--text); }
+.content { flex: 1; padding: 26px; max-width: 860px; }
+.mobilebar {
+  display: none; position: fixed; bottom: 0; left: 0; right: 0;
+  background: var(--bg2); border-top: 1px solid var(--line);
+}
+.mobilebar a { flex: 1; text-align: center; padding: 12px 0;
+  color: var(--dim); text-decoration: none; font-size: 12px; }
+@media (max-width: 720px) {
+  .layout { flex-direction: column; }
+  .sidebar { display: none; }
+  .content { padding: 16px 16px 80px; }
+  .mobilebar { display: flex; }
+  .balance { font-size: 34px; }
+}
+.state-ok { color: var(--ok); } .state-bad { color: var(--bad); }
+.state-warn { color: var(--warn); }
+.qr { background: #fff; padding: 10px; border-radius: 12px; width: 220px; height: 220px; }
+code { background: var(--bg2); border-radius: 6px; padding: 2px 6px; word-break: break-all; }
