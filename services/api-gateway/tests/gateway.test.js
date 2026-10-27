@@ -114,3 +114,138 @@ test('gateway: health, chain info proxy, signed tx relay, CORS, 404', async () =
     mockCore.close();
   }
 });
+
+// --- integration: busy-retry, oversize, rate limit ----------------------------
+
+// core that returns N busy responses before serving /info normally
+function startFlakyCore(busyCount) {
+  let hits = 0;
+  return new Promise((resolve) => {
+    const server = http.createServer((req, res) => {
+      if (req.url === '/info') {
+        hits += 1;
+        if (hits <= busyCount) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'busy' }));
+        } else {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ info: { ledger: { num: 77 }, network: 'NSAT Mainnet ; October 2026' } }));
+        }
+      } else {
+        res.writeHead(404);
+        res.end('{}');
+      }
+    });
+    server.listen(0, '127.0.0.1', () => resolve(server));
+  });
+}
+
+test('busy responses retried with backoff, never surfaced as success', async () => {
+  const mockCore = await startFlakyCore(2);
+  process.env.NSAT_CORE_HTTP_URL = `http://127.0.0.1:${mockCore.address().port}`;
+  process.env.CORE_BUSY_DELAY_MS = '10';
+  process.env.CORE_BUSY_RETRIES = '4';
+  delete require.cache[require.resolve('../server.js')];
+  const { createServer: freshCreate } = require('../server.js');
+  const gateway = freshCreate();
+  await new Promise((r) => gateway.listen(0, '127.0.0.1', r));
+  try {
+    const info = await request(gateway.address().port, '/api/v1/chain/info');
+    assert.equal(info.status, 200);
+    const body = JSON.parse(info.body);
+    assert.equal(body.info.ledger.num, 77);
+    assert.equal(body.status, undefined);
+  } finally {
+    gateway.close();
+    mockCore.close();
+  }
+});
+
+// core that is busy forever → gateway must answer 503, not a fake result
+test('permanently busy core yields explicit 503', async () => {
+  const mockCore = await startFlakyCore(999);
+  process.env.NSAT_CORE_HTTP_URL = `http://127.0.0.1:${mockCore.address().port}`;
+  process.env.CORE_BUSY_DELAY_MS = '10';
+  process.env.CORE_BUSY_RETRIES = '1';
+  delete require.cache[require.resolve('../server.js')];
+  const { createServer: freshCreate } = require('../server.js');
+  const gateway = freshCreate();
+  await new Promise((r) => gateway.listen(0, '127.0.0.1', r));
+  try {
+    const info = await request(gateway.address().port, '/api/v1/chain/info');
+    assert.equal(info.status, 503);
+    const body = JSON.parse(info.body);
+    assert.equal(body.status, 'busy');
+  } finally {
+    gateway.close();
+    mockCore.close();
+  }
+});
+
+// oversized request body is rejected with 413
+test('oversized POST body rejected with 413', async () => {
+  const mockCore = await startMockCore();
+  process.env.NSAT_CORE_HTTP_URL = `http://127.0.0.1:${mockCore.address().port}`;
+  process.env.MAX_BODY_BYTES = '64';
+  delete require.cache[require.resolve('../server.js')];
+  const { createServer: freshCreate } = require('../server.js');
+  const gateway = freshCreate();
+  await new Promise((r) => gateway.listen(0, '127.0.0.1', r));
+  try {
+    const big = await request(gateway.address().port, '/api/v1/tx', {
+      method: 'POST',
+      body: JSON.stringify({ envelope_xdr: 'A'.repeat(200) })
+    });
+    assert.equal(big.status, 413);
+  } finally {
+    gateway.close();
+    mockCore.close();
+  }
+});
+
+// rate limiting triggers 429 after max requests
+test('rate limit enforced per IP', async () => {
+  const mockCore = await startMockCore();
+  process.env.NSAT_CORE_HTTP_URL = `http://127.0.0.1:${mockCore.address().port}`;
+  process.env.RATE_MAX_REQUESTS = '5';
+  process.env.RATE_WINDOW_MS = '60000';
+  delete require.cache[require.resolve('../server.js')];
+  const { createServer: freshCreate } = require('../server.js');
+  const gateway = freshCreate();
+  await new Promise((r) => gateway.listen(0, '127.0.0.1', r));
+  try {
+    const statuses = [];
+    for (let i = 0; i < 7; i += 1) {
+      const r = await request(gateway.address().port, '/api/v1/chain/info');
+      statuses.push(r.status);
+    }
+    const firstFive = statuses.slice(0, 5);
+    for (const s of firstFive) assert.ok(s !== 429, 'rate limit triggered before limit');
+    assert.ok(statuses.includes(429), `expected 429 in ${statuses.join(',')}`);
+  } finally {
+    gateway.close();
+    mockCore.close();
+  }
+});
+
+// network status endpoint reports core liveness
+test('network status endpoint reports gateway+core', async () => {
+  const mockCore = await startMockCore();
+  process.env.NSAT_CORE_HTTP_URL = `http://127.0.0.1:${mockCore.address().port}`;
+  process.env.NSAT_NETWORK_NAME = 'NSAT Mainnet ; October 2026';
+  delete require.cache[require.resolve('../server.js')];
+  const { createServer: freshCreate } = require('../server.js');
+  const gateway = freshCreate();
+  await new Promise((r) => gateway.listen(0, '127.0.0.1', r));
+  try {
+    const r = await request(gateway.address().port, '/api/v1/network/status');
+    assert.equal(r.status, 200);
+    const body = JSON.parse(r.body);
+    assert.equal(body.gateway, 'ok');
+    assert.equal(body.core, 'ok');
+    assert.equal(body.network, 'NSAT Mainnet ; October 2026');
+  } finally {
+    gateway.close();
+    mockCore.close();
+  }
+});

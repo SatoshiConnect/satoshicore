@@ -32,7 +32,13 @@ const CONFIG = {
     maxRequests: Number(process.env.RATE_MAX_REQUESTS) || 120
   },
   // Timeout for upstream core calls (ms).
-  coreTimeoutMs: Number(process.env.CORE_TIMEOUT_MS) || 10_000
+  coreTimeoutMs: Number(process.env.CORE_TIMEOUT_MS) || 10_000,
+  // Bounded busy-retry for upstream responses carrying {"status":"busy"}
+  // (the ledger-close lock). A busy response must NEVER be surfaced as a
+  // definitive zero balance / missing account / failed submit — retry with
+  // exponential backoff, then propagate an explicit 503.
+  busyRetries: Number(process.env.CORE_BUSY_RETRIES) || 4,
+  busyBaseDelayMs: Number(process.env.CORE_BUSY_DELAY_MS) || 150
 };
 
 // --- logging (structured, secret-free) -------------------------------------
@@ -120,6 +126,45 @@ function coreFetch(path, { method = 'GET', body = null, contentType } = {}) {
   });
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// GET a core path, retrying "busy" responses with bounded backoff.
+// Never returns a body that looks like success while the ledger is busy.
+async function coreFetchRead(path) {
+  let delay = CONFIG.busyBaseDelayMs;
+  for (let attempt = 0; attempt <= CONFIG.busyRetries; attempt += 1) {
+    const up = await coreFetch(path);
+    let parsed = null;
+    try {
+      parsed = JSON.parse(up.body);
+    } catch {
+      // opaque upstream body (HTML error page etc.) — not a busy marker
+    }
+    if (up.status === 200 && parsed && parsed.status === 'busy') {
+      // core is mid ledger-close; this is NOT an authoritative answer
+      if (attempt === CONFIG.busyRetries) {
+        return { status: 503, body: JSON.stringify({ error: 'core ledger busy — try again shortly', status: 'busy' }) };
+      }
+      await sleep(delay);
+      delay *= 2;
+      continue;
+    }
+    if (up.status !== 200) {
+      // propagate non-200 upstream verbatim (error sanitization happens at
+      // the gateway route level by replacing the body below)
+      return {
+        status: up.status,
+        body: JSON.stringify({ error: 'core node error', upstream_status: up.status })
+      };
+    }
+    return { status: up.status, body: up.body };
+  }
+  // unreachable
+  return { status: 503, body: JSON.stringify({ error: 'core ledger busy' }) };
+}
+
 // Signed-envelope validation. The gateway accepts base64-encoded XDR
 // TransactionEnvelope blobs only — it never constructs or signs transactions.
 const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
@@ -142,10 +187,10 @@ const ROUTES = {
     });
   },
 
-  // Read-only chain status, proxied from nsat-core /info.
+  // Read-only chain status, proxied from nsat-core /info with busy-retry.
   'GET /api/v1/chain/info': async (req, res) => {
     try {
-      const up = await coreFetch('/info');
+      const up = await coreFetchRead('/info');
       res.writeHead(up.status, {
         ...corsHeaders(req),
         'Content-Type': 'application/json; charset=utf-8',
@@ -155,6 +200,36 @@ const ROUTES = {
     } catch (err) {
       log('error', 'core_info_failed', { error: err.message });
       sendJson(res, 502, { error: 'core node unreachable' });
+    }
+  },
+
+  // Network / health status of the whole stack. Companion endpoint for the
+  // status page: verifies the gateway itself and liveness of the core node.
+  'GET /api/v1/network/status': async (req, res) => {
+    try {
+      const up = await coreFetchRead('/info');
+      const coreReachable = up.status === 200;
+      let serverTime = null;
+      let ledger = null;
+      if (coreReachable) {
+        try {
+          const parsed = JSON.parse(up.body);
+          ledger = parsed && parsed.info && parsed.info.ledger ? parsed.info.ledger.num : null;
+          serverTime = parsed && parsed.info ? parsed.info.serverTime || null : null;
+        } catch {
+          // non-JSON upstream — treat as degraded
+        }
+      }
+      sendJson(res, coreReachable ? 200 : 200, {
+        gateway: 'ok',
+        core: coreReachable ? 'ok' : 'unreachable',
+        ledger,
+        serverTime,
+        network: process.env.NSAT_NETWORK_NAME || 'NSAT'
+      });
+    } catch (err) {
+      log('error', 'network_status_failed', { error: err.message });
+      sendJson(res, 200, { gateway: 'ok', core: 'unreachable' });
     }
   },
 
@@ -215,11 +290,18 @@ function createServer() {
       let body = Buffer.alloc(0);
       let aborted = false;
       req.on('data', (chunk) => {
+        if (aborted) return;
         body = Buffer.concat([body, chunk]);
         if (body.length > CONFIG.maxBodyBytes) {
           aborted = true;
-          req.destroy();
+          // Answer 413 and then drain the rest of the upload so the client
+          // receives the response instead of a mid-write connection reset.
+          if (req.pause) req.pause();
           sendJson(res, 413, { error: 'body too large' });
+          res.on('finish', () => {
+            req.resume();
+            req.destroy();
+          });
         }
       });
       req.on('end', () => {
