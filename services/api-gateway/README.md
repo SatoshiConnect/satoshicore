@@ -9,6 +9,8 @@ node. **Separate deployment from the static website. Holds no keys.**
 |---|---|---|
 | `/health` | GET | Liveness probe (used by CI, Docker, and the website's status page) |
 | `/api/v1/chain/info` | GET | Read-only proxy of nsat-core `/info` (ledger number, network) |
+| `/api/v1/network/status` | GET | Gateway + core liveness, ledger number, network name (identity check) |
+| `/api/v1/account?acc=<G-strkey>` | GET | Read-only account lookup — exact `balance128` decimal + seqnum; validated strkey |
 | `/api/v1/tx` | POST | Relay of **already-signed** transaction envelopes (`{ "envelope_xdr": "<base64>" }`) to nsat-core |
 
 There is no wildcard proxying: only these three routes exist. nsat-core
@@ -24,6 +26,8 @@ administrative endpoints are unreachable through the gateway by design.
 | `RATE_WINDOW_MS` / `RATE_MAX_REQUESTS` | `60000` / `120` | Per-IP rate limit |
 | `MAX_BODY_BYTES` | `65536` | Request body cap |
 | `CORE_TIMEOUT_MS` | `10000` | Upstream timeout |
+| `CORE_BUSY_RETRIES` / `CORE_BUSY_DELAY_MS` | `4` / `150` | Bounded backoff for core `{status:"busy"}` ledger-close windows (busy is retried, never answered as a success/zero balance) |
+| `NSAT_NETWORK_NAME` | `NSAT` | Network name reported by `/api/v1/network/status` |
 
 ## Run locally
 

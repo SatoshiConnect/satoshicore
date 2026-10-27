@@ -5,7 +5,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
-const { createServer, validateEnvelope } = require('../server.js');
+const { createServer, validateEnvelope, validAccountId } = require('../server.js');
 
 const VALID_ENVELOPE = Buffer.from('test-envelope-bytes').toString('base64');
 
@@ -27,6 +27,10 @@ function startMockCore() {
     if (req.url === '/info') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ info: { ledger: { num: 42 }, network: 'SatoshiCore Testnet ; October 2026' } }));
+    } else if (req.url.startsWith('/account?acc=')) {
+      const acc = decodeURIComponent(req.url.slice('/account?acc='.length));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ balance: 123, balance128: '123', seqnum: 7, id: acc, status: 'ok' }));
     } else if (req.url.startsWith('/tx?blob=')) {
       const blob = decodeURIComponent(req.url.slice('/tx?blob='.length));
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -249,3 +253,33 @@ test('network status endpoint reports gateway+core', async () => {
     mockCore.close();
   }
 });
+
+// account proxy: valid strkey passthrough + strict validation
+test('account route validates G-strkey and proxies reads', async () => {
+  assert.equal(validAccountId(
+    'GBNVPJVAP2DF4J6OFBSAHNN6CMVYKY2BVEMME2KVWNW66522BQT5G6OW'), true);
+  assert.equal(validAccountId('short'), false);
+  assert.equal(validAccountId('MABC' + 'A'.repeat(52)), false);
+  assert.equal(validAccountId('G' + '0'.repeat(55)), false); // invalid base32
+
+  const mockCore = await startMockCore();
+  process.env.NSAT_CORE_HTTP_URL = `http://127.0.0.1:${mockCore.address().port}`;
+  delete require.cache[require.resolve('../server.js')];
+  const { createServer: freshCreate } = require('../server.js');
+  const gateway = freshCreate();
+  await new Promise((r) => gateway.listen(0, '127.0.0.1', r));
+  try {
+    const acc = 'GBNVPJVAP2DF4J6OFBSAHNN6CMVYKY2BVEMME2KVWNW66522BQT5G6OW';
+    const ok = await request(gateway.address().port, `/api/v1/account?acc=${acc}`);
+    assert.equal(ok.status, 200);
+    const body = JSON.parse(ok.body);
+    assert.equal(body.balance128, '123');
+    const bad = await request(gateway.address().port, '/api/v1/account?acc=not_a_strkey');
+    assert.equal(bad.status, 400);
+  } finally {
+    gateway.close();
+    mockCore.close();
+  }
+});
+
+// oversized request body is rejected with 413

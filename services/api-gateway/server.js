@@ -68,9 +68,10 @@ function rateLimited(ip) {
 }
 
 // --- helpers ----------------------------------------------------------------
-function sendJson(res, status, body) {
+function sendJson(res, status, body, req) {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
+    ...(req ? corsHeaders(req) : {}),
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(payload),
     'X-Content-Type-Options': 'nosniff',
@@ -176,6 +177,12 @@ function validateEnvelope(envelopeXdr) {
   return null;
 }
 
+// Account IDs: ed25519 strkey, exactly 56 base32 chars, 'G' prefix.
+const ACCOUNT_RE = /^G[A-Z2-7]{55}$/;
+function validAccountId(acc) {
+  return typeof acc === 'string' && ACCOUNT_RE.test(acc);
+}
+
 // --- routing (explicit allowlist; no wildcard proxying) ----------------------
 const ROUTES = {
   'GET /health': async (req, res) => {
@@ -226,10 +233,31 @@ const ROUTES = {
         ledger,
         serverTime,
         network: process.env.NSAT_NETWORK_NAME || 'NSAT'
-      });
+      }, req);
     } catch (err) {
       log('error', 'network_status_failed', { error: err.message });
-      sendJson(res, 200, { gateway: 'ok', core: 'unreachable' });
+      sendJson(res, 200, { gateway: 'ok', core: 'unreachable' }, req);
+    }
+  },
+
+  // Read-only account query (balance / seqnum), proxied with busy-retry.
+  // A busy frame is retried, NEVER answered as 'balance 0' or 'missing'.
+  'GET /api/v1/account': async (req, res) => {
+    const acc = new URL(req.url, 'http://x').searchParams.get('acc');
+    if (!validAccountId(acc)) {
+      return sendJson(res, 400, { error: 'acc must be a 56-char G-strkey' }, req);
+    }
+    try {
+      const up = await coreFetchRead(`/account?acc=${encodeURIComponent(acc)}`);
+      res.writeHead(up.status, {
+        ...corsHeaders(req),
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'no-store'
+      });
+      res.end(up.body);
+    } catch (err) {
+      log('error', 'account_query_failed', { error: err.message });
+      sendJson(res, 502, { error: 'core node unreachable' }, req);
     }
   },
 
@@ -325,4 +353,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createServer, validateEnvelope, CONFIG };
+module.exports = { createServer, validateEnvelope, validAccountId, CONFIG };
