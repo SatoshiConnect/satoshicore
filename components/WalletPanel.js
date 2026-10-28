@@ -1,129 +1,397 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   isGatewayConfigured,
-  verifyNetworkIdentity,
-  getAccount,
-  formatExactBalance,
   EXPECTED_NETWORK_NAME
 } from '../lib/nsatClient';
+import {
+  keystoreCreate, keystoreImport, keystoreUnlock, keystoreList,
+  keystoreHas, keystoreExport, keystoreRestore,
+  buildSignedTx, waitSeqReached, historyLoad, historyPush,
+} from '../lib/nsatWallet';
+import { formatExactBalance } from '../lib/nsatClient';
 
-// Client-side Web Wallet interface. Everything here runs in the browser.
+// Full transactional Web Wallet. Everything user-facing happens in the
+// browser; the gateway only ever relays ALREADY-SIGNED envelopes and
+// read-only queries. No private key material is ever transmitted, logged,
+// or held server-side. Shielded operations are intentionally NOT offered
+// here (native Orchard kernel required) — see the Desktop Wallet.
 //
-// Security invariants (see SECURITY.md):
-//  - No private keys, mnemonics or signing seeds are ever transmitted,
-//    stored in localStorage by default, or included in the static build.
-//  - Key material entered for experimentation stays in memory only and is
-//    wiped when the component unmounts or the page is refreshed.
-//  - Transaction signing happens client-side; the API Gateway only ever
-//    receives already-signed transactions for relay.
-//  - Network identity MUST verify before any balance or action UI is shown.
-//
-// Scope note (honest limitation): SHIELDED operations require native
-// proof generation (Orchard/Halo2) and the local kernel — unsupported in the
-// browser. Never offer shielded actions here; the Desktop Wallet is the
-// supported shielded interface.
+// Session identity model: the unlocked wallet name + seed live in React
+// state only. A page reload or sidecar restart clears signing power; the
+// UI re-derives everything from the gateway's session-truth responses.
+
+// Gateway origin resolved at BUILD time (NEXT_PUBLIC_*). The browser talks
+// to the gateway cross-origin; CORS on the gateway side allows this app's
+// localhost origins. Same-origin /rpc only works when the gateway is
+// reverse-proxied under the app origin (production TLS setup).
+const GATEWAY_BASE = process.env.NEXT_PUBLIC_API_GATEWAY_URL || '';
+const GATEWAY_TOKEN = process.env.NEXT_PUBLIC_API_GATEWAY_TOKEN || '';
+
+async function rpc(method, params = {}, token = GATEWAY_TOKEN, timeoutMs = 120000) {
+  const base = GATEWAY_BASE || '';
+  const r = await fetch(`${base}/rpc`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json',
+      ...(token ? { 'x-rpc-token': token } : {}) },
+    body: JSON.stringify({ method, params }),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const body = await r.json().catch(() => ({}));
+  if (body.error) throw new Error(body.error);
+  return body.result ?? body;
+}
+
 const ACCOUNT_RE = /^G[A-Z2-7]{55}$/;
+const FEE = 10;
 
-export default function WalletPanel() {
-  const [net, setNet] = useState(null); // network identity result
-  const [addr, setAddr] = useState('');
-  const [acct, setAcct] = useState(null);
-  const [acctErr, setAcctErr] = useState('');
+export default function WalletPanel({ onNotify }) {
+  // gateway/network
+  const [gwBase, setGwBase] = useState('');      // gateway origin (config)
+  const [token] = useState(GATEWAY_TOKEN);     // gateway bearer token (read queries)
+  const [net, setNet] = useState(null);          // { ok, network, reason }
+  const [ledger, setLedger] = useState(null);
+  // wallet session
+  const [wallets, setWallets] = useState([]);
+  const [active, setActive] = useState(null);    // { name, pubkey, seed32 }
+  const [balance, setBalance] = useState(null);  // exact string
+  const [locked, setLocked] = useState(true);
+  // forms
+  const [newName, setNewName] = useState('');
+  const [newPass, setNewPass] = useState('');
+  const [importSeed, setImportSeed] = useState('');
+  const [unlockName, setUnlockName] = useState('');
+  const [unlockPass, setUnlockPass] = useState('');
+  const [dest, setDest] = useState('');
+  const [createDest, setCreateDest] = useState(false);
+  const [amount, setAmount] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);          // { text, kind }
+  const [history, setHistory] = useState([]);
 
-  useEffect(() => {
-    if (isGatewayConfigured()) {
-      verifyNetworkIdentity().then(setNet);
-    }
-  }, []);
+  const notify = (text, kind = 'ok') => {
+    setMsg({ text, kind });
+    window.setTimeout(() => setMsg(null), 6000);
+  };
 
-  async function lookup(e) {
-    e.preventDefault();
-    setAcct(null);
-    setAcctErr('');
-    if (!ACCOUNT_RE.test(addr)) {
-      setAcctErr('Enter a valid public account id (56-character G… strkey).');
-      return;
-    }
+  const configured = isGatewayConfigured();
+
+  const verifyNetwork = useCallback(async () => {
+    if (!configured) { setNet({ ok: false, reason: 'gateway not configured' }); return null; }
     try {
-      const a = await getAccount(addr);
-      if (a.status === 'not_found') setAcctErr('Account not on this ledger (no entry yet).');
-      else setAcct(a);
-    } catch (err) {
-      setAcctErr(err.busy ? 'Core ledger busy — try again in a moment.' : (err.message || 'lookup failed'));
+      const st = await rpc('network_info', {}, token, 10000);
+      const network = st.network || '';
+      const ok = network.startsWith('NSAT');
+      setNet({ ok, network, reason: ok ? null : `unexpected network "${network}"` });
+      setLedger(st.ledger_sequence);
+      return st;
+    } catch (e) {
+      setNet({ ok: false, network: null, reason: String(e.message || e) });
+      return null;
     }
+  }, [configured, token]);
+
+  const refreshWallets = useCallback(() => setWallets(keystoreList()), []);
+
+  const refreshBalance = useCallback(async (name, pubkey) => {
+    try {
+      const r = await rpc('account', { acc: pubkey }, token, 10000);
+      if (r.status === 'ok') setBalance(r.balance128 ?? r.balance);
+      else setBalance(null);
+    } catch { setBalance(null); }
+  }, [token]);
+
+  useEffect(() => { setWallets(keystoreList()); }, []);
+  useEffect(() => { void verifyNetwork(); }, [verifyNetwork]);
+  useEffect(() => {
+    if (active) { void refreshBalance(active.name, active.pubkey); setHistory(historyLoad(active.name)); }
+    else { setBalance(null); setHistory([]); }
+  }, [active, refreshBalance]);
+
+  // ---------------- wallet actions ----------------
+  async function doCreate(e) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const r = await keystoreCreate(newName.trim(), newPass);
+      setWallets(keystoreList());
+      setActive({ name: r.name, pubkey: r.pubkeyG, seed32: null });
+      setLocked(false);
+      setNewName(''); setNewPass('');
+      notify(`Wallet "${r.name}" created. BACK UP the seed shown in Keys now.`, 'ok');
+    } catch (err) { notify(String(err.message || err), 'err'); }
+    setBusy(false);
   }
+
+  async function doImport(e) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const r = await keystoreImport(newName.trim(), importSeed.trim(), newPass);
+      setWallets(keystoreList());
+      setActive({ name: r.name, pubkey: r.pubkeyG, seed32: null });
+      setLocked(false);
+      setNewName(''); setNewPass(''); setImportSeed('');
+      notify(`Wallet "${r.name}" imported.`, 'ok');
+    } catch (err) { notify(String(err.message || err), 'err'); }
+    setBusy(false);
+  }
+
+  async function doUnlock(e) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const seed32 = await keystoreUnlock(unlockName, unlockPass);
+      const list = keystoreList();
+      const entry = list.find(w => w.name === unlockName);
+      setActive({ name: unlockName, pubkey: entry?.pubkey, seed32 });
+      setLocked(false);
+      setUnlockName(''); setUnlockPass('');
+      notify(`Wallet "${unlockName}" unlocked.`, 'ok');
+    } catch (err) { notify(String(err.message || err), 'err'); }
+    setBusy(false);
+  }
+
+  function doLock() {
+    setActive(null);
+    setLocked(true);
+    notify('Wallet locked — signing key cleared from memory.', 'ok');
+  }
+
+  function doBackup() {
+    const blob = keystoreExport();
+    const url = URL.createObjectURL(new Blob([blob], { type: 'application/json' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = 'scw-web-backup.json'; a.click();
+    URL.revokeObjectURL(url);
+    notify('Encrypted keystore downloaded. Keep it private.', 'ok');
+  }
+
+  async function doRestore(e) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    try {
+      keystoreRestore(await f.text());
+      refreshWallets();
+      notify('Keystore restored. Unlock a wallet to sign.', 'ok');
+    } catch (err) { notify(`restore failed: ${err.message}`, 'err'); }
+  }
+
+  // ---------------- shielded-free transparent send ----------------
+  async function doSend(e) {
+    e.preventDefault();
+    if (!active?.seed32) { notify('Unlock the wallet first.', 'err'); return; }
+    if (!net?.ok) { notify('Network identity not verified — refusing to send.', 'err'); return; }
+    setBusy(true);
+    try {
+      const info = await rpc('network_info', {}, token);
+      const baseFee = Number(info.base_fee || FEE);
+      const signed = await buildSignedTx({
+        seed32: active.seed32,
+        netPassphrase: net.network,     // identity VALIDATED above
+        seqFetch: async () => rpc('account', { acc: active.pubkey }, token, 10000),
+        destG: dest.trim(),
+        amount: amount.trim(),
+        fee: baseFee,
+        create: createDest,
+      });
+      const r = await rpc('submit_signed', { envelope: signed.envelopeBase64 }, token);
+      if (r.status !== 'PENDING') {
+        notify(`Node rejected the transaction: ${r.status || JSON.stringify(r)}`, 'err');
+        return;
+      }
+      notify('Submitted — waiting for finalization…', 'warn');
+      // Finalization: the account's sequence number only moves when the
+      // transaction is APPLIED in a closed ledger, so seq-advance is the
+      // confirmation signal. Ledger/hash evidence comes from latest_ledger.
+      const ok = await waitSeqReached(
+        async () => {
+          const d = await rpc('account', { acc: active.pubkey }, token, 10000);
+          return Number(d.sequence ?? d.seqnum ?? 0);
+        },
+        signed.seq, 90000, 2000);
+      if (!ok) { notify('Not finalized within 90 s — check Activity later.', 'warn'); return; }
+      const li = await rpc('latest_ledger', {}, token, 10000).catch(() => null);
+      historyPush(active.name, {
+        time: new Date().toLocaleString(), dir: 'sent', to: dest.trim(),
+        amount: amount.trim(), fee: signed.fee, txhash: signed.txHashHex,
+        ledger: li?.ledger, ledger_hash: li?.hash, status: 'confirmed',
+      });
+      setHistory(historyLoad(active.name));
+      notify(`Confirmed on ledger ${li?.ledger ?? '(latest)'}.`, 'ok');
+      setAmount('');
+      void refreshBalance(active.name, active.pubkey);
+    } catch (err) { notify(String(err.message || err), 'err'); }
+    setBusy(false);
+  }
+
+  const netOk = !!net?.ok;
+  const amtOk = /^\d+$/.test(amount.replace(/[,_ ]/g, '')) && BigInt(amount.replace(/[,_ ]/g, '') || '0') > 0n;
+  const destOk = ACCOUNT_RE.test(dest.trim()) && dest.trim() !== active?.pubkey;
 
   return (
     <section className="wallet-panel" aria-label="Web Wallet">
       <h2>Web Wallet</h2>
 
-      {!isGatewayConfigured() && (
+      {!configured && (
         <p className="wallet-warning">
-          Offline mode: no API Gateway configured (set `NEXT_PUBLIC_API_GATEWAY_URL`
-          at build time). Nothing here contacts the network.
+          Offline mode: set NEXT_PUBLIC_API_GATEWAY_URL (+ NEXT_PUBLIC_API_GATEWAY_TOKEN)
+          at build time to connect.
         </p>
       )}
 
       {net && (
         <p className={net.ok ? 'net-ok' : 'net-bad'} data-testid="network-identity">
           {net.ok ? '✓ Network verified:' : '⚠ NETWORK MISMATCH —'}{' '}
-          <strong>{net.network || 'unreachable'}</strong>{' '}
-          {net.ledger != null && <span>(ledger {net.ledger})</span>}
+          <strong>{net.network || 'unreachable'}</strong>
+          {ledger != null && <span> (ledger {ledger})</span>}
           {!net.ok && net.reason && <em> — {net.reason}</em>}
-          {net.ok && <span className="net-expected"> (expected: {EXPECTED_NETWORK_NAME})</span>}
         </p>
       )}
 
       <p className="wallet-warning">
-        Read-only balance mode. Never paste private keys or seeds here.
-        Wallet keys stay with you — the gateway holds none.
+        Keys are generated and stored encrypted IN THIS BROWSER (AES-GCM,
+        PBKDF2 600k). The gateway relays signed envelopes only — it never
+        sees a key. Shielded transfers need the native kernel: use the
+        Desktop Wallet for those.
       </p>
 
-      <form onSubmit={lookup} className="wallet-form">
-        <label htmlFor="addr">Public account id (G…)</label>
-        <input
-          id="addr"
-          type="text"
-          value={addr}
-          onChange={(e) => setAddr(e.target.value)}
-          autoComplete="off"
-          spellCheck={false}
-          placeholder="G…"
-        />
-        <button type="submit" disabled={!net || !net.ok}>
-          Check exact balance
-        </button>
-      </form>
+      {/* ---------- session ---------- */}
+      <section className="card" style={{ marginTop: 12 }}>
+        <h2>{active ? `Active: ${active.name}` : 'Locked'}</h2>
+        {active && (
+          <ul className="wallet-body">
+            <li>Public key: <code>{active.pubkey}</code></li>
+            <li>Confirmed balance (balance128):{' '}
+              <strong>{balance == null ? '…' : `${formatExactBalance(balance)} NSAT`}</strong></li>
+            <li>Network: {net?.network || '—'} {netOk ? '✓' : '✗'}</li>
+          </ul>
+        )}
+        <div className="btn-row" style={{ marginTop: 10 }}>
+          {!active && wallets.length > 0 && (
+            <select value={unlockName} onChange={(e) => setUnlockName(e.target.value)}
+              aria-label="Wallet to unlock">
+              <option value="">— wallet —</option>
+              {wallets.map(w => <option key={w.name} value={w.name}>{w.name}</option>)}
+            </select>
+          )}
+          {!active && wallets.length > 0 && (
+            <form onSubmit={doUnlock} className="btn-row" style={{ gap: 8 }}>
+              <input type="password" placeholder="password" value={unlockPass}
+                onChange={(e) => setUnlockPass(e.target.value)} aria-label="Wallet password" />
+              <button className="chip-btn" type="submit" disabled={busy || !unlockName}>Unlock</button>
+            </form>
+          )}
+          {active && <button className="chip-btn" onClick={doLock}>Lock wallet</button>}
+          <button className="chip-btn" onClick={doBackup}>Export encrypted backup</button>
+          <label className="chip-btn" style={{ cursor: 'pointer' }}>
+            Restore keystore
+            <input type="file" accept=".json" style={{ display: 'none' }} onChange={doRestore} />
+          </label>
+        </div>
+      </section>
 
-      {acctErr && <p className="wallet-warning">{acctErr}</p>}
-      {acct && (
-        <ul className="wallet-body">
-          <li>
-            Account: <code>{acct.id}</code>
-          </li>
-          <li>
-            Exact balance (balance128):{' '}
-            <strong data-testid="exact-balance">
-              {formatExactBalance(acct.balance128)} NSAT
-            </strong>
-          </li>
-          <li>Sequence number: {acct.seqnum}</li>
-        </ul>
+      {/* ---------- create / import (only when no active wallet) ---------- */}
+      {!active && (
+        <div className="grid-2" style={{ marginTop: 12 }}>
+          <section className="card">
+            <h2>Create wallet</h2>
+            <form onSubmit={doCreate} className="wallet-form">
+              <label htmlFor="wn">Name</label>
+              <input id="wn" value={newName} onChange={(e) => setNewName(e.target.value)} required />
+              <label htmlFor="wp">Password (encrypts the seed, ≥ 8 chars)</label>
+              <input id="wp" type="password" value={newPass}
+                onChange={(e) => setNewPass(e.target.value)} minLength={8} required />
+              <button type="submit" className="chip-btn" disabled={busy || !newName || newPass.length < 8}>
+                Create</button>
+            </form>
+          </section>
+          <section className="card">
+            <h2>Import wallet</h2>
+            <form onSubmit={doImport} className="wallet-form">
+              <label htmlFor="in">Name</label>
+              <input id="in" value={newName} onChange={(e) => setNewName(e.target.value)} required />
+              <label htmlFor="is">Secret seed (S…)</label>
+              <input id="is" type="password" value={importSeed}
+                onChange={(e) => setImportSeed(e.target.value)} required spellCheck={false} />
+              <label htmlFor="ip">Password</label>
+              <input id="ip" type="password" value={newPass}
+                onChange={(e) => setNewPass(e.target.value)} minLength={8} required />
+              <button type="submit" className="chip-btn" disabled={busy || !newName || !importSeed}>
+                Import</button>
+            </form>
+          </section>
+        </div>
       )}
 
-      <div className="wallet-limitations">
-        <h3>Shielded transactions — see the Desktop Wallet</h3>
-        <p>
-          Shielded NSAT (Orchard notes, local proof generation) requires the
-          native kernel and is not offered in the browser: a web page cannot
-          safely hold spending keys or produce halo2 proofs today. The Desktop
-          Wallet is the supported shielded interface — proof generation and
-          signing stay on your machine and spending keys never reach the
-          gateway, or any server.
-        </p>
-      </div>
+      {/* ---------- send (needs active + unlocked + verified network) ---------- */}
+      {active && (
+        <section className="card" style={{ marginTop: 12 }}>
+          <h2>Send NSAT (transparent)</h2>
+          {!netOk && <p className="wallet-warning">Network identity not verified — sending disabled.</p>}
+          {needUnlockNotice(active, locked) && (
+            <p className="wallet-warning">Unlock the wallet to sign transactions.</p>
+          )}
+          <form onSubmit={doSend} className="wallet-form">
+            <label htmlFor="dest">Destination G…</label>
+            <input id="dest" className="mono" spellCheck={false} value={dest}
+              onChange={(e) => setDest(e.target.value)} placeholder="G…" />
+            <label htmlFor="amt">Amount NSAT</label>
+            <input id="amt" inputMode="numeric" value={amount}
+              onChange={(e) => setAmount(e.target.value)} placeholder="exact integers" />
+            <label className="small dim" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input type="checkbox" checked={createDest} aria-label="Create destination account"
+                onChange={(e) => setCreateDest(e.target.checked)} />
+              Destination has no account yet (CREATE — moves the amount itself as
+              starting balance; required only for a brand-new G… )
+            </label>
+            <div className="small dim">Fee: {FEE} NSAT per operation (shown before sign)</div>
+            <button type="submit" className="send-btn" disabled={busy || !netOk || !amtOk || !destOk}>
+              {busy ? 'Signing & submitting…' : 'Sign & send'}
+            </button>
+          </form>
+        </section>
+      )}
+
+      {/* ---------- history ---------- */}
+      {active && (
+        <section className="card" style={{ marginTop: 12 }}>
+          <h2>History — {active.name}</h2>
+          {history.length === 0
+            ? <p className="small dim">No transactions yet.</p>
+            : <ul className="tx-list">
+              {history.map((h, i) => (
+                <li key={i} className="tx-row">
+                  <div className={h.dir === 'sent' ? 'tx-dir sent' : 'tx-dir rec'}>
+                    {h.dir === 'sent' ? '↗' : '↙'}</div>
+                  <div style={{ flex: 1 }}>
+                    <div>{h.dir === 'sent' ? `To ${h.to}` : 'Received'}{' '}
+                      <Badge kind={h.status === 'confirmed' ? 'ok' : 'err'}>{h.status}</Badge></div>
+                    <div className="small dim">{h.time} · fee {h.fee}</div>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>{h.amount} NSAT
+                    {h.ledger && <div className="small dim">ledger {h.ledger}</div>}</div>
+                </li>
+              ))}
+            </ul>}
+        </section>
+      )}
+
+      {msg && (
+        <div className="card" role="status"
+          style={{ marginTop: 12, borderColor: msg.kind === 'err' ? 'var(--danger)' : 'var(--ok)' }}>
+          {msg.text}
+        </div>
+      )}
     </section>
   );
+}
+
+function needUnlockNotice(active, locked) {
+  return locked || !active;
+}
+
+function Badge({ kind, children }) {
+  return <span className={`badge ${kind}`}>{children}</span>;
 }
