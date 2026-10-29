@@ -10,6 +10,7 @@ import {
   keystoreHas, keystoreExport, keystoreRestore,
   buildSignedTx, waitSeqReached, historyLoad, historyPush,
 } from '../lib/nsatWallet';
+import { decodeSeed } from '../lib/nsatCodec';
 import { formatExactBalance } from '../lib/nsatClient';
 
 // Full transactional Web Wallet. Everything user-facing happens in the
@@ -116,7 +117,10 @@ export default function WalletPanel({ onNotify }) {
     try {
       const r = await keystoreCreate(newName.trim(), newPass);
       setWallets(keystoreList());
-      setActive({ name: r.name, pubkey: r.pubkeyG, seed32: null });
+      // The freshly created seed is still in this closure's memory only;
+      // establishing the signing session now is the same trust level as an
+      // explicit Unlock (the panel never sends it anywhere).
+      setActive({ name: r.name, pubkey: r.pubkeyG, seed32: decodeSeed(r.seedS) });
       setLocked(false);
       setNewName(''); setNewPass('');
       notify(`Wallet "${r.name}" created. BACK UP the seed shown in Keys now.`, 'ok');
@@ -130,7 +134,7 @@ export default function WalletPanel({ onNotify }) {
     try {
       const r = await keystoreImport(newName.trim(), importSeed.trim(), newPass);
       setWallets(keystoreList());
-      setActive({ name: r.name, pubkey: r.pubkeyG, seed32: null });
+      setActive({ name: r.name, pubkey: r.pubkeyG, seed32: decodeSeed(r.seedS) });
       setLocked(false);
       setNewName(''); setNewPass(''); setImportSeed('');
       notify(`Wallet "${r.name}" imported.`, 'ok');
@@ -187,10 +191,29 @@ export default function WalletPanel({ onNotify }) {
     try {
       const info = await rpc('network_info', {}, token);
       const baseFee = Number(info.base_fee || FEE);
+      // A brand-new destination account needs a starting balance of at least
+      // 2× base reserve on this fork; below it the tx finalizes but the op
+      // fails on-chain (fee charged, funds not moved). Fail BEFORE signing.
+      const baseReserve = Number(info.base_reserve || 0);
+      const amtClean = amount.replace(/[,_ ]/g, '');
+      if (createDest && baseReserve > 0 && /^\d+$/.test(amtClean)
+        && BigInt(amtClean) < BigInt(2 * baseReserve)) {
+        notify(`CREATE starting balance must be ≥ ${BigInt(2 * baseReserve).toLocaleString()} NSAT (2× base reserve) — the chain would charge the fee and fail the operation.`, 'err');
+        setBusy(false);
+        return;
+      }
+      // Capture the pre-send balance so the finalization check below can
+      // verify the operation ACTUALLY moved the amount and not just fees.
+      let prevBalance = null;
       const signed = await buildSignedTx({
         seed32: active.seed32,
         netPassphrase: net.network,     // identity VALIDATED above
-        seqFetch: async () => rpc('account', { acc: active.pubkey }, token, 10000),
+        seqFetch: async () => {
+          const d = await rpc('account', { acc: active.pubkey }, token, 10000);
+          prevBalance = d.balance != null ? Number(d.balance)
+            : d.balance128 != null ? Number(d.balance128) : null;
+          return d;
+        },
         destG: dest.trim(),
         amount: amount.trim(),
         fee: baseFee,
@@ -199,6 +222,7 @@ export default function WalletPanel({ onNotify }) {
       const r = await rpc('submit_signed', { envelope: signed.envelopeBase64 }, token);
       if (r.status !== 'PENDING') {
         notify(`Node rejected the transaction: ${r.status || JSON.stringify(r)}`, 'err');
+        setBusy(false);
         return;
       }
       notify('Submitted — waiting for finalization…', 'warn');
@@ -211,8 +235,29 @@ export default function WalletPanel({ onNotify }) {
           return Number(d.sequence ?? d.seqnum ?? 0);
         },
         signed.seq, 90000, 2000);
-      if (!ok) { notify('Not finalized within 90 s — check Activity later.', 'warn'); return; }
+      if (!ok) { notify('Not finalized within 90 s — check Activity later.', 'warn'); setBusy(false); return; }
+      // Ledger truth: seq-advance also happens when the tx finalizes with a
+      // FAILED operation (fee charged, nothing moved). A send is CONFIRMED
+      // only if the balance debit matches amount + fee exactly.
+      const afterD = await rpc('account', { acc: active.pubkey }, token, 10000).catch(() => null);
+      const afterBal = afterD != null
+        ? (afterD.balance != null ? Number(afterD.balance)
+          : afterD.balance128 != null ? Number(afterD.balance128) : null)
+        : null;
+      const debited = prevBalance != null && afterBal != null
+        && BigInt(prevBalance) - BigInt(afterBal) === BigInt(amount) + BigInt(signed.fee);
       const li = await rpc('latest_ledger', {}, token, 10000).catch(() => null);
+      if (!debited) {
+        historyPush(active.name, {
+          time: new Date().toLocaleString(), dir: 'sent', to: dest.trim(),
+          amount: amount.trim(), fee: signed.fee, txhash: signed.txHashHex,
+          ledger: li?.ledger, ledger_hash: li?.hash, status: 'op_failed_on_chain',
+        });
+        setHistory(historyLoad(active.name));
+        notify('Finalized but the operation FAILED on-chain — only the fee was charged. No funds moved.', 'err');
+        setBusy(false);
+        return;
+      }
       historyPush(active.name, {
         time: new Date().toLocaleString(), dir: 'sent', to: dest.trim(),
         amount: amount.trim(), fee: signed.fee, txhash: signed.txHashHex,
