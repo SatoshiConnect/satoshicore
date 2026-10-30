@@ -1,0 +1,171 @@
+openapi: 3.0.3
+info:
+  title: SatoshiCore Web Wallet API Gateway
+  version: "1.0.0"
+  description: |
+    Read-only chain proxy plus signed-envelope relay for SatoshiCore (NSAT).
+    The gateway holds no key material; transaction signing is client-side and
+    only already-signed base64 XDR envelopes are submitted. Administrative
+    core endpoints are unreachable through this gateway by design (strict
+    route allowlist). All monetary fields are plain decimal strings — never
+    floats (128-bit exactness).
+servers:
+  - url: https://{host}
+    variables:
+      host:
+        default: gateway.satoshicore.org
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Gateway liveness probe
+      responses:
+        "200":
+          description: Gateway up (core liveness NOT implied; use /api/v1/network/status)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, service]
+                properties:
+                  status: { type: string, example: ok }
+                  service: { type: string, example: satoshicore-api-gateway }
+                  version: { type: string }
+                  core: { type: string, example: configured }
+  /api/v1/chain/info:
+    get:
+      operationId: chainInfo
+      summary: Proxied nsat-core /info (ledger, network identity, base fee)
+      responses:
+        "200":
+          description: Core chain info
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CoreInfo" }
+        "503":
+          description: Core ledger busy after bounded retry
+          content: { application/json: { schema: { $ref: "#/components/schemas/BusyError" } } }
+        "502":
+          description: Core node unreachable
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+      security: []
+  /api/v1/network/status:
+    get:
+      operationId: networkStatus
+      summary: Gateway + core liveness, current ledger, expected network name
+      responses:
+        "200":
+          description: Stack status (network identity must be compared client-side)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [gateway, core, network]
+                properties:
+                  gateway: { type: string, enum: [ok] }
+                  core: { type: string, enum: [ok, unreachable] }
+                  ledger: { type: integer, nullable: true }
+                  serverTime: { type: string, nullable: true }
+                  network: { type: string }
+      security: []
+  /api/v1/account:
+    get:
+      operationId: getAccount
+      summary: Account lookup — exact balance128 and sequence number
+      parameters:
+        - name: acc
+          in: query
+          required: true
+          schema: { type: string, pattern: "^G[A-Z2-7]{55}$" }
+          example: GBNVPJVAP2DF4J6OFBSAHNN6CMVYKY2BVEMME2KVWNW66522BQT5G6OW
+      responses:
+        "200":
+          description: Account present on the node
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, description: requested G-strkey }
+                  balance: { type: integer, description: legacy 64-bit balance field }
+                  balance128: { type: string, description: exact decimal string, arbitrary precision }
+                  seqnum: { type: integer }
+                  status: { type: string }
+        "400":
+          description: Invalid or missing acc parameter
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "503":
+          description: Core ledger busy after bounded retry
+          content: { application/json: { schema: { $ref: "#/components/schemas/BusyError" } } }
+        "502":
+          description: Core node unreachable
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+      security: []
+  /api/v1/tx:
+    post:
+      operationId: submitSignedTx
+      summary: Relay an already-signed transaction envelope to nsat-core
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [envelope_xdr]
+              properties:
+                envelope_xdr:
+                  type: string
+                  description: base64 XDR TransactionEnvelope (1–8192 chars)
+      responses:
+        "200":
+          description: Upstream node verdict (e.g. status PENDING/ERROR and hash)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: PENDING }
+                  hash: { type: string }
+        "400":
+          description: Invalid JSON or invalid envelope (rejected before contacting core)
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "413":
+          description: Request body exceeds MAX_BODY_BYTES
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          description: Per-IP rate limit exceeded
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "502":
+          description: Core node unreachable
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+      security: []
+components:
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        upstream_status: { type: integer }
+    BusyError:
+      type: object
+      required: [error, status]
+      properties:
+        error: { type: string, example: core ledger busy — try again shortly }
+        status: { type: string, enum: [busy] }
+    CoreInfo:
+      type: object
+      description: Proxied nsat-core /info payload (shape owned by the core HTTP interface)
+      properties:
+        info:
+          type: object
+          properties:
+            network: { type: string, example: NSAT Mainnet ; October 2026 ; bc3098829fffc717 }
+            ledger:
+              type: object
+              properties:
+                num: { type: integer }
+                hash: { type: string }
+                baseFee: { type: integer, example: 10 }
+                baseReserve: { type: integer }
+                version: { type: integer, description: shielded protocol version }

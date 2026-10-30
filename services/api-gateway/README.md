@@ -28,6 +28,16 @@ administrative endpoints are unreachable through the gateway by design.
 | `CORE_TIMEOUT_MS` | `10000` | Upstream timeout |
 | `CORE_BUSY_RETRIES` / `CORE_BUSY_DELAY_MS` | `4` / `150` | Bounded backoff for core `{status:"busy"}` ledger-close windows (busy is retried, never answered as a success/zero balance) |
 | `NSAT_NETWORK_NAME` | `NSAT` | Network name reported by `/api/v1/network/status` |
+| `GATEWAY_VERSION` | `24.0.0` | Reported by `/health` |
+
+## API contract
+
+`openapi.yaml` is the normative OpenAPI 3.0 contract for the `/api/v1` routes,
+including the typed error bodies (`{error, upstream_status}`, busy `{error, status:"busy"}`).
+`lib/nsatClient.js` (the web wallet SDK) is contract-tested against this exact
+server in `tests/sdk-contract.test.mjs`, covering chain info, strict network
+identity verification, exact `balance128` lookups, fee estimation and
+signed-envelope relay — plus a read-only integration example in `examples/sdk-ping.mjs`.
 
 ## Run locally
 
