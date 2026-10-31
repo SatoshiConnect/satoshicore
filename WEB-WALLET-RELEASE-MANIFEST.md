@@ -51,13 +51,24 @@ security scan → artifact identity gate (`grep -rl 'NSAT Mainnet ; October 2026
 - `services/api-gateway npm test` → 21/21 PASS
 - `NSAT_E2E=1 node tests/e2e-send.test.mjs` → 5/5 PASS (disposable devnet)
 
-## 6. Gateway artifact
+## 6. Published deployment record (2026-10-31)
+
+| Field | Value |
+|---|---|
+| Trigger | `workflow_dispatch` on `feature/web-platform-v1`, commit `bcbec59` |
+| Run | https://github.com/SatoshiConnect/satoshicore/actions/runs/41152790152 — build + gateway tests + deploy: ALL SUCCESS |
+| Pages configuration | `build_type: workflow` (Actions-artifact publishing), `cname: wallet.satoshicore.org`, legacy gh-pages publishing retired |
+| Published URL | http://wallet.satoshicore.org/ — GET 200, `<title>SatoshiCore — Web Platform</title>`, `/wallet/` GET 200 |
+| HTTPS | NOT YET enforced — TLS certificate still provisioning; enforcement is the owner's Pages-Settings action after issuance (API PATCH refused) |
+| Gateway for this origin | NOT YET — artifact built without `NEXT_PUBLIC_API_GATEWAY_URL` (fail-closed offline); rebuild with the real gateway URL once the gateway is hosted |
+
+## 7. Gateway artifact
 
 `services/api-gateway/server.js` — single file, zero runtime dependencies,
 same commit. Not shipped in `out/` (static export forbids server artifacts;
 static-export tests assert their absence).
 
-## 7. Runtime dependencies
+## 8. Runtime dependencies
 
 Web: Next.js build toolchain only (see package.json / package-lock.json).
 Gateway: node:http / node:url standard modules only, Node ≥ 18 (AbortSignal

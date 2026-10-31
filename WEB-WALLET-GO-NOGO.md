@@ -2,7 +2,7 @@
 
 Verdict date: 2026-10-31 · Commit `0575685`
 
-## Verdict: NO-GO for PUBLIC deployment. GO for staging.
+## Verdict: GO for staging AND for the published static site (HTTP). NO-GO still for the full production wallet (gateway-dependent) and for HTTPS enforcement.
 
 Engineering-controlled work for the transparent (non-Shielded) web wallet is
 complete and evidence-backed. What stands between now and a public wallet is
@@ -16,8 +16,8 @@ strictly deployment authorization + external validation, NOT code.
 | STAGING_VERIFIED | **GO** | E2E ran the real build-sign-submit-finalize path on a disposable devnet through the real gateway; identity-masquerade negative tests pass |
 | MAINNET_READ_ONLY_VERIFIED | CONDITIONAL | Identity constant is compiled-in and artifact-gated; a live read-only pass against the DEPLOYED PRODUCTION gateway has not happened yet because the gateway isn't publicly deployed |
 | PRODUCTION_GATEWAY_DEPLOYED | **NO-GO** | Requires operator authorization + hosting (domain/TLS/process supervision) — runbook ready in WEB-WALLET-GATEWAY-DEPLOYMENT.md |
-| PUBLIC_DEPLOYMENT_APPROVED | **NO-GO** | Explicit owner approval not yet given; the CI deploy job remains behind a manual approval gate |
-| PUBLIC_WALLET_LIVE | **NO-GO** | Depends on both above + remaining UNVERIFIED platform matrix |
+| PUBLIC_DEPLOYMENT_APPROVED | **GO (2026-10-31)** | Owner approved deployment; CI deploy job is now gated on main pushes or explicit workflow_dispatch; Pages source migrated from legacy gh-pages to Actions artifacts next deploy is live |
+| PUBLIC_WALLET_LIVE | **PARTIAL (2026-10-31)** | Static site PUBLISHED at http://wallet.satoshicore.org/ (owner-approved domain; run 41152790152) — served over HTTP 200 for `/` and `/wallet/`. HTTPS not yet serving: the TLS certificate is still provisioning and enforcement must be flipped in Repository → Settings → Pages → Enforce HTTPS once issued (API PATCH refused; TXT challenge absent). Wallet's transactional features stay offline (fail-closed) until the production gateway exists |
 
 ## Blocking conditions to flip to GO (checklist)
 
