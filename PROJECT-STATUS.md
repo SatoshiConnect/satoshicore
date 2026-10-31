@@ -15,7 +15,7 @@ Inspection refreshed 2026-10-31T15:27:21Z (UTC). Status labels: `PASS`, `FAIL`, 
 |---|---|---|
 | Local Wallet API Gateway | **PASS** — `/health` returned HTTP 200, `status=ok`, version 24.0.0 | Read-only GET `127.0.0.1:8790/health` |
 | Gateway-to-Core / network identity | **PASS** — `/api/v1/network/status` returned `core=ok`, `gateway=ok`, and the exact NSAT Mainnet network string | Read-only GET `127.0.0.1:8790/api/v1/network/status`; reported ledger 97963 during that probe |
-| Core validators | **PASS** — latest direct sample A/B/C all synced at ledger 97966 with matching hash | Current live Core `/info` sample recorded in [Core project status](https://github.com/SatoshiConnect/nsat-core/blob/codex/ecosystem-status-20261031/PROJECT-STATUS.md) |
+| Core validators | **PASS** — latest direct sample A/B/C all synced at ledger 98017 with matching hash | Current live Core `/info` sample recorded in [Core project status](https://github.com/SatoshiConnect/nsat-core/blob/codex/ecosystem-status-20261031/PROJECT-STATUS.md) |
 | Wallet site HTTPS | **FAIL from operator Mac** — TLS hostname verification rejected `wallet.satoshicore.org` because the certificate did not match the hostname. No bypass was used. | Read-only `curl -I https://wallet.satoshicore.org` |
 | Wallet create/import/sign/send UI | **NOT_TESTED** in this synchronization | No browser wallet transaction was initiated |
 | Public Gateway DNS | **FAIL from operator Mac** — configured hostname `gateway.satoshicore.org` did not resolve (`nodename nor servname provided`) | Read-only DNS/HTTPS probe at inspection time |
