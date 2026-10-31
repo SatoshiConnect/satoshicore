@@ -7,6 +7,8 @@ for the architecture, custom-domain setup and activation checklist, and
 [SECURITY.md](SECURITY.md) for the security invariants. The security audit
 series lives in [docs/security/](docs/security/THREAT-MODEL.md).
 
+Current evidence-based runtime and release status: [PROJECT-STATUS.md](PROJECT-STATUS.md) · [project-status.json](project-status.json).
+
 Key custody is browser-side only: Ed25519 keys are generated with the device
 CSPRNG, encrypted with PBKDF2-HMAC-SHA256 (600,000 iterations) + AES-256-GCM,
 and never leave the browser. Transactions are signed locally and relayed as
@@ -26,8 +28,8 @@ node --test tests/keystore.test.mjs       # key-custody regression suite
 ## Branches
 
 - `main` — production source.
-- `feature/web-platform-v1` — current wallet/platform workstream (merged into
-  main periodically; deployment to GitHub Pages stays behind owner approval).
+- `feature/web-platform-v1` — older branch, five commits behind `main` as of
+  2026-10-31; it contains no commits missing from `main`.
 
 ## Backend services (separate, not in this repo)
 

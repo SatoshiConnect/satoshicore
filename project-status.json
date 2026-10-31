@@ -1,0 +1,58 @@
+{
+  "repository": "SatoshiConnect/satoshicore",
+  "branch": "main",
+  "commit_sha": "b3edd6c188b3d5e52ac64859d0573d5dc0f55393",
+  "inspection_timestamp": "2026-10-31T15:23:22Z",
+  "component_status": {
+    "documented_production_branch": "PASS",
+    "pages_build_and_deploy_workflow": "PASS",
+    "local_gateway_health": "PASS",
+    "gateway_to_core_and_mainnet_identity": "PASS",
+    "wallet_website_tls_from_operator_host": "FAIL",
+    "wallet_user_flow": "NOT_TESTED",
+    "public_gateway_tls": "UNKNOWN",
+    "genesis_hash_live_verification": "UNKNOWN",
+    "shielded_security_certification": "BLOCKED"
+  },
+  "evidence_reference": [
+    "Local GET 127.0.0.1:8790/health at 2026-10-31T15:23Z",
+    "Local GET 127.0.0.1:8790/api/v1/network/status at 2026-10-31T15:23Z",
+    "TLS hostname verification attempt for https://wallet.satoshicore.org at 2026-10-31T15:22Z",
+    "GitHub Actions run https://github.com/SatoshiConnect/satoshicore/actions/runs/41162906664"
+  ],
+  "mainnet_identity": {
+    "status": "PASS",
+    "network": "NSAT Mainnet ; October 2026 ; bc3098829fffc717",
+    "genesis_hash_status": "UNKNOWN"
+  },
+  "ledger": {
+    "status": "PASS",
+    "version": 1,
+    "sequence": 97966,
+    "finalized_hash": "8854adb9dae7e01ed17532e9f6d6e4bdc04350726035e88b3f0eeb0bfa1031e6",
+    "validators": ["A", "B", "C"]
+  },
+  "test_results": [
+    {"name": "GitHub Pages workflow", "status": "PASS", "evidence": "main run 41162906664 completed successfully"},
+    {"name": "local gateway health", "status": "PASS", "evidence": "HTTP 200, status ok"},
+    {"name": "gateway network status", "status": "PASS", "evidence": "core and gateway ok; exact network string"},
+    {"name": "wallet public site TLS", "status": "FAIL", "evidence": "hostname verification failed from operator Mac"},
+    {"name": "wallet UI acceptance", "status": "NOT_TESTED", "evidence": "no wallet flow was initiated"}
+  ],
+  "deployment_status": "BLOCKED",
+  "blockers": [
+    "wallet.satoshicore.org TLS certificate did not match hostname from the operator Mac",
+    "Wallet user flows were not exercised",
+    "Public gateway TLS endpoint was not verified",
+    "Current live Genesis hash was not observed"
+  ],
+  "next_recommended_actions": [
+    "Fix and verify wallet domain TLS",
+    "Run isolated browser wallet acceptance after TLS recovery",
+    "Verify the exact public gateway endpoint if the service is intended to be public"
+  ],
+  "publication": {
+    "branch": "codex/ecosystem-status-20261031",
+    "target_branch": "main"
+  }
+}
