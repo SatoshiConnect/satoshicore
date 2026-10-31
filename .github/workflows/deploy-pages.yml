@@ -2,11 +2,13 @@ name: Build, test and deploy static site to GitHub Pages
 
 # SatoshiCore Web Platform v24.0
 #
-# NOTE ON ACTIVATION:
-# The deploy job below is gated behind `if: false` as an explicit safeguard
-# (deployment requirement #10). Nothing is published to GitHub Pages until the
-# owner flips that gate and enables Pages (Source: GitHub Actions) in the
-# repository settings. Build and test jobs run on every push/PR regardless.
+# NOTE ON ACTIVATION (updated 2026-10-31):
+# The deploy job is gated on `main` pushes OR explicit workflow_dispatch runs.
+# Pages Source is GitHub Actions (migrated from the legacy gh-pages branch);
+# the production custom domain is wallet.satoshicore.org (DNS verified:
+# wallet.satoshicore.org -> satoshiconnect.github.io). Build and test jobs
+# run on every push/PR regardless; feature-branch deploys require a deliberate
+# workflow_dispatch call — they are never automatic.
 
 on:
   push:
@@ -114,12 +116,10 @@ jobs:
   deploy:
     name: Deploy to GitHub Pages (owner-gated)
     runs-on: ubuntu-latest
-    # SAFEGUARD: disabled until owner approval. To activate:
-    #  1. Change this to: if: github.ref_name == 'main'
-    #  2. Repository Settings -> Pages -> Source: GitHub Actions
-    #  3. Configure the custom domain per docs/DEPLOYMENT.md (DNS step
-    #     requires owner action and is intentionally not automated here).
-    if: false
+    # Owner-approved gate (2026-10-31): automatic on main; feature branches
+    # deploy ONLY via explicit workflow_dispatch. Enable Enforce HTTPS when
+    # the domain certificate is issued (see docs/DEPLOYMENT.md).
+    if: github.ref_name == 'main' || github.event_name == 'workflow_dispatch'
     needs: build
     environment:
       name: github-pages

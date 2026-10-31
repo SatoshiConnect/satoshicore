@@ -75,9 +75,18 @@ the nsat-core node (see `SatoshiConnect/nsat-core`, branch
 > Note: pushes to `feature/**` build with an empty base path so the artifact
 > can be inspected locally; they are never deployed.
 
-## Custom domain — `satoshicore.org` / `www.satoshicore.org`
+## Custom domain — `wallet.satoshicore.org` (production decision 2026-10-31)
 
-**DNS changes require owner action; nothing is automated here.**
+> Production uses `wallet.satoshicore.org`. Its DNS (`CNAME` →
+> `satoshiconnect.github.io`) was already in place, and the repo Pages
+> configuration binds this domain (legacy-site divergence resolved by this
+> decision). The apex `satoshicore.org` remains a documented future option
+> (it needs 3 more apex A records plus a `www` CNAME before it can equal
+> Pages coverage); the apex is NOT the deployed wallet origin as of this
+> cycle.
+
+**DNS additions for apex/www (future option) require owner action; nothing
+here is automated.**
 
 1. At the DNS provider for `satoshicore.org`, add:
    - Apex `A` records → GitHub Pages IPs:
