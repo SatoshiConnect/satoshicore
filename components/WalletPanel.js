@@ -780,7 +780,7 @@ function SettingsPage({ s }) {
         <h2 style={{ color: 'var(--text)' }}>Backup & restore</h2>
         <p className="nw-small nw-dim" style={{ margin: '8px 0 12px' }}>
           Exports the ENCRYPTED keystore (AES-GCM, PBKDF2 600k). Restoring it
-          here rebuilds this wallet's locker — the same file also imports into
+          here rebuilds this wallet&apos;s locker — the same file also imports into
           fresh browsers.
         </p>
         <div className="nw-btn-row" style={{ margin: 0 }}>

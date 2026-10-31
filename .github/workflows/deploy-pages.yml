@@ -68,6 +68,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Lint source
+        run: npm run lint
+
+      - name: Dependency audit (block high and critical)
+        run: npm audit --audit-level=high
+
       - name: Build static export
         env:
           # github.io preview builds live under /satoshicore/; custom-domain
@@ -109,13 +115,6 @@ jobs:
 
       - name: Security scan of static output
         run: node tests/security-scan.mjs out
-
-      # Dependency audit: WARNING-level visibility. It does not gate this
-      # build (Next.js 14.2.15 carries known advisories until the pin is
-      # upgraded — tracked in WEB-WALLET-SECURITY-REVIEW.md), but failures are
-      # surfaced on every run so they cannot be missed.
-      - name: Dependency audit (advisory)
-        run: npm audit --omit=dev --audit-level=high || echo '::warning::npm audit reported vulnerabilities (see log) — tracked in WEB-WALLET-SECURITY-REVIEW.md'
 
       - name: Upload static output
         uses: actions/upload-pages-artifact@v3
