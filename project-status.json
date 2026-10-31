@@ -2,7 +2,7 @@
   "repository": "SatoshiConnect/satoshicore",
   "branch": "main",
   "commit_sha": "b3edd6c188b3d5e52ac64859d0573d5dc0f55393",
-  "inspection_timestamp": "2026-10-31T15:28:43Z",
+  "inspection_timestamp": "2026-10-31T15:31:30Z",
   "component_status": {
     "documented_production_branch": "PASS",
     "pages_build_and_deploy_workflow": "PASS",
@@ -14,14 +14,16 @@
     "genesis_hash_live_verification": "UNKNOWN",
     "shielded_security_certification": "BLOCKED",
     "public_gateway_dns_from_operator_host": "FAIL",
-    "unpublished_local_feature_branch": "UNKNOWN"
+    "unpublished_local_feature_branch": "UNKNOWN",
+    "gateway_launchd_service": "PASS"
   },
   "evidence_reference": [
     "Local GET 127.0.0.1:8790/health at 2026-10-31T15:23Z",
     "Local GET 127.0.0.1:8790/api/v1/network/status at 2026-10-31T15:23Z",
-    "TLS hostname verification attempt for https://wallet.satoshicore.org at 2026-10-31T15:28Z",
+    "TLS hostname verification attempt for https://wallet.satoshicore.org at 2026-10-31T15:31Z",
     "GitHub Actions run https://github.com/SatoshiConnect/satoshicore/actions/runs/41162906664",
-    "Read-only lookup of configured gateway.satoshicore.org failed DNS resolution at 2026-10-31T15:26Z"
+    "Read-only lookup of configured gateway.satoshicore.org failed DNS resolution at 2026-10-31T15:26Z",
+    "Read-only launchctl list and process check at 2026-10-31T15:30Z found org.satoshicore.gateway active"
   ],
   "mainnet_identity": {
     "status": "PASS",
@@ -31,8 +33,8 @@
   "ledger": {
     "status": "PASS",
     "version": 1,
-    "sequence": 98017,
-    "finalized_hash": "153b0a4a28fbb0372a369a6dddfea9e85670c3e4b473757495df6c225948c6ad",
+    "sequence": 98050,
+    "finalized_hash": "22ccf5f968aae3b792af0e73aba325e328802d3c38fef26499c8fc286196ed95",
     "validators": [
       "A",
       "B",
@@ -74,6 +76,11 @@
       "name": "public gateway TLS and API",
       "status": "NOT_TESTED",
       "evidence": "DNS failure prevented the request"
+    },
+    {
+      "name": "gateway supervisor process",
+      "status": "PASS",
+      "evidence": "launchd service process present"
     }
   ],
   "deployment_status": "BLOCKED",
