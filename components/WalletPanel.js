@@ -202,7 +202,7 @@ export default function WalletPanel() {
     try {
       keystoreRestore(await f.text());
       refreshWallets();
-      notify('Keystore restored. Unlock a wallet to sign.', 'ok');
+      notify('Wallet backup imported. Existing wallets were kept.', 'ok');
     } catch (err) { notify(`restore failed: ${err.message}`, 'err'); }
   }
 
@@ -317,10 +317,25 @@ export default function WalletPanel() {
     });
   }
 
+  async function copyPublicAddress(address) {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
+      await navigator.clipboard.writeText(address);
+      notify('Public address copied. It is safe to share.', 'ok');
+    } catch {
+      notify('Could not copy automatically. Select and copy the public address manually.', 'err');
+    }
+  }
+
   const netOk = !!net?.ok;
   const amtInt = /^\d+$/.test(amount.replace(/[,_ ]/g, ''))
     && BigInt(amount.replace(/[,_ ]/g, '') || '0') > 0n;
   const destOk = ACCOUNT_RE.test(dest.trim()) && dest.trim() !== active?.pubkey;
+  const sendBlocked = !active ? 'Unlock a wallet before preparing a transfer.'
+    : !netOk ? 'Network identity is not verified. Sending stays disabled until it is verified.'
+    : fee == null ? 'The current network fee could not be verified. Refresh the connection before sending.'
+    : !destOk ? 'Enter a valid NSAT address different from your own.'
+    : !amtInt ? 'Enter a positive whole-number amount in NSAT.' : null;
   const hasWallets = wallets.length > 0;
 
   const ledger = net?.ledger ?? null;
@@ -400,18 +415,19 @@ export default function WalletPanel() {
                 importSeed, setImportSeed }}
               net={{ net, netOk, ledger, fee }}
               onSend={() => setPage('send')} onReceive={() => setPage('receive')}
-              onManage={() => setPage('settings')} />
+              onManage={() => setPage('settings')}
+              onCopy={() => copyPublicAddress(active?.pubkey ?? '')} />
           )}
 
           {page === 'send' && (
             <SendPage
               state={{ dest, setDest, amount, setAmount, createDest, setCreateDest }}
-              gate={{ netOk, fee, amtInt, destOk }} busy={busy}
+              gate={{ netOk, fee, amtInt, destOk, sendBlocked }} busy={busy}
               onReview={openReview} />
           )}
 
           {page === 'receive' && (
-            <ReceivePage activePubkey={active?.pubkey ?? ''} />
+            <ReceivePage activePubkey={active?.pubkey ?? ''} onCopy={copyPublicAddress} />
           )}
 
           {page === 'shielded' && <ShieldedGatePage />}
@@ -436,9 +452,9 @@ export default function WalletPanel() {
             <div className="nw-kv"><span className="nw-k">Amount</span>
               <span className="nw-v">{formatExactBalance(review.amount)} NSAT</span></div>
             <div className="nw-kv"><span className="nw-k">Fee (live ledger)</span>
-              <span className="nw-v">{review.fee} stroops</span></div>
+              <span className="nw-v">{formatExactBalance(review.fee)} NSAT</span></div>
             <div className="nw-kv"><span className="nw-k">Total debit</span>
-              <span className="nw-v">{formatExactBalance(review.total)} stroops</span></div>
+              <span className="nw-v">{formatExactBalance(review.total)} NSAT</span></div>
             {createDest && (
               <div className="nw-kv"><span className="nw-k">CREATE account</span>
                 <span className="nw-v"><span className="nw-badge warn">new account funding</span></span></div>
@@ -476,7 +492,7 @@ export default function WalletPanel() {
 }
 
 /* --------------------------------- Overview ------------------------------ */
-function OverviewPage({ active, wallets, balance, bus, net, onSend, onReceive, onManage }) {
+function OverviewPage({ active, wallets, balance, bus, net, onSend, onReceive, onManage, onCopy }) {
   if (!active) {
     return (
       <div className="nw-grid-2">
@@ -543,13 +559,12 @@ function OverviewPage({ active, wallets, balance, bus, net, onSend, onReceive, o
               {balance == null ? '…' : formatExactBalance(balance)}
               <span className="nw-balance-unit">NSAT</span>
             </div>
-            <div className="nw-small nw-dim">exact on-chain value (stroops) · 128-bit · no floats</div>
+            <div className="nw-small nw-dim">Exact on-chain amount in whole NSAT</div>
           </div>
           <div style={{ textAlign: 'right' }}>
             <div className="nw-address-chip">
               <span>{shortAddr(active.pubkey)}</span>
-              <button className="nw-chip-btn"
-                onClick={() => void navigator.clipboard.writeText(active.pubkey)}>Copy</button>
+              <button className="nw-chip-btn" onClick={onCopy}>Copy</button>
             </div>
           </div>
         </div>
@@ -593,7 +608,7 @@ function OverviewPage({ active, wallets, balance, bus, net, onSend, onReceive, o
             <span className="nw-v">{net.netOk ? 'Connected' : 'Offline'}</span></div>
           <div className="nw-kv"><span className="nw-k">Network</span>
             <span className="nw-v nw-mono nw-small">{net.net?.network ?? '—'}</span></div>
-          <div className="nw-kv"><span className="nw-k">Base fee (stroops)</span>
+          <div className="nw-kv"><span className="nw-k">Base fee (NSAT)</span>
             <span className="nw-v">{net.fee ?? '…'} <small className="nw-dim">live</small></span></div>
         </section>
       </div>
@@ -634,16 +649,17 @@ function SendPage({ state, gate, busy, onReview }) {
           </label>
         </div>
         <div className="nw-row nw-small nw-dim"><label>Fee</label>
-          <span>{gate.fee ?? '…'} stroops per operation (live from the verified ledger)</span></div>
+          <span>{gate.fee == null ? 'unavailable' : `${formatExactBalance(gate.fee)} NSAT per operation (live from the verified ledger)`}</span></div>
         <div className="nw-row">
-          <button className="nw-send-btn" disabled={!gate.netOk || !gate.amtInt || !gate.destOk}
+          <button className="nw-send-btn" disabled={!!gate.sendBlocked}
+            aria-describedby={gate.sendBlocked ? 'nw-send-blocked' : undefined}
             onClick={onReview}>Review Transaction</button>
         </div>
       </div>
-      {!gate.netOk && (
-        <p className="nw-small" style={{ color: 'var(--warn)', marginTop: 12 }}>
-          Network identity not verified — sending disabled until the gateway
-          reports the exact expected Mainnet identity.
+      {gate.sendBlocked && (
+        <p id="nw-send-blocked" className="nw-small" role="status"
+          style={{ color: 'var(--warn)', marginTop: 12 }}>
+          {gate.sendBlocked}
         </p>
       )}
       {busy && <p className="nw-small nw-dim" style={{ marginTop: 8 }}>Working…</p>}
@@ -652,7 +668,7 @@ function SendPage({ state, gate, busy, onReview }) {
 }
 
 /* -------------------------------- Receive -------------------------------- */
-function ReceivePage({ activePubkey }) {
+function ReceivePage({ activePubkey, onCopy }) {
   return (
     <section className="nw-card" style={{ textAlign: 'center' }}>
       {!activePubkey
@@ -662,8 +678,7 @@ function ReceivePage({ activePubkey }) {
             style={{ wordBreak: 'break-all', padding: '12px 0', color: 'var(--cyan)' }}>
             {activePubkey}
           </div>
-          <button className="nw-chip-btn"
-            onClick={() => void navigator.clipboard.writeText(activePubkey)}>
+          <button className="nw-chip-btn" onClick={() => onCopy(activePubkey)}>
             Copy address
           </button>
           <p className="nw-small nw-dim" style={{ marginTop: 14 }}>
@@ -687,18 +702,17 @@ function ShieldedGatePage() {
             <div className="nw-balance-label">SHIELDED STATUS</div>
             <div className="nw-balance-amount">DESKTOP ONLY</div>
             <div className="nw-small nw-dim">
-              web · native kernel required · see the Desktop Wallet for gate state
+              The Web Wallet does not support Shielded transactions.
             </div>
           </div>
         </div>
       </section>
       <section className="nw-card">
         <p className="nw-small nw-dim">
-          Shielded NSAT (deposit · private transfer · withdrawal) requires the
-          native Rust kernel and local proof generation, which only the Desktop
-          Wallet provides. The web wallet never receives or creates proof
-          material, and makes no shielded signing claims here. On Mainnet the
-          SHIELDED gate release is a separate controlled activation.
+          Shielded Protocol Ledger Version 1 is active on Mainnet, but this
+          Web Wallet has no Shielded transaction path. It never receives or
+          creates proof material. Do not use this wallet for Shielded deposits,
+          private transfers, or withdrawals.
         </p>
       </section>
     </div>
