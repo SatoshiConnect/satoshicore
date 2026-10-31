@@ -1,6 +1,6 @@
 # SatoshiCore Wallet and Gateway — verified project status
 
-Inspection refreshed 2026-10-31T15:27:21Z (UTC). Status labels: `PASS`, `FAIL`, `BLOCKED`, `UNKNOWN`, `NOT_TESTED`.
+Inspection refreshed 2026-10-31T15:28:43Z (UTC). Status labels: `PASS`, `FAIL`, `BLOCKED`, `UNKNOWN`, `NOT_TESTED`.
 
 ## Repository and release provenance
 
