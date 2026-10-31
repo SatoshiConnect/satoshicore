@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import {
-  isGatewayConfigured,
-  EXPECTED_NETWORK_NAME
+  isGatewayConfigured, EXPECTED_NETWORK_ID,
+  verifyNetworkIdentity, getChainInfo, getAccount,
+  submitSignedTransaction, estimateFee, formatExactBalance,
 } from '../lib/nsatClient';
 import {
   keystoreCreate, keystoreImport, keystoreUnlock, keystoreList,
@@ -11,7 +12,6 @@ import {
   buildSignedTx, waitSeqReached, historyLoad, historyPush,
 } from '../lib/nsatWallet';
 import { decodeSeed } from '../lib/nsatCodec';
-import { formatExactBalance } from '../lib/nsatClient';
 
 // Full transactional Web Wallet. Everything user-facing happens in the
 // browser; the gateway only ever relays ALREADY-SIGNED envelopes and
@@ -23,36 +23,13 @@ import { formatExactBalance } from '../lib/nsatClient';
 // state only. A page reload or sidecar restart clears signing power; the
 // UI re-derives everything from the gateway's session-truth responses.
 
-// Gateway origin resolved at BUILD time (NEXT_PUBLIC_*). The browser talks
-// to the gateway cross-origin; CORS on the gateway side allows this app's
-// localhost origins. Same-origin /rpc only works when the gateway is
-// reverse-proxied under the app origin (production TLS setup).
-const GATEWAY_BASE = process.env.NEXT_PUBLIC_API_GATEWAY_URL || '';
-const GATEWAY_TOKEN = process.env.NEXT_PUBLIC_API_GATEWAY_TOKEN || '';
-
-async function rpc(method, params = {}, token = GATEWAY_TOKEN, timeoutMs = 120000) {
-  const base = GATEWAY_BASE || '';
-  const r = await fetch(`${base}/rpc`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json',
-      ...(token ? { 'x-rpc-token': token } : {}) },
-    body: JSON.stringify({ method, params }),
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  const body = await r.json().catch(() => ({}));
-  if (body.error) throw new Error(body.error);
-  return body.result ?? body;
-}
-
 const ACCOUNT_RE = /^G[A-Z2-7]{55}$/;
-const FEE = 10;
 
 export default function WalletPanel({ onNotify }) {
   // gateway/network
-  const [gwBase, setGwBase] = useState('');      // gateway origin (config)
-  const [token] = useState(GATEWAY_TOKEN);     // gateway bearer token (read queries)
   const [net, setNet] = useState(null);          // { ok, network, reason }
   const [ledger, setLedger] = useState(null);
+  const [fee, setFee] = useState(null);          // live base fee (stroops)
   // wallet session
   const [wallets, setWallets] = useState([]);
   const [active, setActive] = useState(null);    // { name, pubkey, seed32 }
@@ -78,30 +55,28 @@ export default function WalletPanel({ onNotify }) {
 
   const configured = isGatewayConfigured();
 
+  // Network identity: strict, gateway-independent-of-config check via the
+  // SDK — the reported on-chain identity must equal EXPECTED_NETWORK_ID.
+  // The result gates EVERY signing action (see the `net.ok` checks below).
   const verifyNetwork = useCallback(async () => {
     if (!configured) { setNet({ ok: false, reason: 'gateway not configured' }); return null; }
-    try {
-      const st = await rpc('network_info', {}, token, 10000);
-      const network = st.network || '';
-      const ok = network.startsWith('NSAT');
-      setNet({ ok, network, reason: ok ? null : `unexpected network "${network}"` });
-      setLedger(st.ledger_sequence);
-      return st;
-    } catch (e) {
-      setNet({ ok: false, network: null, reason: String(e.message || e) });
-      return null;
+    const r = await verifyNetworkIdentity();
+    setNet(r);
+    setLedger(r.ledger);
+    if (r.ok) {
+      try { setFee(await estimateFee()); } catch { setFee(null); }
     }
-  }, [configured, token]);
+    return r;
+  }, [configured]);
 
   const refreshWallets = useCallback(() => setWallets(keystoreList()), []);
 
   const refreshBalance = useCallback(async (name, pubkey) => {
     try {
-      const r = await rpc('account', { acc: pubkey }, token, 10000);
-      if (r.status === 'ok') setBalance(r.balance128 ?? r.balance);
-      else setBalance(null);
+      const r = await getAccount(pubkey);
+      setBalance(r.status === 'ok' ? (r.balance128 ?? String(r.balance)) : null);
     } catch { setBalance(null); }
-  }, [token]);
+  }, []);
 
   useEffect(() => { setWallets(keystoreList()); }, []);
   useEffect(() => { void verifyNetwork(); }, [verifyNetwork]);
@@ -123,7 +98,9 @@ export default function WalletPanel({ onNotify }) {
       setActive({ name: r.name, pubkey: r.pubkeyG, seed32: decodeSeed(r.seedS) });
       setLocked(false);
       setNewName(''); setNewPass('');
-      notify(`Wallet "${r.name}" created. BACK UP the seed shown in Keys now.`, 'ok');
+      // Truth: the seed is never displayed by this wallet. The user's backup
+      // is the ENCRYPTED keystore blob — direct them to export it now.
+      notify(`Wallet "${r.name}" created. Export the encrypted backup NOW (button above) and store it privately — it is the only copy.`, 'ok');
     } catch (err) { notify(String(err.message || err), 'err'); }
     setBusy(false);
   }
@@ -186,19 +163,26 @@ export default function WalletPanel({ onNotify }) {
   async function doSend(e) {
     e.preventDefault();
     if (!active?.seed32) { notify('Unlock the wallet first.', 'err'); return; }
-    if (!net?.ok) { notify('Network identity not verified — refusing to send.', 'err'); return; }
+    if (!net?.ok) { notify('Network identity not verified — refusing to sign.', 'err'); return; }
+    // Re-assert the identity that was VERIFIED — signing uses this exact
+    // passphrase so signature and submission can never straddle two networks.
+    if (net.network !== EXPECTED_NETWORK_ID) {
+      notify('Network identity changed since verification — refusing to sign.', 'err');
+      return;
+    }
     setBusy(true);
     try {
-      const info = await rpc('network_info', {}, token);
-      const baseFee = Number(info.base_fee || FEE);
+      // Fees and reserves come from the LIVE ledger — never a baked constant.
+      const baseFee = await estimateFee();
+      const info = await getChainInfo();
+      const baseReserve = Number(info?.info?.ledger?.baseReserve || 0);
+      const amtClean = amount.replace(/[,_ ]/g, '');
       // A brand-new destination account needs a starting balance of at least
       // 2× base reserve on this fork; below it the tx finalizes but the op
       // fails on-chain (fee charged, funds not moved). Fail BEFORE signing.
-      const baseReserve = Number(info.base_reserve || 0);
-      const amtClean = amount.replace(/[,_ ]/g, '');
       if (createDest && baseReserve > 0 && /^\d+$/.test(amtClean)
         && BigInt(amtClean) < BigInt(2 * baseReserve)) {
-        notify(`CREATE starting balance must be ≥ ${BigInt(2 * baseReserve).toLocaleString()} NSAT (2× base reserve) — the chain would charge the fee and fail the operation.`, 'err');
+        notify(`CREATE starting balance must be ≥ ${BigInt(2 * baseReserve).toLocaleString()} stroops (2× base reserve) — the chain would charge the fee and fail the operation.`, 'err');
         setBusy(false);
         return;
       }
@@ -207,11 +191,10 @@ export default function WalletPanel({ onNotify }) {
       let prevBalance = null;
       const signed = await buildSignedTx({
         seed32: active.seed32,
-        netPassphrase: net.network,     // identity VALIDATED above
+        netPassphrase: EXPECTED_NETWORK_ID,   // the VERIFIED identity, exact
         seqFetch: async () => {
-          const d = await rpc('account', { acc: active.pubkey }, token, 10000);
-          prevBalance = d.balance != null ? Number(d.balance)
-            : d.balance128 != null ? Number(d.balance128) : null;
+          const d = await getAccount(active.pubkey);
+          prevBalance = d.balance128 ?? (d.balance != null ? String(d.balance) : null);
           return d;
         },
         destG: dest.trim(),
@@ -219,39 +202,57 @@ export default function WalletPanel({ onNotify }) {
         fee: baseFee,
         create: createDest,
       });
-      const r = await rpc('submit_signed', { envelope: signed.envelopeBase64 }, token);
+      const r = await submitSignedTransaction(signed.envelopeBase64);
+      // Core /tx statuses (verified in nsat-core TransactionQueue.cpp):
+      //   PENDING | DUPLICATE | ERROR | TRY_AGAIN_LATER | FILTERED
+      if (r.status === 'ERROR') {
+        notify('Node REJECTED the transaction before inclusion (invalid or insufficient). Nothing was signed again — see Activity.', 'err');
+        historyPush(active.name, {
+          time: new Date().toLocaleString(), dir: 'sent', to: dest.trim(),
+          amount: amount.trim(), fee: 0, txhash: signed.txHashHex,
+          ledger: null, ledger_hash: null, status: 'rejected',
+        });
+        setHistory(historyLoad(active.name));
+        setBusy(false);
+        return;
+      }
       if (r.status !== 'PENDING') {
-        notify(`Node rejected the transaction: ${r.status || JSON.stringify(r)}`, 'err');
+        const friendly = {
+          DUPLICATE: 'the node already has this exact transaction (already submitted).',
+          TRY_AGAIN_LATER: 'node queue is full — try again shortly; nothing was lost.',
+          FILTERED: 'the node filtered this transaction (fee/size policy).',
+        };
+        notify(`Node responded ${r.status}: ${friendly[r.status] || JSON.stringify(r)}`, r.status === 'DUPLICATE' ? 'warn' : 'err');
         setBusy(false);
         return;
       }
       notify('Submitted — waiting for finalization…', 'warn');
       // Finalization: the account's sequence number only moves when the
       // transaction is APPLIED in a closed ledger, so seq-advance is the
-      // confirmation signal. Ledger/hash evidence comes from latest_ledger.
+      // confirmation signal.
       const ok = await waitSeqReached(
         async () => {
-          const d = await rpc('account', { acc: active.pubkey }, token, 10000);
-          return Number(d.sequence ?? d.seqnum ?? 0);
+          const d = await getAccount(active.pubkey);
+          return Number(d.seqnum ?? d.sequence ?? 0);
         },
         signed.seq, 90000, 2000);
       if (!ok) { notify('Not finalized within 90 s — check Activity later.', 'warn'); setBusy(false); return; }
       // Ledger truth: seq-advance also happens when the tx finalizes with a
       // FAILED operation (fee charged, nothing moved). A send is CONFIRMED
       // only if the balance debit matches amount + fee exactly.
-      const afterD = await rpc('account', { acc: active.pubkey }, token, 10000).catch(() => null);
-      const afterBal = afterD != null
-        ? (afterD.balance != null ? Number(afterD.balance)
-          : afterD.balance128 != null ? Number(afterD.balance128) : null)
-        : null;
+      const afterD = await getAccount(active.pubkey).catch(() => null);
+      const afterBal = afterD?.status === 'ok'
+        ? BigInt(afterD.balance ?? afterD.balance128) : null;
       const debited = prevBalance != null && afterBal != null
-        && BigInt(prevBalance) - BigInt(afterBal) === BigInt(amount) + BigInt(signed.fee);
-      const li = await rpc('latest_ledger', {}, token, 10000).catch(() => null);
+        && BigInt(prevBalance) - afterBal === BigInt(amount) + BigInt(signed.fee);
+      // Ledger evidence for the history entry — read from the live chain info.
+      const li = await getChainInfo().catch(() => null);
+      const liLedger = li?.info?.ledger ?? null;
       if (!debited) {
         historyPush(active.name, {
           time: new Date().toLocaleString(), dir: 'sent', to: dest.trim(),
           amount: amount.trim(), fee: signed.fee, txhash: signed.txHashHex,
-          ledger: li?.ledger, ledger_hash: li?.hash, status: 'op_failed_on_chain',
+          ledger: liLedger?.num, ledger_hash: liLedger?.hash, status: 'op_failed_on_chain',
         });
         setHistory(historyLoad(active.name));
         notify('Finalized but the operation FAILED on-chain — only the fee was charged. No funds moved.', 'err');
@@ -261,10 +262,10 @@ export default function WalletPanel({ onNotify }) {
       historyPush(active.name, {
         time: new Date().toLocaleString(), dir: 'sent', to: dest.trim(),
         amount: amount.trim(), fee: signed.fee, txhash: signed.txHashHex,
-        ledger: li?.ledger, ledger_hash: li?.hash, status: 'confirmed',
+        ledger: liLedger?.num, ledger_hash: liLedger?.hash, status: 'confirmed',
       });
       setHistory(historyLoad(active.name));
-      notify(`Confirmed on ledger ${li?.ledger ?? '(latest)'}.`, 'ok');
+      notify(`Confirmed on ledger ${liLedger?.num ?? '(latest)'}.`, 'ok');
       setAmount('');
       void refreshBalance(active.name, active.pubkey);
     } catch (err) { notify(String(err.message || err), 'err'); }
@@ -391,7 +392,7 @@ export default function WalletPanel({ onNotify }) {
               Destination has no account yet (CREATE — moves the amount itself as
               starting balance; required only for a brand-new G… )
             </label>
-            <div className="small dim">Fee: {FEE} NSAT per operation (shown before sign)</div>
+            <div className="small dim">Fee: {fee ?? '…'} stroops per operation (live from the verified ledger)</div>
             <button type="submit" className="send-btn" disabled={busy || !netOk || !amtOk || !destOk}>
               {busy ? 'Signing & submitting…' : 'Sign & send'}
             </button>

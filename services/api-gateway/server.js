@@ -210,33 +210,42 @@ const ROUTES = {
     }
   },
 
-  // Network / health status of the whole stack. Companion endpoint for the
-  // status page: verifies the gateway itself and liveness of the core node.
+  // Network / health status of the whole stack. The `network` field is the
+  // TRUE on-chain identity read from the running nsat-core /info response —
+  // NOT gateway configuration — so clients verify what the chain itself
+  // reports. If core is unreachable or its response is malformed, network is
+  // null and the client must fail closed.
   'GET /api/v1/network/status': async (req, res) => {
     try {
       const up = await coreFetchRead('/info');
       const coreReachable = up.status === 200;
-      let serverTime = null;
+      let network = null;
       let ledger = null;
+      let serverTime = null;
       if (coreReachable) {
         try {
           const parsed = JSON.parse(up.body);
-          ledger = parsed && parsed.info && parsed.info.ledger ? parsed.info.ledger.num : null;
+          network = (parsed && parsed.info && typeof parsed.info.network === 'string')
+            ? parsed.info.network
+            : null; // reachable but no usable identity string → client fails closed
+          ledger = parsed && parsed.info && parsed.info.ledger
+            ? parsed.info.ledger.num
+            : null;
           serverTime = parsed && parsed.info ? parsed.info.serverTime || null : null;
         } catch {
-          // non-JSON upstream — treat as degraded
+          // non-JSON upstream — treat as degraded; identity unknown
         }
       }
-      sendJson(res, coreReachable ? 200 : 200, {
+      sendJson(res, 200, {
         gateway: 'ok',
         core: coreReachable ? 'ok' : 'unreachable',
         ledger,
         serverTime,
-        network: process.env.NSAT_NETWORK_NAME || 'NSAT'
+        network
       }, req);
     } catch (err) {
       log('error', 'network_status_failed', { error: err.message });
-      sendJson(res, 200, { gateway: 'ok', core: 'unreachable' }, req);
+      sendJson(res, 200, { gateway: 'ok', core: 'unreachable', network: null }, req);
     }
   },
 

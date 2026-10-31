@@ -232,11 +232,13 @@ test('rate limit enforced per IP', async () => {
   }
 });
 
-// network status endpoint reports core liveness
-test('network status endpoint reports gateway+core', async () => {
+// network status endpoint reports the CORE's on-chain identity (never env)
+test('network status: identity comes from the running core, not env config', async () => {
   const mockCore = await startMockCore();
   process.env.NSAT_CORE_HTTP_URL = `http://127.0.0.1:${mockCore.address().port}`;
-  process.env.NSAT_NETWORK_NAME = 'NSAT Mainnet ; October 2026';
+  // Stale/misleading gateway env must be IGNORED — the chain's own reported
+  // identity is the only source of truth.
+  process.env.NSAT_NETWORK_NAME = 'NSAT';
   delete require.cache[require.resolve('../server.js')];
   const { createServer: freshCreate } = require('../server.js');
   const gateway = freshCreate();
@@ -247,10 +249,57 @@ test('network status endpoint reports gateway+core', async () => {
     const body = JSON.parse(r.body);
     assert.equal(body.gateway, 'ok');
     assert.equal(body.core, 'ok');
-    assert.equal(body.network, 'NSAT Mainnet ; October 2026');
+    assert.equal(body.network, 'SatoshiCore Testnet ; October 2026');
   } finally {
     gateway.close();
     mockCore.close();
+  }
+});
+
+// malformed core (reachable but no identity string) → network MUST be null,
+// so clients fail closed instead of guessing.
+test('network status: core reachable but identity missing → network null', async () => {
+  const server = http.createServer((req, res) => {
+    if (req.url === '/info') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ info: { ledger: { num: 42 } } })); // no `network`
+    } else { res.writeHead(404); res.end('{}'); }
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  process.env.NSAT_CORE_HTTP_URL = `http://127.0.0.1:${server.address().port}`;
+  process.env.NSAT_NETWORK_NAME = 'NSAT Mainnet ; October 2026'; // must NOT be used
+  delete require.cache[require.resolve('../server.js')];
+  const { createServer: freshCreate } = require('../server.js');
+  const gateway = freshCreate();
+  await new Promise((r) => gateway.listen(0, '127.0.0.1', r));
+  try {
+    const r = await request(gateway.address().port, '/api/v1/network/status');
+    assert.strictEqual(r.status, 200);
+    const body = JSON.parse(r.body);
+    assert.equal(body.core, 'ok');
+    assert.equal(body.network, null);
+  } finally {
+    gateway.close();
+    server.close();
+  }
+});
+
+// unreachable core → explicit degraded state, network null (fail closed)
+test('network status: unreachable core → core unreachable + network null', async () => {
+  // port 1: reserved port with no listener on this host — a stable dead target
+  process.env.NSAT_CORE_HTTP_URL = 'http://127.0.0.1:1';
+  delete require.cache[require.resolve('../server.js')];
+  const { createServer: freshCreate } = require('../server.js');
+  const gateway = freshCreate();
+  await new Promise((r) => gateway.listen(0, '127.0.0.1', r));
+  try {
+    const r = await request(gateway.address().port, '/api/v1/network/status');
+    assert.equal(r.status, 200);
+    const body = JSON.parse(r.body);
+    assert.equal(body.core, 'unreachable');
+    assert.equal(body.network, null);
+  } finally {
+    gateway.close();
   }
 });
 

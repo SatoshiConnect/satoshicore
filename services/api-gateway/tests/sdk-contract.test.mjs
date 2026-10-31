@@ -56,13 +56,16 @@ function startMockCore() {
 test('SDK speaks the exact /api/v1 contract of a real gateway', async () => {
   const mockCore = await startMockCore();
   process.env.NSAT_CORE_HTTP_URL = `http://127.0.0.1:${mockCore.address().port}`;
-  process.env.NSAT_NETWORK_NAME = 'NSAT Mainnet ; October 2026';
+  // (Gateway no longer reports env-configured names; NSAT_NETWORK_NAME env
+  // is deliberately not set anywhere.)
   const gateway = require('../server.js').createServer();
   await new Promise((r) => gateway.listen(0, '127.0.0.1', r));
 
-  // The SDK binds its gateway URL at import time — env first, then import.
+  // The SDK binds its gateway URL + expected identity at import time.
+  // The expected identity MUST be the full exact passphrase — the mock core
+  // below reports exactly that, so this is the strict exact-match happy path.
   process.env.NEXT_PUBLIC_API_GATEWAY_URL = `http://127.0.0.1:${gateway.address().port}`;
-  process.env.NEXT_PUBLIC_NSAT_NETWORK_NAME = 'NSAT Mainnet ; October 2026';
+  process.env.NEXT_PUBLIC_NSAT_NETWORK_ID = 'NSAT Mainnet ; October 2026 ; bc3098829fffc717';
   const sdk = await import(SDK_URL);
 
   try {
@@ -73,8 +76,9 @@ test('SDK speaks the exact /api/v1 contract of a real gateway', async () => {
 
     // network identity check (the wallet rejects mismatches before enabling send)
     const identity = await sdk.verifyNetworkIdentity();
-    assert.equal(identity.ok, true);
-    assert.equal(identity.network, 'NSAT Mainnet ; October 2026');
+    assert.equal(identity.ok, true, `expected exact identity verified, got: ${identity.reason}`);
+    assert.equal(identity.network, 'NSAT Mainnet ; October 2026 ; bc3098829fffc717');
+    assert.equal(identity.reason, null);
     assert.equal(identity.ledger, 80800);
 
     // account lookup — exact decimal string balance, seqnum present
@@ -87,15 +91,17 @@ test('SDK speaks the exact /api/v1 contract of a real gateway', async () => {
     // 128-bit-exact formatting path (BigInt-safe, never float)
     assert.equal(sdk.formatExactBalance(acc.balance128), '2,100,000,000,000,000,000,000,000');
 
-    // pre-validated wrong-network client still returns a typed refusal
-    process.env.NEXT_PUBLIC_NSAT_NETWORK_NAME = 'Some Other Network';
+    // A client configured with a SHORTER/prefix identity (“NSAT Mainnet ;
+    // October 2026”) must REFUSE when the chain reports the full exact
+    // passphrase — exact-match only, no prefix acceptance either direction.
+    process.env.NEXT_PUBLIC_NSAT_NETWORK_ID = 'NSAT Mainnet ; October 2026';
     process.env.NEXT_PUBLIC_API_GATEWAY_URL = `http://127.0.0.1:${gateway.address().port}`;
     delete require.cache[require.resolve('../server.js')];
     const mismatchSdk = await import(`${SDK_URL}?mismatch-network=1`);
     const rejected = await mismatchSdk.verifyNetworkIdentity();
-    assert.equal(rejected.ok, false);
+    assert.equal(rejected.ok, false, 'prefix-configured client must refuse');
     assert.ok(rejected.reason.includes('expected'));
-    assert.equal(rejected.network, 'NSAT Mainnet ; October 2026');
+    assert.equal(rejected.network, 'NSAT Mainnet ; October 2026 ; bc3098829fffc717');
 
     // fee estimation — integer baseFee straight from the proxied ledger header
     assert.equal(await sdk.estimateFee(), 10);

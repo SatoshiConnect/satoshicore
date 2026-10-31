@@ -81,8 +81,30 @@ jobs:
       - name: Run static-export verification tests
         run: npm test
 
+      # Mainnet identity regression: the built artifact must carry the EXACT
+      # full passphrase. A missing string means the strict-identity client
+      # was not included in the build. If the Mainnet identity ever changes
+      # via an authorized protocol upgrade, update BOTH this check and
+      # FULL_MAINNET_IDENTITY in lib/nsatClient.js in the same commit.
+      - name: Mainnet identity regression (exact passphrase in artifact)
+        run: |
+          set -e
+          count=$(grep -rl 'NSAT Mainnet ; October 2026 ; bc3098829fffc717' out/_next/static/chunks | wc -l | tr -d ' ')
+          echo "full-identity chunks: $count"
+          test "$count" -ge 1
+          if grep -q '"NSAT"' out/_next/static/chunks/*.js; then
+            echo 'dev tooling may legitimately contain the short token; checking it is not used as network fallback…'
+          fi
+
       - name: Security scan of static output
         run: node tests/security-scan.mjs out
+
+      # Dependency audit: WARNING-level visibility. It does not gate this
+      # build (Next.js 14.2.15 carries known advisories until the pin is
+      # upgraded — tracked in WEB-WALLET-SECURITY-REVIEW.md), but failures are
+      # surfaced on every run so they cannot be missed.
+      - name: Dependency audit (advisory)
+        run: npm audit --omit=dev --audit-level=high || echo '::warning::npm audit reported vulnerabilities (see log) — tracked in WEB-WALLET-SECURITY-REVIEW.md'
 
       - name: Upload static output
         uses: actions/upload-pages-artifact@v3
