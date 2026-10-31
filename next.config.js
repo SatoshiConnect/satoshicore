@@ -1,4 +1,6 @@
 /** @type {import('next').NextConfig} */
+const { execFileSync } = require('node:child_process');
+
 const nextConfig = {
   // Static export: no Node.js server required. All pages render to static
   // HTML/JS/CSS in ./out for GitHub Pages hosting.
@@ -13,6 +15,7 @@ const nextConfig = {
   assetPrefix: process.env.NEXT_PUBLIC_BASE_PATH || '',
   images: { unoptimized: true },
   trailingSlash: true,
+  generateBuildId: async () => execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
 
   env: {
     // Public, non-sensitive runtime flags only. No secrets, keys or seeds are
