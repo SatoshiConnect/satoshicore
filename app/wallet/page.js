@@ -1,19 +1,12 @@
 import WalletPanel from '../../components/WalletPanel';
+import './wallet.css';
 
 export const metadata = {
-  title: 'Web Wallet — SatoshiCore'
+  title: 'NSAT Wallet — SatoshiCore',
+  description:
+    'The NSAT Web Wallet in the original SatoshiCore Desktop design. Keys are generated and encrypted in your browser; the gateway only relays signed transactions.',
 };
 
 export default function WalletPage() {
-  return (
-    <div>
-      <h1>Web Wallet</h1>
-      <p>
-        The Web Wallet runs entirely in your browser. Transaction signing is
-        performed client-side; the API Gateway never receives key material —
-        only already-signed transactions.
-      </p>
-      <WalletPanel />
-    </div>
-  );
+  return <WalletPanel />;
 }
