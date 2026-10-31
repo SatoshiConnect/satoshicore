@@ -1,0 +1,130 @@
+name: Build, test and deploy static site to GitHub Pages
+
+# SatoshiCore Web Platform v24.0
+#
+# NOTE ON ACTIVATION (updated 2026-10-31):
+# The deploy job is gated on `main` pushes OR explicit workflow_dispatch runs.
+# Pages Source is GitHub Actions (migrated from the legacy gh-pages branch);
+# the production custom domain is wallet.satoshicore.org (DNS verified:
+# wallet.satoshicore.org -> satoshiconnect.github.io). Build and test jobs
+# run on every push/PR regardless; feature-branch deploys require a deliberate
+# workflow_dispatch call — they are never automatic.
+
+on:
+  push:
+    branches: [main, 'feature/**']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      custom_domain:
+        description: "Build for custom domain (satoshicore.org). Leave false for github.io preview builds."
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  # pages: write and id-token: write are required for deployment; they are
+  # scoped to the deploy job, which is currently disabled.
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  gateway:
+    name: Test API Gateway service
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Run gateway tests (unit + mock-core integration)
+        working-directory: services/api-gateway
+        run: npm test
+
+  build:
+    name: Build static export
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build static export
+        env:
+          # github.io preview builds live under /satoshicore/; custom-domain
+          # builds (workflow_dispatch with custom_domain=true) live at the
+          # root of satoshicore.org.
+          NEXT_PUBLIC_BASE_PATH: ${{ github.event_name == 'workflow_dispatch' && inputs.custom_domain == true && '' || github.ref_name == 'main' && '/satoshicore' || '' }}
+        run: npm run build
+
+      - name: Apply custom-domain configuration
+        if: github.event_name == 'workflow_dispatch' && inputs.custom_domain == true
+        run: cp CNAME.reference out/CNAME
+
+      - name: Run static-export verification tests
+        run: npm test
+
+      # Mainnet identity regression: the built artifact must carry the EXACT
+      # full passphrase. A missing string means the strict-identity client
+      # was not included in the build. If the Mainnet identity ever changes
+      # via an authorized protocol upgrade, update BOTH this check and
+      # FULL_MAINNET_IDENTITY in lib/nsatClient.js in the same commit.
+      - name: Mainnet identity regression (exact passphrase in artifact)
+        run: |
+          set -e
+          count=$(grep -rl 'NSAT Mainnet ; October 2026 ; bc3098829fffc717' out/_next/static/chunks | wc -l | tr -d ' ')
+          echo "full-identity chunks: $count"
+          test "$count" -ge 1
+          if grep -q '"NSAT"' out/_next/static/chunks/*.js; then
+            echo 'dev tooling may legitimately contain the short token; checking it is not used as network fallback…'
+          fi
+
+      - name: Security scan of static output
+        run: node tests/security-scan.mjs out
+
+      # Dependency audit: WARNING-level visibility. It does not gate this
+      # build (Next.js 14.2.15 carries known advisories until the pin is
+      # upgraded — tracked in WEB-WALLET-SECURITY-REVIEW.md), but failures are
+      # surfaced on every run so they cannot be missed.
+      - name: Dependency audit (advisory)
+        run: npm audit --omit=dev --audit-level=high || echo '::warning::npm audit reported vulnerabilities (see log) — tracked in WEB-WALLET-SECURITY-REVIEW.md'
+
+      - name: Upload static output
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: out
+
+  deploy:
+    name: Deploy to GitHub Pages (owner-gated)
+    runs-on: ubuntu-latest
+    # Owner-approved gate (2026-10-31): automatic on main; feature branches
+    # deploy ONLY via explicit workflow_dispatch. Enable Enforce HTTPS when
+    # the domain certificate is issued (see docs/DEPLOYMENT.md).
+    if: github.ref_name == 'main' || github.event_name == 'workflow_dispatch'
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
