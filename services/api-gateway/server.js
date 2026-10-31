@@ -19,6 +19,11 @@ const { URL } = require('node:url');
 
 const CONFIG = {
   port: Number(process.env.PORT) || 8787,
+  // Bind address. Empty = all interfaces (required only for the
+  // production TLS-terminating reverse proxy). Disposable/local instances
+  // (devnet tests, WALLET-DEVNET) must set NSAT_GATEWAY_HOST=127.0.0.1 so
+  // the disposable network is never reachable from the LAN.
+  bindHost: process.env.NSAT_GATEWAY_HOST || '',
   coreHttpUrl: (process.env.NSAT_CORE_HTTP_URL || 'http://127.0.0.1:11626').replace(/\/$/, ''),
   // Comma-separated origin allowlist for browser clients; '*' disables CORS
   // enforcement (not recommended in production).
@@ -68,14 +73,27 @@ function rateLimited(ip) {
 }
 
 // --- helpers ----------------------------------------------------------------
+// Hardening headers attached to EVERY response (JSON and proxied bodies).
+// HSTS is meaningless over plain HTTP but harmless; browsers enforce it
+// only on HTTPS responses, which is exactly the production deployment.
+function securityHeaders() {
+  return {
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'no-referrer',
+    'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; sandbox",
+    'Strict-Transport-Security': 'max-age=15552000; includeSubDomains',
+    'Cache-Control': 'no-store'
+  };
+}
+
 function sendJson(res, status, body, req) {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
     ...(req ? corsHeaders(req) : {}),
+    ...securityHeaders(),
     'Content-Type': 'application/json; charset=utf-8',
-    'Content-Length': Buffer.byteLength(payload),
-    'X-Content-Type-Options': 'nosniff',
-    'Cache-Control': 'no-store'
+    'Content-Length': Buffer.byteLength(payload)
   });
   res.end(payload);
 }
@@ -200,8 +218,8 @@ const ROUTES = {
       const up = await coreFetchRead('/info');
       res.writeHead(up.status, {
         ...corsHeaders(req),
-        'Content-Type': 'application/json; charset=utf-8',
-        'Cache-Control': 'no-store'
+        ...securityHeaders(),
+        'Content-Type': 'application/json; charset=utf-8'
       });
       res.end(up.body);
     } catch (err) {
@@ -231,7 +249,10 @@ const ROUTES = {
           ledger = parsed && parsed.info && parsed.info.ledger
             ? parsed.info.ledger.num
             : null;
-          serverTime = parsed && parsed.info ? parsed.info.serverTime || null : null;
+          // Core reports ledger close time, not a server clock. Expose the
+          // authoritative closeTime so clients can detect stale ledgers.
+          serverTime = parsed.info.ledger && parsed.info.ledger.closeTime
+            || null;
         } catch {
           // non-JSON upstream — treat as degraded; identity unknown
         }
@@ -260,8 +281,8 @@ const ROUTES = {
       const up = await coreFetchRead(`/account?acc=${encodeURIComponent(acc)}`);
       res.writeHead(up.status, {
         ...corsHeaders(req),
-        'Content-Type': 'application/json; charset=utf-8',
-        'Cache-Control': 'no-store'
+        ...securityHeaders(),
+        'Content-Type': 'application/json; charset=utf-8'
       });
       res.end(up.body);
     } catch (err) {
@@ -287,8 +308,8 @@ const ROUTES = {
       log('info', 'tx_submitted', { upstream_status: up.status });
       res.writeHead(up.status, {
         ...corsHeaders(req),
-        'Content-Type': 'application/json; charset=utf-8',
-        'Cache-Control': 'no-store'
+        ...securityHeaders(),
+        'Content-Type': 'application/json; charset=utf-8'
       });
       res.end(up.body);
     } catch (err) {
@@ -353,9 +374,10 @@ function createServer() {
 
 if (require.main === module) {
   const server = createServer();
-  server.listen(CONFIG.port, () => {
+  server.listen(CONFIG.port, CONFIG.bindHost, () => {
     log('info', 'gateway_listening', {
       port: CONFIG.port,
+      host: CONFIG.bindHost || 'all-interfaces',
       core: CONFIG.coreHttpUrl,
       allowed_origins: CONFIG.allowedOrigins.length || 'none'
     });

@@ -331,4 +331,32 @@ test('account route validates G-strkey and proxies reads', async () => {
   }
 });
 
-// oversized request body is rejected with 413
+// every response — JSON and proxied bodies — carries the hardening header set
+test('hardening headers present on every response (JSON, proxied, error)', async () => {
+  const mockCore = await startMockCore();
+  process.env.NSAT_CORE_HTTP_URL = `http://127.0.0.1:${mockCore.address().port}`;
+  delete require.cache[require.resolve('../server.js')];
+  const { createServer: freshCreate } = require('../server.js');
+  const gateway = freshCreate();
+  await new Promise((r) => gateway.listen(0, '127.0.0.1', r));
+  const expected = {
+    'x-content-type-options': 'nosniff',
+    'x-frame-options': 'DENY',
+    'referrer-policy': 'no-referrer',
+    'strict-transport-security': 'max-age=15552000; includeSubDomains',
+    'cache-control': 'no-store'
+  };
+  try {
+    const paths = ['/health', '/api/v1/chain/info', '/api/v1/network/status', '/definitely/not/a/route'];
+    for (const p of paths) {
+      const r = await request(gateway.address().port, p);
+      for (const [h, v] of Object.entries(expected)) {
+        assert.equal(r.headers[h], v, `${p} must set ${h}`);
+      }
+      assert.match(r.headers['content-security-policy'] || '', /default-src 'none'/);
+    }
+  } finally {
+    gateway.close();
+    mockCore.close();
+  }
+});
