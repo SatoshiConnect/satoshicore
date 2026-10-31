@@ -43,6 +43,26 @@ curl -s https://<gateway-host>/health          # expect {status:"ok"}
 curl -s https://<gateway-host>/api/v1/network/status
 ```
 
+## 3a. Live production deployment on this iMac (2026-10-31)
+
+The gateway is installed as a launchd LaunchAgent, TCC-safe, keyless, loopback-bound:
+
+| Item | Value |
+|---|---|
+| Service label | `org.satoshicore.gateway` (`~/Library/LaunchAgents/org.satoshicore.gateway.plist`) |
+| Runtime copy | `~/nsat-ops/gateway/server.js` (deploy target outside `~/Desktop` to avoid macOS TCC file-access denial) |
+| Listen | `127.0.0.1:8790` only (never exposed directly; TLS termination is before/around it) |
+| Upstream | `NSAT_CORE_HTTP_URL=http://127.0.0.1:11626` (node A HTTP interface, loopback) |
+| CORS allowlist | `https://wallet.satoshicore.org`, dev origins `:3000`, static-export check origins `:8899` |
+| Deploy/upgrade | `~/nsat-ops/deploy-gateway.sh` (repo → runtime copy → launchd restart → health probe) |
+| Verified live | `GET /health` 200; `GET /api/v1/network/status` 200 with ledger ~89,5xx, identity echoed byte-exact; foreign-origin preflight 403 |
+
+`ALLOWED_ORIGINS` lives in BOTH the plist `EnvironmentVariables` (authoritative — it
+overrides the wrapper default) and `~/nsat-ops/gateway-launch-wrapper.sh`; update both
+whenever the deploy domain changes. The web build pipeline
+(`.github/workflows/deploy-pages.yml`) now bakes `NEXT_PUBLIC_API_GATEWAY_URL` and the
+byte-exact network identity into every artifact.
+
 Reverse-proxy requirements: terminate TLS with modern ciphers, set
 `Content-Security-Policy` and `Strict-Transport-Security` at the edge, do NOT
 forward `X-Forwarded-*` trust for the rate limit unless the proxy is trusted.

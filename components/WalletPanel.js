@@ -69,6 +69,31 @@ export default function WalletPanel() {
     window.setTimeout(() => setToast(null), 6000);
   };
 
+  // Idle auto-lock: signing power must not outlive inattention. Any user
+  // activity resets the timer; after the idle window the wallet locks via
+  // the same path as the explicit lock button (setActive(null)), dropping
+  // the seed from memory. Default 15 min; NEXT_PUBLIC_IDLE_LOCK_MS overrides
+  // (a value ≤ 0 disables — never recommended on shared machines).
+  const idleLockMs = Number(process.env.NEXT_PUBLIC_IDLE_LOCK_MS) || 15 * 60_000;
+  useEffect(() => {
+    if (!active || idleLockMs <= 0) return undefined;
+    let lastActive = Date.now();
+    const bump = () => { lastActive = Date.now(); };
+    const events = ['pointerdown', 'keydown', 'mousemove', 'wheel', 'touchstart'];
+    events.forEach((ev) => window.addEventListener(ev, bump, { passive: true }));
+    const timer = window.setInterval(() => {
+      if (Date.now() - lastActive >= idleLockMs) {
+        // same behavior as the Lock button
+        setActive(null);
+        setToast({ text: 'Wallet locked after inactivity — signing key cleared.', kind: 'ok' });
+      }
+    }, 10_000);
+    return () => {
+      events.forEach((ev) => window.removeEventListener(ev, bump));
+      window.clearInterval(timer);
+    };
+  }, [active?.name, idleLockMs]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const configured = isGatewayConfigured();
 
   const verifyNetwork = useCallback(async () => {

@@ -74,6 +74,15 @@ jobs:
           # builds (workflow_dispatch with custom_domain=true) live at the
           # root of satoshicore.org.
           NEXT_PUBLIC_BASE_PATH: ${{ github.event_name == 'workflow_dispatch' && inputs.custom_domain == true && '' || github.ref_name == 'main' && '/satoshicore' || '' }}
+          # Production gateway: the owner-operated HTTPS gateway in front of
+          # the iMac Mainnet node (loopback 8790 behind TLS). Custom-domain
+          # production builds point at it; github.io preview builds get the
+          # same URL so the wallet can connect from any hosted origin.
+          # The gateway allowlists exact browser origins — add this origin to
+          # its ALLOWED_ORIGINS when changing the deploy domain.
+          NEXT_PUBLIC_API_GATEWAY_URL: https://gateway.satoshicore.org
+          # Byte-exact Mainnet identity required before any signing UI unlocks.
+          NEXT_PUBLIC_NSAT_NETWORK_ID: NSAT Mainnet ; October 2026 ; bc3098829fffc717
         run: npm run build
 
       - name: Apply custom-domain configuration
