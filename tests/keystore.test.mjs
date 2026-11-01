@@ -72,6 +72,31 @@ test('keystoreRestore refuses malformed backups without replacing live state', a
   assert.equal(keystoreList().length, 1);
 });
 
+test('keystoreRestore rejects name collisions without partial import', async () => {
+  await keystoreCreate('keeper', 'pw-keeper');
+  const live = keystoreExport();
+  const incoming = JSON.parse(live).wallets[0];
+  incoming.name = 'new-wallet';
+  const collision = JSON.parse(live).wallets[0];
+  const backup = JSON.stringify({ v: 1, wallets: [incoming, collision] });
+
+  assert.throws(() => keystoreRestore(backup), /already exists/);
+  assert.equal(keystoreExport(), live);
+  assert.deepEqual(keystoreList().map((w) => w.name), ['keeper']);
+});
+
+test('keystoreRestore merges a non-conflicting encrypted wallet', async () => {
+  await keystoreCreate('restored', 'pw-restored');
+  const backup = keystoreExport();
+  items.clear();
+  await keystoreCreate('existing', 'pw-existing');
+
+  keystoreRestore(backup);
+  assert.deepEqual(keystoreList().map((w) => w.name), ['existing', 'restored']);
+  assert.equal((await keystoreUnlock('restored', 'pw-restored')).length, 32);
+  assert.equal((await keystoreUnlock('existing', 'pw-existing')).length, 32);
+});
+
 test('a genuinely-created backup restores and unlocks to the same address', async () => {
   await keystoreCreate('orig', 'pw-orig');
   const backup = keystoreExport();

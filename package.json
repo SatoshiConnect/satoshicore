@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "test": "node tests/static-export.test.mjs",
+    "test": "node --test tests/keystore.test.mjs tests/transaction-builder.test.mjs tests/e2e-send.test.mjs && node tests/static-export.test.mjs",
     "lint": "eslint ."
   },
   "dependencies": {
