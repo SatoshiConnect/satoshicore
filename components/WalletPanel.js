@@ -29,10 +29,9 @@ import { decodeSeed } from '../lib/nsatCodec';
 // from the gateway's session-truth responses.
 
 const ACCOUNT_RE = /^G[A-Z2-7]{55}$/;
-const PAGES = ['overview', 'send', 'receive', 'shielded', 'activity', 'settings'];
+const PAGES = ['overview', 'send', 'receive', 'activity', 'settings'];
 const PAGE_GLYPH = {
-  overview: '◈', send: '↗', receive: '↙', shielded: '◆',
-  activity: '≡', settings: '⚙',
+  overview: '◈', send: '↗', receive: '↙', activity: '≡', settings: '⚙',
 };
 const PAGE_TITLE = {
   overview: 'Overview', send: 'Send NSAT', receive: 'Receive NSAT',
@@ -357,9 +356,9 @@ export default function WalletPanel() {
           <div className="nw-nav-group">
             {PAGES.map((p) => (
               <button key={p}
-                className={'nw-nav-item' + (page === p ? ' active' : '')}
+              className={'nw-nav-item' + ((page === p || (p === 'settings' && page === 'shielded')) ? ' active' : '')}
                 onClick={() => setPage(p)}
-                aria-current={page === p ? 'page' : undefined}>
+                aria-current={page === p || (p === 'settings' && page === 'shielded') ? 'page' : undefined}>
                 <span aria-hidden>{PAGE_GLYPH[p]}</span> {PAGE_TITLE[p]}
               </button>
             ))}
@@ -437,7 +436,8 @@ export default function WalletPanel() {
           )}
 
           {page === 'settings' && (
-            <SettingsPage s={{ active, doLock, doBackup, doRestore, wallets }} />
+            <SettingsPage s={{ active, doLock, doBackup, doRestore, wallets }}
+              onOpenShielded={() => setPage('shielded')} />
           )}
         </main>
       </div>
@@ -758,9 +758,14 @@ function ActivityPage({ history, activeName }) {
 }
 
 /* ------------------------------- Settings -------------------------------- */
-function SettingsPage({ s }) {
+function SettingsPage({ s, onOpenShielded }) {
   return (
     <div>
+      <section className="nw-card">
+        <h2 style={{ color: 'var(--text)' }}>Protocol support</h2>
+        <p className="nw-small nw-dim">Shielded Protocol Version 1 is active on Mainnet. This Web Wallet does not create, sign, or submit Shielded transactions.</p>
+        <button className="nw-chip-btn" onClick={onOpenShielded}>View Shielded availability</button>
+      </section>
       <section className="nw-card">
         <h2 style={{ color: 'var(--text)' }}>Privacy</h2>
         <div className="nw-kv" style={{ marginTop: 10 }}>
