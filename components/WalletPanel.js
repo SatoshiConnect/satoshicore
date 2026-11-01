@@ -12,6 +12,9 @@ import {
   buildSignedTx, waitSeqReached, historyLoad, historyPush,
 } from '../lib/nsatWallet';
 import { decodeSeed } from '../lib/nsatCodec';
+// Shared send gate (mirror of the desktop/prototype reason contract — one
+// source of truth for WHY a send is blocked; see NSAT-WALLET-BUTTON-STATES).
+import { sendPreflight, maxSendable, fmtGroup } from '../lib/nsatSendPreflight';
 
 // Full transactional Web Wallet rendered in the ORIGINAL DESKTOP WALLET
 // DESIGN (canonical source: nsat-core desktop/satoshicore-wallet
@@ -42,7 +45,8 @@ const PAGE_TITLE = {
 export default function WalletPanel() {
   // gateway/network
   const [net, setNet] = useState(null);          // { ok, network, reason, ledger }
-  const [fee, setFee] = useState(null);          // live base fee (stroops)
+  const [fee, setFee] = useState(null);          // live base fee (NSAT integer unit)
+  const [reserve, setReserve] = useState(null);  // live base reserve (NSAT integer unit)
   // wallet session
   const [wallets, setWallets] = useState([]);
   const [active, setActive] = useState(null);    // { name, pubkey, seed32 }
@@ -105,6 +109,8 @@ export default function WalletPanel() {
     setNet(r);
     if (r.ok) {
       try { setFee(await estimateFee()); } catch { setFee(null); }
+      try { setReserve(Number((await getChainInfo())?.info?.ledger?.baseReserve || 0)); }
+      catch { setReserve(null); }
     }
     return r;
   }, [configured]);
@@ -399,6 +405,7 @@ export default function WalletPanel() {
               bus={{ busy, doCreate, doImport, newName, setNewName, newPass, setNewPass,
                 importSeed, setImportSeed }}
               net={{ net, netOk, ledger, fee }}
+              notify={notify}
               onSend={() => setPage('send')} onReceive={() => setPage('receive')}
               onManage={() => setPage('settings')} />
           )}
@@ -406,12 +413,13 @@ export default function WalletPanel() {
           {page === 'send' && (
             <SendPage
               state={{ dest, setDest, amount, setAmount, createDest, setCreateDest }}
-              gate={{ netOk, fee, amtInt, destOk }} busy={busy}
+              gate={{ netOk, fee, amtInt, destOk, reserve }} busy={busy}
+              active={active} balance={balance}
               onReview={openReview} />
           )}
 
           {page === 'receive' && (
-            <ReceivePage activePubkey={active?.pubkey ?? ''} />
+            <ReceivePage activePubkey={active?.pubkey ?? ''} notify={notify} />
           )}
 
           {page === 'shielded' && <ShieldedGatePage />}
@@ -427,8 +435,10 @@ export default function WalletPanel() {
       </div>
 
       {review && (
-        <div className="nw-modal-back" role="dialog" aria-modal="true">
-          <div className="nw-modal">
+        <div className="nw-modal-back" role="dialog" aria-modal="true"
+          onKeyDown={(e) => { if (e.key === 'Escape' && !busy) setReview(null); }}
+          onClick={(e) => { if (e.target === e.currentTarget && !busy) setReview(null); }}>
+          <div className="nw-modal" tabIndex={-1} autoFocus>
             <div className="nw-step">REVIEW & SIGN · NSAT</div>
             <h3 style={{ color: 'var(--text)' }}>Review transaction</h3>
             <div className="nw-kv"><span className="nw-k">Recipient</span>
@@ -436,9 +446,9 @@ export default function WalletPanel() {
             <div className="nw-kv"><span className="nw-k">Amount</span>
               <span className="nw-v">{formatExactBalance(review.amount)} NSAT</span></div>
             <div className="nw-kv"><span className="nw-k">Fee (live ledger)</span>
-              <span className="nw-v">{review.fee} stroops</span></div>
+              <span className="nw-v">{review.fee} NSAT</span></div>
             <div className="nw-kv"><span className="nw-k">Total debit</span>
-              <span className="nw-v">{formatExactBalance(review.total)} stroops</span></div>
+              <span className="nw-v">{formatExactBalance(review.total)} NSAT</span></div>
             {createDest && (
               <div className="nw-kv"><span className="nw-k">CREATE account</span>
                 <span className="nw-v"><span className="nw-badge warn">new account funding</span></span></div>
@@ -476,7 +486,7 @@ export default function WalletPanel() {
 }
 
 /* --------------------------------- Overview ------------------------------ */
-function OverviewPage({ active, wallets, balance, bus, net, onSend, onReceive, onManage }) {
+function OverviewPage({ active, wallets, balance, bus, net, notify, onSend, onReceive, onManage }) {
   if (!active) {
     return (
       <div className="nw-grid-2">
@@ -549,7 +559,10 @@ function OverviewPage({ active, wallets, balance, bus, net, onSend, onReceive, o
             <div className="nw-address-chip">
               <span>{shortAddr(active.pubkey)}</span>
               <button className="nw-chip-btn"
-                onClick={() => void navigator.clipboard.writeText(active.pubkey)}>Copy</button>
+                onClick={async () => {
+                  await navigator.clipboard.writeText(active.pubkey);
+                  notify('📋 Copied: Address');
+                }}>Copy</button>
             </div>
           </div>
         </div>
@@ -593,7 +606,7 @@ function OverviewPage({ active, wallets, balance, bus, net, onSend, onReceive, o
             <span className="nw-v">{net.netOk ? 'Connected' : 'Offline'}</span></div>
           <div className="nw-kv"><span className="nw-k">Network</span>
             <span className="nw-v nw-mono nw-small">{net.net?.network ?? '—'}</span></div>
-          <div className="nw-kv"><span className="nw-k">Base fee (stroops)</span>
+          <div className="nw-kv"><span className="nw-k">Base fee (NSAT)</span>
             <span className="nw-v">{net.fee ?? '…'} <small className="nw-dim">live</small></span></div>
         </section>
       </div>
@@ -602,7 +615,29 @@ function OverviewPage({ active, wallets, balance, bus, net, onSend, onReceive, o
 }
 
 /* ---------------------------------- Send --------------------------------- */
-function SendPage({ state, gate, busy, onReview }) {
+function SendPage({ state, gate, busy, active, balance, onReview }) {
+  // ONE preflight decides the disabled state and shows WHY (shared with the
+  // Desktop wallet / prototype — NSAT-WALLET-BUTTON-STATES.md).
+  const pf = sendPreflight({
+    active,
+    netOk: gate.netOk,
+    dest: state.dest,
+    amount: state.amount,
+    balance,
+    fee: gate.fee ?? '0',
+    createDest: state.createDest,
+    baseReserve: gate.reserve ?? 0,
+  });
+  const canReview = pf.ok;
+  const block = pf.block;
+  const funded = balance != null;
+  const mx = funded ? maxSendable(balance, gate.fee ?? '0') : 0n;
+  const doMax = () => {
+    if (!funded) return;
+    // Max = exact balance − fee, BigInt only; empty form if nothing sendable
+    const v = mx.toString();
+    state.setAmount(v === '0' ? '' : v);
+  };
   return (
     <section className="nw-card">
       <div className="nw-txf">
@@ -612,16 +647,23 @@ function SendPage({ state, gate, busy, onReview }) {
             onChange={(e) => state.setDest(e.target.value)}
             placeholder="G… (56-char account address)" />
         </div>
-        {state.dest && !ACCOUNT_RE.test(state.dest.trim()) && (
-          <div className="nw-small" style={{ color: 'var(--danger)' }}>
-            Address format is invalid.
-          </div>
-        )}
         <div className="nw-row">
           <label htmlFor="nw-amt">Amount NSAT</label>
           <input id="nw-amt" inputMode="numeric" value={state.amount}
             onChange={(e) => state.setAmount(e.target.value)}
             placeholder="exact integers — no decimals" />
+        </div>
+        <div className="nw-row nw-small">
+          <label htmlFor="nw-max">Max</label>
+          <button id="nw-max" type="button" className="nw-chip-btn"
+            disabled={!funded || mx <= 0n}
+            title={funded ? 'Set amount to exact balance − fee (BigInt math)' : 'Funding a brand-new account needs ≥ 2× base reserve.'}
+            onClick={doMax}>
+            Max (balance − fee)
+          </button>
+          {funded && mx > 0n && (
+            <span className="nw-small nw-dim">{fmtGroup(mx.toString())} NSAT sendable</span>
+          )}
         </div>
         <div className="nw-row nw-small">
           <label htmlFor="nw-create">CREATE account</label>
@@ -633,26 +675,37 @@ function SendPage({ state, gate, busy, onReview }) {
             Destination has no account yet (CREATE — funds act as starting balance)
           </label>
         </div>
+        {state.createDest && (gate.reserve ?? 0) > 0 && (
+          <div className="nw-small" style={{ color: 'var(--warn)' }}>
+            CREATE needs ≥ {fmtGroup((BigInt(2 * gate.reserve)).toString())} NSAT at once (2× base reserve).
+          </div>
+        )}
         <div className="nw-row nw-small nw-dim"><label>Fee</label>
-          <span>{gate.fee ?? '…'} stroops per operation (live from the verified ledger)</span></div>
+          <span>{gate.fee ?? '…'} NSAT per operation (live from the verified ledger; exact total shown at Review)</span></div>
         <div className="nw-row">
-          <button className="nw-send-btn" disabled={!gate.netOk || !gate.amtInt || !gate.destOk}
-            onClick={onReview}>Review Transaction</button>
+          <button className="nw-send-btn" disabled={!canReview}
+            onClick={onReview} aria-describedby={block ? 'nw-send-block-reason' : undefined}>
+            Review Transaction</button>
         </div>
+        {block && (
+          <div id="nw-send-block-reason" role="status" className="nw-small"
+            style={{ color: block.kind === 'insufficient' ? 'var(--warn)' : 'var(--danger)', marginTop: 2 }}>
+            {block.reason}
+          </div>
+        )}
+        {pf.warn && (
+          <div role="status" className="nw-small" style={{ color: 'var(--warn)', marginTop: 2 }}>
+            {pf.warn.reason}
+          </div>
+        )}
       </div>
-      {!gate.netOk && (
-        <p className="nw-small" style={{ color: 'var(--warn)', marginTop: 12 }}>
-          Network identity not verified — sending disabled until the gateway
-          reports the exact expected Mainnet identity.
-        </p>
-      )}
       {busy && <p className="nw-small nw-dim" style={{ marginTop: 8 }}>Working…</p>}
     </section>
   );
 }
 
 /* -------------------------------- Receive -------------------------------- */
-function ReceivePage({ activePubkey }) {
+function ReceivePage({ activePubkey, notify }) {
   return (
     <section className="nw-card" style={{ textAlign: 'center' }}>
       {!activePubkey
@@ -663,7 +716,10 @@ function ReceivePage({ activePubkey }) {
             {activePubkey}
           </div>
           <button className="nw-chip-btn"
-            onClick={() => void navigator.clipboard.writeText(activePubkey)}>
+            onClick={async () => {
+              await navigator.clipboard.writeText(activePubkey);
+              notify('📋 Copied: Address');
+            }}>
             Copy address
           </button>
           <p className="nw-small nw-dim" style={{ marginTop: 14 }}>
