@@ -113,12 +113,12 @@ function corsHeaders(req) {
   return {};
 }
 
-function coreFetch(path, { method = 'GET', body = null, contentType } = {}) {
+function coreFetch(path, { method = 'GET', body = null, contentType, timeoutMs } = {}) {
   return new Promise((resolve, reject) => {
     const url = new URL(path, CONFIG.coreHttpUrl);
     const req = http.request(
       url,
-      { method, timeout: CONFIG.coreTimeoutMs },
+      { method, timeout: timeoutMs || CONFIG.coreTimeoutMs },
       (up) => {
         let data = '';
         up.setEncoding('utf8');
@@ -182,6 +182,279 @@ async function coreFetchRead(path) {
   }
   // unreachable
   return { status: 503, body: JSON.stringify({ error: 'core ledger busy' }) };
+}
+
+// --- read-only explorer snapshot -------------------------------------------
+// The dashboard needs the node's own health/metrics picture in one round trip.
+// Only the four read-only GETs below are touched (info, peers, quorum,
+// metrics); none of them mutates the node. The result is cached briefly and
+// served as `stale` if the node briefly stops answering, so a page refresh
+// never turns into fabricated numbers: the client always sees how old the
+// data is.
+const EXPLORER_CACHE_MS = Number(process.env.EXPLORER_CACHE_MS) || 2500;
+const EXPLORER_STALE_MS = 90_000;
+// The core answers /info, /peers, /quorum and /metrics from the same loop that
+// applies ledgers, so a read caught inside a multi-second close stalls and then
+// returns in milliseconds once that close finishes. One timeout per endpoint
+// therefore reports a value as unavailable for a reason that has nothing to do
+// with the value: the reads are retried inside a single deadline instead, and
+// only a node that stays silent for the whole deadline is called unavailable.
+// The deadline stays below the dashboard's own 10 s request timeout.
+const EXPLORER_DEADLINE_MS = Number(process.env.EXPLORER_DEADLINE_MS) || 8500;
+const EXPLORER_ATTEMPT_MS = Number(process.env.EXPLORER_ATTEMPT_MS) || 2500;
+const EXPLORER_RETRY_DELAY_MS = Number(process.env.EXPLORER_RETRY_DELAY_MS) || 120;
+let explorerCache = null; // { at, payload }
+let explorerInFlight = null;
+// Closes this gateway personally witnessed. It outlives any single page visit,
+// so a fresh tab can draw the last few real closes immediately instead of
+// starting from an empty chart. `since` marks when the accumulation began.
+const explorerHistory = { since: Date.now(), closes: [], samples: [], last: null };
+
+async function coreFetchJson(path, timeoutMs) {
+  const up = await coreFetch(path, { timeoutMs });
+  if (up.status !== 200) throw new Error(`${path} -> ${up.status}`);
+  return JSON.parse(up.body);
+}
+
+async function coreFetchJsonUntil(path, deadlineAt, attemptMs = EXPLORER_ATTEMPT_MS) {
+  let lastError = null;
+  while (Date.now() < deadlineAt) {
+    const budget = deadlineAt - Date.now();
+    try {
+      return await coreFetchJson(path, Math.min(attemptMs, budget));
+    } catch (err) {
+      lastError = err;
+      if (deadlineAt - Date.now() <= EXPLORER_RETRY_DELAY_MS + 250) break;
+      await new Promise((resolve) => setTimeout(resolve, EXPLORER_RETRY_DELAY_MS));
+    }
+  }
+  throw lastError || new Error(`${path} -> deadline exceeded`);
+}
+
+const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+function metricOf(metrics, name) {
+  const m = metrics && metrics[name];
+  return m && typeof m === 'object' ? m : null;
+}
+
+function pick(obj, keys) {
+  if (!obj) return null;
+  const out = {};
+  for (const k of keys) if (obj[k] !== undefined) out[k] = obj[k];
+  return Object.keys(out).length ? out : null;
+}
+
+async function readExplorerSnapshot() {
+  const partial = [];
+  const deadlineAt = Date.now() + EXPLORER_DEADLINE_MS;
+  const [infoR, peersR, quorumR, metricsR] = await Promise.allSettled([
+    coreFetchJsonUntil('/info', deadlineAt),
+    coreFetchJsonUntil('/peers', deadlineAt),
+    coreFetchJsonUntil('/quorum', deadlineAt),
+    coreFetchJsonUntil('/metrics', deadlineAt)
+  ]);
+
+  if (infoR.status === 'rejected') {
+    throw new Error(`core info unavailable: ${infoR.reason && infoR.reason.message}`);
+  }
+  const info = infoR.value && infoR.value.info ? infoR.value.info : null;
+  if (!info) throw new Error('core info malformed');
+
+  if (peersR.status === 'rejected') partial.push('peers');
+  if (quorumR.status === 'rejected') partial.push('quorum');
+  if (metricsR.status === 'rejected') partial.push('metrics');
+
+  // Core reports 86400000 ms (its 24 h mLastPing default) for a peer ping
+  // that never resolved; that is "not measured", not a real figure.
+  const UNMEASURED_LATENCY_MS = 86400000;
+
+  const peersDoc = peersR.status === 'fulfilled' ? peersR.value : null;
+  const quorumDoc = quorumR.status === 'fulfilled' ? quorumR.value : null;
+  const metricsDoc = metricsR.status === 'fulfilled' ? metricsR.value : null;
+  const metrics = metricsDoc && metricsDoc.metrics ? metricsDoc.metrics : null;
+
+  const ledger = info.ledger || {};
+  const closeTime = num(ledger.closeTime);
+  const qset = (info.quorum && info.quorum.qset) || {};
+
+  // Peer list: ids and latencies are public chain topology; loopback
+  // addresses are dropped so the gateway never leaks host layout.
+  const peerRows = [];
+  if (peersDoc) {
+    for (const direction of ['inbound', 'outbound']) {
+      const list = (peersDoc.authenticated_peers && peersDoc.authenticated_peers[direction]) || [];
+      for (const p of list) {
+        // Core reports 86400000 ms (24 h) as a sentinel when a peer ping
+        // never resolved; surface that as "not measured" instead of a real
+        // figure.
+        const latencyMsRaw = num(p.latency);
+        peerRows.push({
+          id: String(p.id || '?'),
+          direction,
+          latencyMs:
+            latencyMsRaw !== null && latencyMsRaw >= UNMEASURED_LATENCY_MS
+              ? null
+              : latencyMsRaw,
+          elapsedSec: num(p.elapsed),
+          version: p.ver ? String(p.ver) : null
+        });
+      }
+    }
+  }
+
+  const agree = quorumDoc && quorumDoc.qset && Array.isArray(quorumDoc.qset.agree)
+    ? quorumDoc.qset.agree.map(String)
+    : [];
+  const agreeCount = agree.length;
+  const selfId = (quorumDoc && quorumDoc.node) || (info.quorum && info.quorum.node) || null;
+
+  const validators = [];
+  if (selfId) {
+    validators.push({
+      id: String(selfId), self: true, direction: 'self', agree: agree.length === 0 ? null : agree.includes(String(selfId)),
+      latencyMs: null, elapsedSec: null, version: info.build ? String(info.build) : null
+    });
+  }
+  for (const p of peerRows) {
+    validators.push({
+      ...p,
+      self: false,
+      agree: agree.length === 0 ? null : agree.includes(p.id)
+    });
+  }
+
+  const closeMs = metricOf(metrics, 'ledger.ledger.close');
+  const txPerLedger = metricOf(metrics, 'ledger.transaction.count');
+  const scpCost = metricOf(metrics, 'scp.cost.per-slot');
+  const connLatency = metricOf(metrics, 'overlay.connection.latency');
+  const applyOk = metricOf(metrics, 'ledger.apply.success');
+  const applyFail = metricOf(metrics, 'ledger.apply.failure');
+  const pendingTx = metricOf(metrics, 'herder.pending-txs.count');
+
+  // Accumulate what this gateway has actually seen, so the next visitor gets
+  // real closes to draw instead of an empty chart.
+  const ledgerNum = num(ledger.num);
+  const txCum = txPerLedger ? num(txPerLedger.sum) : null;
+  if (ledgerNum !== null && closeTime !== null) {
+    const prev = explorerHistory.last;
+    if (prev && ledgerNum > prev.num) {
+      const span = ledgerNum - prev.num;
+      const seconds = closeTime - prev.closeTime;
+      if (seconds > 0 && seconds < 900) {
+        let txs = null;
+        let tps = null;
+        if (txCum !== null && prev.tx !== null && txCum >= prev.tx) {
+          txs = txCum - prev.tx;
+          tps = Math.round((txs / seconds) * 100) / 100;
+        }
+        explorerHistory.closes.push({
+          num: ledgerNum,
+          closeTime,
+          at: Date.now(),
+          opened: span,
+          seconds: Math.round((seconds / span) * 10) / 10,
+          txs,
+          tps,
+          tx: txCum
+        });
+        if (explorerHistory.closes.length > 60) explorerHistory.closes.shift();
+      }
+    }
+    explorerHistory.last = { num: ledgerNum, closeTime, tx: txCum };
+  }
+  explorerHistory.samples.push({
+    at: Date.now(),
+    latencyMs: connLatency ? num(connLatency.mean) : null,
+    txPerLedger: txPerLedger ? num(txPerLedger.mean) : null,
+    closeMs: closeMs ? num(closeMs.mean) : null,
+    lagMs: num(qset.lag_ms),
+    // One reading per KPI that draws a sparkline, so no chart ever plots a
+    // different metric than the number next to it.
+    num: ledgerNum,
+    age: num(ledger.age),
+    baseFee: num(ledger.baseFee),
+    agree: agree.length || null,
+    peers: num(info.peers && info.peers.authenticated_count)
+  });
+  if (explorerHistory.samples.length > 60) explorerHistory.samples.shift();
+
+  return {
+    ok: true,
+    source: 'nsat-core',
+    observedAt: Date.now(),
+    partial,
+    history: {
+      since: explorerHistory.since,
+      closes: explorerHistory.closes.slice(-40),
+      samples: explorerHistory.samples.slice(-40)
+    },
+    network: typeof info.network === 'string' ? info.network : null,
+    protocolVersion: num(info.protocol_version),
+    build: info.build ? String(info.build) : null,
+    state: info.state ? String(info.state) : null,
+    startedOn: info.startedOn ? String(info.startedOn) : null,
+    ledger: {
+      num: num(ledger.num),
+      hash: ledger.hash ? String(ledger.hash) : null,
+      closeTime,
+      age: num(ledger.age),
+      baseFee: num(ledger.baseFee),
+      baseReserve: num(ledger.baseReserve),
+      maxTxSetSize: num(ledger.maxTxSetSize),
+      version: num(ledger.version)
+    },
+    peers: {
+      authenticated: num(info.peers && info.peers.authenticated_count),
+      pending: num(info.peers && info.peers.pending_count)
+    },
+    quorum: {
+      node: selfId ? String(selfId) : null,
+      agreeCount: agree.length || null,
+      validated: qset.validated === undefined ? null : Boolean(qset.validated),
+      phase: qset.phase ? String(qset.phase) : null,
+      lagMs: num(qset.lag_ms),
+      ledger: num(qset.ledger),
+      missing: num(qset.missing),
+      delayed: num(qset.delayed),
+      nodeCount: num(info.quorum && info.quorum.transitive && info.quorum.transitive.node_count)
+    },
+    validators,
+    metrics: {
+      closeMs: pick(closeMs, ['count', 'mean', 'median', '95%', 'max', '1_min_rate']),
+      txPerLedger: pick(txPerLedger, ['count', 'mean', 'max', 'sum']),
+      scpCost: pick(scpCost, ['count', 'mean', '95%', 'max']),
+      connLatencyMs: pick(connLatency, ['count', 'mean', 'median', '95%', 'max']),
+      applySuccess: applyOk ? num(applyOk.count) : null,
+      applyFailure: applyFail ? num(applyFail.count) : null,
+      // Cumulative counters (valid only as deltas between two readings).
+      txAppliedTotal: txPerLedger ? num(txPerLedger.sum) : null,
+      txSeenTotal: pendingTx ? num(pendingTx.count) : null
+    }
+  };
+}
+
+async function explorerSnapshot() {
+  const now = Date.now();
+  if (explorerCache && now - explorerCache.at < EXPLORER_CACHE_MS) return explorerCache.payload;
+  if (explorerInFlight) return explorerInFlight;
+
+  explorerInFlight = (async () => {
+    try {
+      const payload = await readExplorerSnapshot();
+      explorerCache = { at: Date.now(), payload };
+      return payload;
+    } catch (err) {
+      const age = explorerCache ? Date.now() - explorerCache.at : Infinity;
+      if (explorerCache && age < EXPLORER_STALE_MS) {
+        return { ...explorerCache.payload, stale: true, observedAt: explorerCache.at, error: err.message };
+      }
+      throw err;
+    } finally {
+      explorerInFlight = null;
+    }
+  })();
+  return explorerInFlight;
 }
 
 // Signed-envelope validation. The gateway accepts base64-encoded XDR
@@ -288,6 +561,24 @@ const ROUTES = {
     } catch (err) {
       log('error', 'account_query_failed', { error: err.message });
       sendJson(res, 502, { error: 'core node unreachable' }, req);
+    }
+  },
+
+  // One read-only snapshot of the running node for the explorer dashboard:
+  // ledger head, peers, quorum agreement and the node's own metrics. Real
+  // readings only — nothing is filled in when a source is missing.
+  'GET /api/v1/explorer/snapshot': async (req, res) => {
+    try {
+      const snapshot = await explorerSnapshot();
+      sendJson(res, 200, snapshot, req);
+    } catch (err) {
+      log('warn', 'explorer_snapshot_failed', { error: err.message });
+      sendJson(res, 503, {
+        ok: false,
+        source: 'nsat-core',
+        observedAt: Date.now(),
+        error: 'core node unreachable'
+      }, req);
     }
   },
 
