@@ -12,6 +12,7 @@ import {
   buildSignedTx, waitSeqReached, historyLoad, historyPush,
 } from '../lib/nsatWallet';
 import { decodeSeed } from '../lib/nsatCodec';
+import { startBalanceRefresh } from '../lib/walletBalanceRefresh.mjs';
 
 // Full transactional Web Wallet rendered in the ORIGINAL DESKTOP WALLET
 // DESIGN (canonical source: nsat-core desktop/satoshicore-wallet
@@ -137,6 +138,11 @@ export default function WalletPanel() {
       setHistory(historyLoad(active.name));
     } else { setBalance(null); setHistory([]); }
   }, [active, refreshBalance]);
+
+  useEffect(() => {
+    if (!active?.pubkey) return undefined;
+    return startBalanceRefresh(active.pubkey, refreshBalance, window);
+  }, [active?.pubkey, refreshBalance]);
 
   // ---------------- wallet actions (logic unchanged from the audited build) ----
   async function doCreate(e) {

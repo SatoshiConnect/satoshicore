@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "test": "node tests/static-export.test.mjs",
+    "test": "node --test tests/balance-refresh.test.mjs && node tests/static-export.test.mjs",
     "lint": "next lint"
   },
   "dependencies": {
