@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       custom_domain:
-        description: "Build for custom domain (satoshicore.org). Leave false for github.io preview builds."
+        description: "Publish for wallet.satoshicore.org with root asset paths."
         type: boolean
         default: false
 
@@ -70,14 +70,11 @@ jobs:
 
       - name: Build static export
         env:
-          # github.io preview builds live under /satoshicore/; custom-domain
-          # builds (workflow_dispatch with custom_domain=true) live at the
-          # root of satoshicore.org.
-          NEXT_PUBLIC_BASE_PATH: ${{ github.event_name == 'workflow_dispatch' && inputs.custom_domain == true && '' || github.ref_name == 'main' && '/satoshicore' || '' }}
+          # The Pages site is published on the configured custom domain, whose
+          # document root is /. An empty basePath is required for every build.
+          NEXT_PUBLIC_BASE_PATH: ''
           # Production gateway: the owner-operated HTTPS gateway in front of
-          # the iMac Mainnet node (loopback 8790 behind TLS). Custom-domain
-          # production builds point at it; github.io preview builds get the
-          # same URL so the wallet can connect from any hosted origin.
+          # the Mainnet node. The exact browser origin is allowlisted there.
           # The gateway allowlists exact browser origins — add this origin to
           # its ALLOWED_ORIGINS when changing the deploy domain.
           NEXT_PUBLIC_API_GATEWAY_URL: https://gateway.satoshicore.org
@@ -86,8 +83,14 @@ jobs:
         run: npm run build
 
       - name: Apply custom-domain configuration
-        if: github.event_name == 'workflow_dispatch' && inputs.custom_domain == true
+        if: github.ref_name == 'main' || (github.event_name == 'workflow_dispatch' && inputs.custom_domain == true)
         run: cp CNAME.reference out/CNAME
+
+      - name: Verify root asset paths for the production domain
+        if: github.ref_name == 'main' || (github.event_name == 'workflow_dispatch' && inputs.custom_domain == true)
+        run: |
+          grep -q 'src="/_next/' out/index.html
+          ! grep -q 'src="/satoshicore/_next/' out/index.html
 
       - name: Run static-export verification tests
         run: npm test
@@ -128,7 +131,7 @@ jobs:
     # Owner-approved gate (2026-10-31): automatic on main; feature branches
     # deploy ONLY via explicit workflow_dispatch. Enable Enforce HTTPS when
     # the domain certificate is issued (see docs/DEPLOYMENT.md).
-    if: github.ref_name == 'main' || github.event_name == 'workflow_dispatch'
+    if: github.ref_name == 'main' || (github.event_name == 'workflow_dispatch' && inputs.custom_domain == true)
     needs: build
     environment:
       name: github-pages

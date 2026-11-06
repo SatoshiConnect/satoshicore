@@ -59,18 +59,15 @@ the nsat-core node (see `SatoshiConnect/nsat-core`, branch
    - Runs verification tests (`tests/static-export.test.mjs`) and a security
      scan (`tests/security-scan.mjs`) against `out/`.
    - Uploads `out/` as the Pages artifact.
-2. **Deploy job**: intentionally disabled (`if: false`) until owner approval.
-   To activate:
-   - Repository → Settings → Pages → Source: **GitHub Actions**.
-   - Change the deploy job gate to `if: github.ref_name == 'main'`.
+2. **Deploy job**: deploys `main` pushes and explicit
+   `workflow_dispatch` runs with `custom_domain=true`. Feature/preview builds
+   do not deploy. The Pages environment must remain restricted to `main`.
 
 ### Preview vs custom-domain builds
 
-- **github.io preview** (push builds): site is served under
-  `/satoshicore/`, so the workflow sets `NEXT_PUBLIC_BASE_PATH=/satoshicore`
-  for pushes to `main`. All asset URLs are correctly prefixed.
-- **Custom domain** (`workflow_dispatch` with `custom_domain=true`): built
-  with an empty base path and `CNAME.reference` is copied into `out/CNAME`.
+- **Production custom domain**: `wallet.satoshicore.org` is served from `/`;
+  every build therefore uses an empty `NEXT_PUBLIC_BASE_PATH`. Main deploys
+  and approved custom-domain dispatches include `CNAME.reference`.
 
 > Note: pushes to `feature/**` build with an empty base path so the artifact
 > can be inspected locally; they are never deployed.
@@ -92,10 +89,10 @@ here is automated.**
    - Apex `A` records → GitHub Pages IPs:
      `185.199.108.153`, `185.199.109.153`, `185.199.110.153`, `185.199.111.153`
    - `www` `CNAME` → `SatoshiConnect.github.io`.
-2. After the first custom-domain build/deploy, verify the domain in
-   Repository → Settings → Pages → Custom domain: `satoshicore.org`,
-   and enable **Enforce HTTPS** once the certificate is issued.
-3. The deployed artifact contains the `CNAME` file (`satoshicore.org`).
+2. Verify the domain in Repository → Settings → Pages → Custom domain:
+   `wallet.satoshicore.org`; enable **Enforce HTTPS** only after GitHub issues
+   a certificate and a normal TLS client validates it.
+3. The deployed artifact contains the `CNAME` file (`wallet.satoshicore.org`).
 
 ## Offline / experimental state
 
@@ -127,7 +124,6 @@ Open `http://localhost:8080` and verify `/`, `/wallet/`, `/docs/`,
 ## What is intentionally NOT in scope here
 
 - No DNS changes (owner).
-- No activation of the Pages deploy job (owner).
-- No publication of a production Web Wallet (owner).
+- No production DNS or firewall changes.
 - No admin API exposure — administrative endpoints live only inside the
   backend services' private networks; the static site never references them.
