@@ -1,15 +1,17 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import PageHeader from './PageHeader';
 import {
-  isGatewayConfigured, EXPECTED_NETWORK_ID,
+  isGatewayConfigured, isIndexerConfigured, EXPECTED_NETWORK_ID,
   verifyNetworkIdentity, getChainInfo, getAccount,
   submitSignedTransaction, estimateFee, formatExactBalance,
+  waitForConfirmation, accountEventsUrl,
 } from '../lib/nsatClient';
 import {
   keystoreCreate, keystoreImport, keystoreUnlock, keystoreList,
   keystoreExport, keystoreRestore,
-  buildSignedTx, waitSeqReached, historyLoad, historyPush,
+  buildSignedTx, historyLoad, historyPush, historyPatch,
 } from '../lib/nsatWallet';
 import { decodeSeed } from '../lib/nsatCodec';
 // Shared send gate (mirror of the desktop/prototype reason contract — one
@@ -40,6 +42,15 @@ const PAGE_GLYPH = {
 const PAGE_TITLE = {
   overview: 'Overview', send: 'Send NSAT', receive: 'Receive NSAT',
   shielded: 'Shielded NSAT', activity: 'Activity', settings: 'Settings',
+};
+// One line of context per section, rendered by the shared PageHeader.
+const PAGE_LEAD = {
+  overview: 'One account, one balance, no floats. Keys are generated and encrypted in this browser.',
+  send: 'Recipient, amount, then a review with the exact total — the fee is read from the live ledger header.',
+  receive: 'Your public address only. Funding a brand-new account needs the CREATE toggle on Send.',
+  shielded: 'Shielded transfers need the native prover and are desktop-only; this site says so instead of faking it.',
+  activity: 'Transfers this app signed — each status is the ledger\'s own result for that transaction hash.',
+  settings: 'Session control, stored wallets and the encrypted keystore backup.',
 };
 
 export default function WalletPanel() {
@@ -144,6 +155,67 @@ export default function WalletPanel() {
     } else { setBalance(null); setHistory([]); }
   }, [active, refreshBalance]);
 
+  // Recipient/sender balance notifications.
+  //
+  // The index emits an event for every row it COMMITS (after the ledger result
+  // is link-confirmed), so a balance refresh is triggered by verified ledger
+  // application instead of a fixed 10-second timer. If the stream is
+  // unavailable — no indexer configured, proxy buffering, EventSource missing —
+  // this falls back to bounded polling and keeps the wallet usable. EventSource
+  // reconnects on its own and replays from `Last-Event-ID`, so a dropped
+  // connection does not lose the transfer that caused the refresh.
+  useEffect(() => {
+    const pubkey = active?.pubkey;
+    if (!pubkey) return undefined;
+    let closed = false;
+    let stream = null;
+    let poll = null;
+    const startPolling = () => {
+      if (poll || closed) return;
+      poll = window.setInterval(() => { void refreshBalance(pubkey); }, 10_000);
+    };
+    if (!isIndexerConfigured() || typeof window === 'undefined' || !window.EventSource) {
+      startPolling();
+      return () => { closed = true; if (poll) window.clearInterval(poll); };
+    }
+    try {
+      stream = new window.EventSource(accountEventsUrl(pubkey, 0));
+      stream.addEventListener('tx', () => { void refreshBalance(pubkey); });
+      stream.addEventListener('error', () => {
+        // The stream is bounded (the indexer closes it after ~1 minute) and a
+        // proxy can buffer it; poll until EventSource reconnects.
+        startPolling();
+      });
+    } catch {
+      startPolling();
+    }
+    return () => {
+      closed = true;
+      if (stream) stream.close();
+      if (poll) window.clearInterval(poll);
+    };
+  }, [active?.pubkey, refreshBalance]);
+
+  // Re-check one stored transfer against the exact-hash endpoint. This never
+  // upgrades a row to "confirmed" without a ledger result for that hash.
+  const recheckTransfer = useCallback(async (entry) => {
+    if (!active?.name || !entry?.txhash) return;
+    if (!isIndexerConfigured()) { notify('No indexer configured — cannot read the ledger result.', 'err'); return; }
+    try {
+      const verdict = await waitForConfirmation(entry.txhash, { timeoutMs: 8_000 });
+      if (verdict.status === 'confirmed' || verdict.status === 'failed') {
+        setHistory(historyPatch(active.name, entry.txhash, {
+          status: verdict.status, ledger: verdict.ledger,
+          ledger_hash: verdict.ledger_hash, result_code: verdict.result_code,
+          evidence: verdict.evidence, confirmed_at: verdict.confirmation_time,
+        }));
+        notify(`Ledger ${verdict.ledger}: ${verdict.result_code}.`, verdict.status === 'confirmed' ? 'ok' : 'err');
+      } else {
+        notify(`Still ${verdict.status}${verdict.reason ? ` (${verdict.reason})` : ''} — no ledger result for this hash yet.`, 'warn');
+      }
+    } catch (err) { notify(String(err.message || err), 'err'); }
+  }, [active?.name, notify]);
+
   // ---------------- wallet actions (logic unchanged from the audited build) ----
   async function doCreate(e) {
     e.preventDefault();
@@ -230,19 +302,14 @@ export default function WalletPanel() {
       const amtClean = amount.replace(/[,_ ]/g, '');
       if (createDest && reserve > 0 && /^\d+$/.test(amtClean)
         && BigInt(amtClean) < BigInt(2 * reserve)) {
-        notify(`CREATE starting balance must be ≥ ${BigInt(2 * reserve).toLocaleString()} stroops (2× base reserve) — the chain would charge the fee and fail the operation.`, 'err');
+        notify(`CREATE starting balance must be ≥ ${BigInt(2 * reserve).toLocaleString()} NSAT (2× base reserve) — the chain would charge the fee and fail the operation.`, 'err');
         setBusy(false);
         return false;
       }
-      let prevBalance = null;
       const signed = await buildSignedTx({
         seed32: active.seed32,
         netPassphrase: EXPECTED_NETWORK_ID,   // the VERIFIED identity, exact
-        seqFetch: async () => {
-          const d = await getAccount(active.pubkey);
-          prevBalance = d.balance128 ?? (d.balance != null ? String(d.balance) : null);
-          return d;
-        },
+        seqFetch: async () => getAccount(active.pubkey),
         destG: dest.trim(),
         amount: amount.trim(),
         fee: baseFee,
@@ -271,44 +338,47 @@ export default function WalletPanel() {
           r.status === 'DUPLICATE' ? 'warn' : 'err');
         return true;
       }
-      notify('Submitted — waiting for finalization…', 'warn');
-      // Finalization: the account sequence only moves when the transaction is
-      // APPLIED in a closed ledger.
-      const ok = await waitSeqReached(
-        async () => {
-          const d = await getAccount(active.pubkey);
-          return Number(d.seqnum ?? d.sequence ?? 0);
-        },
-        signed.seq, 90000, 2000);
-      if (!ok) { notify('Not finalized within 90 s — check Activity later.', 'warn'); return true; }
-      // Ledger truth: seq-advance also happens on a FAILED operation (fee
-      // charged, nothing moved). CONFIRMED requires the exact debit.
-      const afterD = await getAccount(active.pubkey).catch(() => null);
-      const afterBal = afterD?.status === 'ok'
-        ? BigInt(afterD.balance ?? afterD.balance128) : null;
-      const debited = prevBalance != null && afterBal != null
-        && BigInt(prevBalance) - afterBal === BigInt(amount) + BigInt(signed.fee);
-      const li = await getChainInfo().catch(() => null);
-      const liLedger = li?.info?.ledger ?? null;
-      if (!debited) {
-        historyPush(active.name, {
-          time: new Date().toLocaleString(), dir: 'sent', to: dest.trim(),
-          amount: amount.trim(), fee: signed.fee, txhash: signed.txHashHex,
-          ledger: liLedger?.num, ledger_hash: liLedger?.hash, status: 'op_failed_on_chain',
-        });
-        setHistory(historyLoad(active.name));
-        notify('Finalized but the operation FAILED on-chain — only the fee was charged. No funds moved.', 'err');
-        return true;
-      }
-      historyPush(active.name, {
+      notify('Submitted — waiting for this exact hash to appear in a closed ledger…', 'warn');
+      // The ONLY thing that may confirm a transfer is the ledger's own result
+      // for THIS transaction hash. The account sequence also advances for a
+      // failed operation, and the balance also moves for an unrelated later
+      // transfer, so neither is evidence about this payment.
+      const submittedAt = Math.floor(Date.now() / 1000);
+      const verdict = await waitForConfirmation(signed.txHashHex, {
+        submittedAt,
+        timeoutMs: 90_000,
+      });
+      const base = {
         time: new Date().toLocaleString(), dir: 'sent', to: dest.trim(),
         amount: amount.trim(), fee: signed.fee, txhash: signed.txHashHex,
-        ledger: liLedger?.num, ledger_hash: liLedger?.hash, status: 'confirmed',
-      });
-      setHistory(historyLoad(active.name));
-      notify(`Confirmed on ledger ${liLedger?.num ?? '(latest)'}.`, 'ok');
-      setAmount(''); setDest(''); setReview(null);
+      };
+      if (verdict.status === 'confirmed' || verdict.status === 'failed') {
+        historyPush(active.name, {
+          ...base,
+          ledger: verdict.ledger, ledger_hash: verdict.ledger_hash,
+          status: verdict.status, result_code: verdict.result_code,
+          evidence: verdict.evidence, confirmed_at: verdict.confirmation_time,
+        });
+        setHistory(historyLoad(active.name));
+        setAmount(''); setDest(''); setReview(null);
+        notify(
+          verdict.status === 'confirmed'
+            ? `Confirmed on ledger ${verdict.ledger} (${verdict.result_code}).`
+            : `Included in ledger ${verdict.ledger} but FAILED on-chain: ${verdict.result_code}. Only the fee moved.`,
+          verdict.status === 'confirmed' ? 'ok' : 'err');
+      } else {
+        // Not a confirmation and not a failure: the index could not decide yet.
+        // The hash is kept so the transfer can be re-checked instead of guessed.
+        historyPush(active.name, {
+          ...base, ledger: null, ledger_hash: null,
+          status: 'unconfirmed', reason: verdict.reason || verdict.status,
+        });
+        setHistory(historyLoad(active.name));
+        notify(`Not confirmed yet (${verdict.status}${verdict.reason ? `: ${verdict.reason}` : ''}). Nothing is shown as confirmed until the ledger result for this hash is read.`, 'warn');
+      }
       void refreshBalance(active.pubkey);
+      // Re-read the header so the ledger number and live fee do not go stale.
+      void verifyNetwork();
       return true;
     } catch (err) { notify(String(err.message || err), 'err'); return false; }
     finally { setBusy(false); }
@@ -336,53 +406,7 @@ export default function WalletPanel() {
 
   return (
     <div className="nw-root">
-      <div className="nw-shell">
-        <nav className="nw-sidebar" aria-label="Primary">
-          <div className="nw-brand">
-            <div className="nw-brand-mark" aria-hidden>◈</div>
-            <div>
-              <div className="nw-brand-name">SatoshiCore</div>
-              <div className="nw-brand-sub">NSAT wallet · web</div>
-            </div>
-          </div>
-          <div className="nw-nav-group">
-            {PAGES.map((p) => (
-              <button key={p}
-                className={'nw-nav-item' + (page === p ? ' active' : '')}
-                onClick={() => setPage(p)}
-                aria-current={page === p ? 'page' : undefined}>
-                <span aria-hidden>{PAGE_GLYPH[p]}</span> {PAGE_TITLE[p]}
-              </button>
-            ))}
-          </div>
-          <div className="nw-nav-group">
-            {!active && hasWallets && (
-              <form onSubmit={doUnlock}
-                style={{ display: 'grid', gap: 6, padding: '6px 2px' }}>
-                <select value={unlockName} aria-label="Wallet to unlock"
-                  onChange={(e) => setUnlockName(e.target.value)}>
-                  <option value="">— wallet —</option>
-                  {wallets.map(w => <option key={w.name} value={w.name}>{w.name}</option>)}
-                </select>
-                <input type="password" placeholder="Password" value={unlockPass}
-                  onChange={(e) => setUnlockPass(e.target.value)}
-                  aria-label="Wallet password" />
-                <button className="nw-send-btn" type="submit"
-                  disabled={busy || !unlockName}>Unlock</button>
-              </form>
-            )}
-            {active && (
-              <button className="nw-nav-item" onClick={doLock}
-                title="Lock the active wallet (signing stops)">🔒 Lock wallet</button>
-            )}
-          </div>
-          <div className="nw-sidebar-footer">
-            {ledger != null && <div>● ledger {Number(ledger).toLocaleString()}</div>}
-            <div style={{ opacity: 0.7 }}>{connLine}</div>
-          </div>
-        </nav>
-
-        <main className="nw-content">
+      <main className="nw-content">
           {!configured && (
             <p className="nw-dim nw-small" style={{ marginTop: 0 }}>
               Offline mode: set NEXT_PUBLIC_API_GATEWAY_URL at build time to
@@ -390,18 +414,51 @@ export default function WalletPanel() {
             </p>
           )}
 
-          <div className="nw-page-title">
-            <div>
-              <h1>{PAGE_TITLE[page]}</h1>
-              <div className="nw-dim nw-small">
-                {active ? active.name : 'Locked'} · NSAT
-              </div>
+          <PageHeader
+            eyebrow="NSAT · wallet"
+            title={PAGE_TITLE[page]}
+            lead={PAGE_LEAD[page]}
+            meta={`${active ? active.name : 'Locked'} · NSAT · ${connLine}`}
+            actions={<NetworkBadge net={net} />}
+          />
+
+          {/* Section switcher in a horizontal strip — the same pattern as the
+           * explorer toolbar, so the wallet is not a fourth layout. */}
+          <div className="nw-tabs">
+            <nav className="nw-tab-list" aria-label="Wallet sections">
+              {PAGES.map((p) => (
+                <button key={p} type="button"
+                  className={'nw-tab' + (page === p ? ' is-active' : '')}
+                  onClick={() => setPage(p)}
+                  aria-current={page === p ? 'page' : undefined}>
+                  <span aria-hidden>{PAGE_GLYPH[p]}</span> {PAGE_TITLE[p]}
+                </button>
+              ))}
+            </nav>
+            <div className="nw-tab-tools">
+              {!active && hasWallets && (
+                <form className="nw-unlock" onSubmit={doUnlock}>
+                  <select value={unlockName} aria-label="Wallet to unlock"
+                    onChange={(e) => setUnlockName(e.target.value)}>
+                    <option value="">— wallet —</option>
+                    {wallets.map(w => <option key={w.name} value={w.name}>{w.name}</option>)}
+                  </select>
+                  <input type="password" placeholder="Password" value={unlockPass}
+                    onChange={(e) => setUnlockPass(e.target.value)}
+                    aria-label="Wallet password" />
+                  <button className="nw-send-btn" type="submit"
+                    disabled={busy || !unlockName}>Unlock</button>
+                </form>
+              )}
+              {active && (
+                <button type="button" className="nw-ghost-btn" onClick={doLock}
+                  title="Lock the active wallet (signing stops)">🔒 Lock wallet</button>
+              )}
             </div>
-            <NetworkBadge net={net} />
           </div>
 
           {page === 'overview' && (
-            <OverviewPage active={active} wallets={wallets} balance={balance}
+            <OverviewPage active={active} wallets={wallets} balance={balance} funded={funded}
               bus={{ busy, doCreate, doImport, newName, setNewName, newPass, setNewPass,
                 importSeed, setImportSeed }}
               net={{ net, netOk, ledger, fee }}
@@ -425,14 +482,14 @@ export default function WalletPanel() {
           {page === 'shielded' && <ShieldedGatePage />}
 
           {page === 'activity' && (
-            <ActivityPage history={history} activeName={active?.name} />
+            <ActivityPage history={history} activeName={active?.name}
+              onRecheck={recheckTransfer} canRecheck={isIndexerConfigured()} />
           )}
 
           {page === 'settings' && (
             <SettingsPage s={{ active, doLock, doBackup, doRestore, wallets }} />
           )}
-        </main>
-      </div>
+      </main>
 
       {review && (
         <div className="nw-modal-back" role="dialog" aria-modal="true"
@@ -486,7 +543,7 @@ export default function WalletPanel() {
 }
 
 /* --------------------------------- Overview ------------------------------ */
-function OverviewPage({ active, wallets, balance, bus, net, notify, onSend, onReceive, onManage }) {
+function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSend, onReceive, onManage }) {
   if (!active) {
     return (
       <div className="nw-grid-2">
@@ -541,8 +598,9 @@ function OverviewPage({ active, wallets, balance, bus, net, notify, onSend, onRe
     );
   }
 
-  const funded = balance != null;
-  const fundedBadge = funded == null ? 'unknown' : funded;
+  // `funded` comes from the gateway answer (404 → false). A known balance of 0
+  // is not the same thing as a funded account, so never derive it from balance.
+  const fundedBadge = funded;
   return (
     <div>
       <section className="nw-card nw-balance-card">
@@ -553,7 +611,7 @@ function OverviewPage({ active, wallets, balance, bus, net, notify, onSend, onRe
               {balance == null ? '…' : formatExactBalance(balance)}
               <span className="nw-balance-unit">NSAT</span>
             </div>
-            <div className="nw-small nw-dim">exact on-chain value (stroops) · 128-bit · no floats</div>
+            <div className="nw-small nw-dim">exact on-chain value · 128-bit integers · no floats</div>
           </div>
           <div style={{ textAlign: 'right' }}>
             <div className="nw-address-chip">
@@ -570,20 +628,17 @@ function OverviewPage({ active, wallets, balance, bus, net, notify, onSend, onRe
 
       <div className="nw-quick-actions">
         <button className="nw-action-card" onClick={onSend}>
-          <div className="nw-action-icon"
-            style={{ background: 'rgba(79,140,255,.15)', color: 'var(--blue)' }}>↗</div>
+          <div className="nw-action-icon">↗</div>
           <div><div style={{ fontWeight: 700 }}>Send</div>
             <div className="nw-small nw-dim">Pay someone in NSAT</div></div>
         </button>
         <button className="nw-action-card" onClick={onReceive}>
-          <div className="nw-action-icon"
-            style={{ background: 'rgba(53,213,232,.15)', color: 'var(--cyan)' }}>↙</div>
+          <div className="nw-action-icon">↙</div>
           <div><div style={{ fontWeight: 700 }}>Receive</div>
             <div className="nw-small nw-dim">Show address</div></div>
         </button>
         <button className="nw-action-card" onClick={onManage}>
-          <div className="nw-action-icon"
-            style={{ background: 'rgba(34,197,94,.15)', color: 'var(--ok)' }}>#</div>
+          <div className="nw-action-icon">#</div>
           <div><div style={{ fontWeight: 700 }}>Backup</div>
             <div className="nw-small nw-dim">In Settings</div></div>
         </button>
@@ -689,7 +744,14 @@ function SendPage({ state, gate, busy, active, balance, onReview }) {
         </div>
         {block && (
           <div id="nw-send-block-reason" role="status" className="nw-small"
-            style={{ color: block.kind === 'insufficient' ? 'var(--warn)' : 'var(--danger)', marginTop: 2 }}>
+            style={{
+              color: block.kind === 'insufficient'
+                ? 'var(--warn)'
+                : block.kind === 'recipient' && !state.dest.trim()
+                  ? 'var(--text-dim)'
+                  : 'var(--danger)',
+              marginTop: 2
+            }}>
             {block.reason}
           </div>
         )}
@@ -762,7 +824,7 @@ function ShieldedGatePage() {
 }
 
 /* -------------------------------- Activity ------------------------------- */
-function ActivityPage({ history, activeName }) {
+function ActivityPage({ history, activeName, onRecheck, canRecheck }) {
   return (
     <section className="nw-card">
       <h2 style={{ color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -782,14 +844,22 @@ function ActivityPage({ history, activeName }) {
                 <div>
                   {h.dir === 'sent' ? 'To' : 'Received'}{' '}
                   <span className="nw-mono">{shortAddr(h.to)}</span>{' '}
-                  <span className={'nw-badge ' + (h.status === 'confirmed' ? 'ok' : 'err')}>
+                  <span className={'nw-badge ' + (h.status === 'confirmed' ? 'ok' : h.status === 'failed' ? 'err' : 'warn')}>
                     {h.status}</span>
                 </div>
                 <div className="nw-small nw-dim">{h.time} · fee {h.fee}</div>
+                {h.result_code && (
+                  <div className="nw-small nw-dim">result {h.result_code}{h.evidence ? ` · ${h.evidence}` : ''}</div>
+                )}
+                {h.reason && <div className="nw-small nw-dim">reason {h.reason}</div>}
               </div>
               <div style={{ textAlign: 'right' }}>
-                {h.amount} NSAT
+                {fmtGroup(h.amount)} NSAT
                 {h.ledger && <div className="nw-small nw-dim">ledger {h.ledger}</div>}
+                {canRecheck && h.status !== 'confirmed' && h.status !== 'failed' && (
+                  <button type="button" className="nw-chip-btn" style={{ marginTop: 4 }}
+                    onClick={() => onRecheck(h)}>Check ledger</button>
+                )}
               </div>
             </li>
           ))}
