@@ -63,6 +63,33 @@ whenever the deploy domain changes. The web build pipeline
 (`.github/workflows/deploy-pages.yml`) now bakes `NEXT_PUBLIC_API_GATEWAY_URL` and the
 byte-exact network identity into every artifact.
 
+### 3b. Runtime refresh to the read-surface build (2026-11-07)
+
+The launchd service was still running a 2026-11-05 runtime copy that predated
+`131803b` ("proxy the rest of the wallet's read surface"), so `GET /v1/tx/{hash}`
+answered `{"error":"not found"}` on port 8787 while the indexer on 8789 returned
+the transaction — the wallet read path disagreed with the explorer.
+
+| Item | Value |
+|---|---|
+| Source | `integrate/wallet-exact-hash` @ `131803b` (`services/api-gateway/server.js`) |
+| Runtime sha256 | `57d5c9f23e8cc81a…` (`~/nsat-ops/gateway/server.js`) |
+| Pre-deploy backup | `~/nsat-ops/gateway/server.js.bak-20261107T081218Z-adhoc` |
+| Tests | `node --test tests/` → 37 passed, 0 failed |
+| Verification | 15/15 random transactions byte-identical across gateway 8787, indexer 8789 and shadow indexer 8796; unknown hash relays the indexer's 404 body; malformed/uppercase/traversal → 400; `POST /v1/tx/{hash}` → 404; CORS echoes the allowlisted origin only; `Cache-Control: no-store` |
+
+Deploy used `GATEWAY_SRC=.shadow-release/web-integration/services/api-gateway ~/nsat-ops/deploy-gateway.sh`
+because the default source branch (`feat/latency-exact-hash-confirmation`) does not
+contain the read-surface routes. The script now honours `GATEWAY_SRC` so a deploy
+can no longer silently drop them.
+
+**Known dependency:** `GET /v1/confirmations/{hash}` needs an indexer build that
+serves `/v1/confirmations`; the production indexer on 8789 still answers 404 there
+so that one route returns 503, while the shadow indexer on 8796 serves it. Upgrading
+the production indexer to the shadow build closes it — deliberately not done by
+pointing the production gateway at 8796, which would route live wallet traffic to
+the shadow known-host.
+
 Reverse-proxy requirements: terminate TLS with modern ciphers, set
 `Content-Security-Policy` and `Strict-Transport-Security` at the edge, do NOT
 forward `X-Forwarded-*` trust for the rate limit unless the proxy is trusted.
