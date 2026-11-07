@@ -231,3 +231,74 @@ test('the gateway rate limit still guards the new routes', async (t) => {
   assert.deepEqual(codes.slice(0, 2), [200, 200]);
   assert.deepEqual(codes.slice(2), [429, 429]);
 });
+
+// The same-origin wallet points its indexer base URL at this gateway, so the
+// three read routes below must behave like the indexer's own GETs: pass a 200
+// through untouched, keep the indexer's 404 so "no such tx" is distinguishable
+// from "index down", and never let a malformed id reach the upstream.
+test('health, tx detail and account history are proxied read-only', async (t) => {
+  const seen = [];
+  const { port } = await withStack(t, {
+    indexer: (req, res) => {
+      seen.push(req.url);
+      if (req.url === '/v1/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, indexed_head: 12, ledgers: 12 }));
+      }
+      if (req.url.startsWith('/v1/tx/')) {
+        if (req.url.endsWith('b'.repeat(64))) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'not found' }));
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ hash: HASH, ledger: 5 }));
+      }
+      if (req.url.startsWith('/v1/accounts/')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ account: G, transactions: [] }));
+      }
+      res.writeHead(500).end('{}');
+    }
+  });
+
+  const health = await get(port, '/v1/health');
+  assert.equal(health.status, 200);
+  assert.equal(JSON.parse(health.body).ok, true);
+  assert.equal(health.headers['cache-control'], 'no-store');
+
+  const tx = await get(port, `/v1/tx/${HASH}`);
+  assert.equal(tx.status, 200);
+  assert.equal(JSON.parse(tx.body).hash, HASH);
+
+  const missing = await get(port, `/v1/tx/${'b'.repeat(64)}`);
+  assert.equal(missing.status, 404, 'an unknown hash stays a 404, not a 503');
+
+  const history = await get(port, `/v1/accounts/${G}/transactions?limit=9999`);
+  assert.equal(history.status, 200);
+  assert.ok(seen.includes(`/v1/accounts/${G}/transactions?limit=${200}`), 'limit is clamped');
+});
+
+test('the new read routes reject malformed ids before the indexer', async (t) => {
+  const { port, indexerHits } = await withStack(t);
+  const badHash = await get(port, `/v1/tx/${'A'.repeat(64)}`);
+  assert.equal(badHash.status, 400);
+  const badAccount = await get(port, '/v1/accounts/not-an-account/transactions');
+  assert.equal(badAccount.status, 400);
+  const badMethod = await get(port, '/v1/health', { method: 'POST' });
+  assert.equal(badMethod.status, 405);
+  assert.equal(badMethod.headers.allow, 'GET');
+  assert.equal(indexerHits.length, 0);
+});
+
+test('the new read routes still fail closed on identity mismatch', async (t) => {
+  const { port, indexerHits } = await withStack(t, {
+    core: (req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ info: { ledger: { num: 1 }, network: 'NSAT Testnet ; January 2026 ; deadbeef' } }));
+    }
+  });
+  assert.equal((await get(port, '/v1/health')).status, 503);
+  assert.equal((await get(port, `/v1/tx/${HASH}`)).status, 503);
+  assert.equal((await get(port, `/v1/accounts/${G}/transactions`)).status, 503);
+  assert.equal(indexerHits.length, 0);
+});

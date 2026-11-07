@@ -196,17 +196,24 @@ async function coreFetchRead(path) {
   return { status: 503, body: JSON.stringify({ error: 'core ledger busy' }) };
 }
 
-// --- read-only confirmation indexer proxy -----------------------------------
-// Two routes only, both GET, both read-only:
+// --- read-only indexer proxy ------------------------------------------------
+// GET only, read-only, and every answer is gated on the chain identity:
 //   GET /v1/confirmations/{hash}
-//   GET /v1/accounts/{G...}/events
-// The chain identity is checked against the running core before either answers,
-// so a misconfigured upstream can never return another network's verdict as if
-// it belonged to this chain.
+//   GET /v1/accounts/{G...}/events          (SSE, streamed)
+//   GET /v1/accounts/{G...}/transactions    (wallet history)
+//   GET /v1/tx/{hash}                       (wallet detail)
+//   GET /v1/health                          (index freshness)
+// The same-origin wallet points its indexer base URL at this gateway, so these
+// five are the whole read surface it can reach. The identity is checked against
+// the running core before any of them answers, so a misconfigured upstream can
+// never return another network's verdict as if it belonged to this chain.
 const TX_HASH_RE = /^[0-9a-f]{64}$/;
 const EVENTS_PATH_RE = /^\/v1\/accounts\/(G[A-Z2-7]{55})\/events$/;
 const EVENT_ROUTE_RE = /^\/v1\/accounts\/([^/]+)\/events$/;
+const TX_DETAIL_RE = /^\/v1\/tx\/([^/]+)$/;
+const ACCOUNT_TX_RE = /^\/v1\/accounts\/([^/]+)\/transactions$/;
 const CONFIRMATION_PREFIX = '/v1/confirmations/';
+const MAX_HISTORY_LIMIT = 200;
 
 let activeEventStreams = 0;
 let identityCache = { at: 0, network: null };
@@ -371,9 +378,55 @@ async function handleAccountEvents(req, res, account) {
   });
 }
 
+// A plain read that the indexer already validates: pass its body through and
+// keep its 404 so the wallet can tell "no such transaction" from "index down".
+async function handleIndexerRead(req, res, target) {
+  if (!(await requireChainIdentity(res, req))) return;
+  try {
+    const up = await indexerJson(target);
+    if (up.status !== 200 && up.status !== 404) {
+      log('warn', 'indexer_read_error', { upstream_status: up.status });
+      return sendJson(res, 503, { error: 'indexer unavailable' }, req);
+    }
+    res.writeHead(up.status, {
+      ...corsHeaders(req),
+      ...securityHeaders(),
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Content-Length': Buffer.byteLength(up.body)
+    });
+    res.end(up.body);
+  } catch (err) {
+    log('error', 'indexer_read_failed', { error: err.message });
+    sendJson(res, 503, { error: 'indexer unavailable' }, req);
+  }
+}
+
 function handleIndexerRoute(req, res, pathname) {
   if (pathname.startsWith(CONFIRMATION_PREFIX)) {
     return handleConfirmation(req, res, pathname.slice(CONFIRMATION_PREFIX.length));
+  }
+  if (pathname === '/v1/health') {
+    return handleIndexerRead(req, res, '/v1/health');
+  }
+  const txDetail = TX_DETAIL_RE.exec(pathname);
+  if (txDetail) {
+    if (!TX_HASH_RE.test(txDetail[1])) {
+      return sendJson(res, 400, { error: 'hash must be 64 lowercase hex characters' }, req);
+    }
+    return handleIndexerRead(req, res, `/v1/tx/${txDetail[1]}`);
+  }
+  const accountTx = ACCOUNT_TX_RE.exec(pathname);
+  if (accountTx) {
+    if (!/^G[A-Z2-7]{55}$/.test(accountTx[1])) {
+      return sendJson(res, 400, { error: 'account must be a 56-character G strkey' }, req);
+    }
+    // Bound the page size here rather than trusting the caller: the indexer's
+    // own limit is honoured but never allowed to grow the response without end.
+    const raw = new URL(req.url, 'http://x').searchParams.get('limit');
+    const parsed = Number.parseInt(raw ?? '', 10);
+    const limit = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, MAX_HISTORY_LIMIT) : 50;
+    return handleIndexerRead(req, res, `/v1/accounts/${accountTx[1]}/transactions?limit=${limit}`);
   }
   const match = EVENT_ROUTE_RE.exec(pathname);
   if (!match) return sendJson(res, 404, { error: 'not found' }, req);
@@ -832,7 +885,12 @@ function createServer() {
     }
 
     const pathname = new URL(req.url, 'http://x').pathname;
-    const isIndexerRoute = pathname.startsWith(CONFIRMATION_PREFIX) || EVENT_ROUTE_RE.test(pathname);
+    const isIndexerRoute =
+      pathname.startsWith(CONFIRMATION_PREFIX) ||
+      pathname === '/v1/health' ||
+      EVENT_ROUTE_RE.test(pathname) ||
+      TX_DETAIL_RE.test(pathname) ||
+      ACCOUNT_TX_RE.test(pathname);
     if (isIndexerRoute) {
       if (req.method !== 'GET') {
         res.writeHead(405, { ...securityHeaders(), Allow: 'GET', 'Content-Type': 'application/json' });
