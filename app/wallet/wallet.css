@@ -254,6 +254,15 @@ body:has(.nw-root) .container {
   cursor: default; border-radius: 8px;
 }
 .nw-tx-row:last-child { border-bottom: none; }
+/* A 64-character transaction hash must never widen the page: let flex items
+   shrink and break the hash instead of forcing a horizontal scrollbar on a
+   phone (measured: 638 px content on a 390 px viewport before this rule). */
+.nw-tx-row > div { min-width: 0; }
+.nw-tx-row .nw-mono { overflow-wrap: anywhere; word-break: break-word; }
+@media (max-width: 560px) {
+  .nw-tx-row { flex-wrap: wrap; align-items: flex-start; }
+  .nw-tx-row > div:last-child { text-align: left; }
+}
 .nw-tx-dir {
   width: 34px; height: 34px; border-radius: 10px;
   display: grid; place-items: center; font-weight: 700; flex-shrink: 0;

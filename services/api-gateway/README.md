@@ -12,6 +12,7 @@ node. **Separate deployment from the static website. Holds no keys.**
 | `/api/v1/network/status` | GET | Gateway + core liveness, ledger number, network name (identity check) |
 | `/api/v1/account?acc=<G-strkey>` | GET | Read-only account lookup — exact `balance128` decimal + seqnum; validated strkey |
 | `/api/v1/tx` | POST | Relay of **already-signed** transaction envelopes (`{ "envelope_xdr": "<base64>" }`) to nsat-core |
+| `/api/v1/explorer/snapshot` | GET | Read-only node snapshot for the dashboard: `/info` + `/peers` + `/quorum` + selected `/metrics`, plus the ledger closes this gateway saw (cached ~2.5 s, served with `stale: true` if the node blips) |
 
 There is no wildcard proxying: only these three routes exist. nsat-core
 administrative endpoints are unreachable through the gateway by design.
@@ -28,6 +29,7 @@ administrative endpoints are unreachable through the gateway by design.
 | `CORE_TIMEOUT_MS` | `10000` | Upstream timeout |
 | `CORE_BUSY_RETRIES` / `CORE_BUSY_DELAY_MS` | `4` / `150` | Bounded backoff for core `{status:"busy"}` ledger-close windows (busy is retried, never answered as a success/zero balance) |
 | `NSAT_NETWORK_NAME` | `NSAT` | Network name reported by `/api/v1/network/status` |
+| `EXPLORER_DEADLINE_MS` / `EXPLORER_ATTEMPT_MS` / `EXPLORER_RETRY_DELAY_MS` | `8500` / `2500` / `120` | Explorer snapshot reads: the core serves `/info`, `/peers`, `/quorum`, `/metrics` from the loop that applies ledgers, so a read caught in a multi-second close stalls. Each read is retried until one overall deadline instead of failing on a single timeout; the deadline stays under the dashboard's 10 s request timeout |
 | `GATEWAY_VERSION` | `24.0.0` | Reported by `/health` |
 
 ## API contract
@@ -68,6 +70,36 @@ Set `NEXT_PUBLIC_API_GATEWAY_URL` at the website's build time (e.g.
 `https://gateway.satoshicore.org`). The status page and wallet then probe the
 gateway automatically and drop out of offline/experimental mode when it is
 reachable. Until then they render the offline state.
+
+
+## Read-only confirmation routes (wallet integration)
+
+The wallet resolves confirmations through this gateway, not directly against the
+indexer, so the browser never talks to a database service:
+
+| Route | Purpose |
+|---|---|
+| `GET /v1/confirmations/{hash}` | verdict for exactly that transaction hash |
+| `GET /v1/accounts/{G...}/events` | SSE stream of confirmed rows for one account |
+
+Configuration:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `NSAT_INDEXER_URL` | `http://127.0.0.1:8789` | indexer upstream; fixed by config, never taken from a request (no SSRF) |
+| `NSAT_EXPECTED_NETWORK` | empty | when set, both routes answer 503 unless the core reports exactly this chain identity |
+| `INDEXER_TIMEOUT_MS` | `5000` | upstream JSON timeout |
+| `INDEXER_MAX_STREAMS` | `48` | concurrent SSE cap; excess connections get 503 + Retry-After |
+| `INDEXER_STREAM_IDLE_MS` | `120000` | idle stream timeout; the slot is released on close, not on next write |
+| `INDEXER_EVENTS_RATE_MAX` | `60` | informational cap per window for the events route |
+
+Behaviour that is deliberate:
+
+* Malformed hashes and accounts are rejected with 400 **before** any upstream call.
+* Only `GET` is accepted on both routes; other methods get 405 with `Allow: GET`.
+* Upstream errors become a bare 503 — the indexer's internal error text is never relayed.
+* SSE responses carry `X-Accel-Buffering: no` and `Cache-Control: no-store`, and forward
+  `Last-Event-ID` so a reconnect resumes instead of replaying from the start.
 
 ## Security posture
 
