@@ -48,11 +48,25 @@ test('preflight order and reasons match the shared contract', () => {
   assert.equal(sendPreflight(state()).ok, true);
 });
 
-test('CREATE below 2×reserve warns with the exact total and still allows review', () => {
-  const r = sendPreflight(state({ createDest: true, amount: '999' }));
+test('CREATE below 2×reserve warns with the exact total and still allows review when funded', () => {
+  const funded = state({ createDest: true, amount: '999', balance: '5000' });
+  const r = sendPreflight(funded);
   assert.equal(r.block, null);
   assert.match(r.warn.reason, /10,000,000 NSAT \(2× base reserve\)/);
   assert.equal(sendPreflight(state({ createDest: true, amount: '10000000' })).warn, null);
+});
+
+test('CREATE still obeys the balance gate: a warning never buys an unaffordable send', () => {
+  // Regression: the CREATE warning used to return before the balance check, so
+  // an empty wallet could open Review for amount + fee it does not have.
+  const empty = sendPreflight(state({ createDest: true, amount: '5', balance: '0' }));
+  assert.equal(empty.ok, false);
+  assert.equal(empty.block.kind, 'insufficient');
+  assert.match(empty.block.reason, /0 NSAT available; amount \+ fee = 15 exceeds it/);
+
+  const short = sendPreflight(state({ createDest: true, amount: '999', balance: '1000' }));
+  assert.equal(short.ok, false);
+  assert.equal(short.block.kind, 'insufficient');
 });
 
 test('formatting: grouping on the string', () => {

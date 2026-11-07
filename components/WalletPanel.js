@@ -6,7 +6,7 @@ import {
   isGatewayConfigured, isIndexerConfigured, EXPECTED_NETWORK_ID,
   verifyNetworkIdentity, getChainInfo, getAccount,
   submitSignedTransaction, estimateFee, formatExactBalance,
-  waitForConfirmation, accountEventsUrl,
+  waitForConfirmation, accountEventsUrl, getAccountHistory,
 } from '../lib/nsatClient';
 import {
   keystoreCreate, keystoreImport, keystoreUnlock, keystoreList,
@@ -78,6 +78,13 @@ export default function WalletPanel() {
   const [amount, setAmount] = useState('');
   const [review, setReview] = useState(null);    // { amount, fee, total }
   const [history, setHistory] = useState([]);
+  // Indexed chain history for the active account (recipient visibility), kept
+  // separate from `history`, which only holds transfers this app signed.
+  const [chain, setChain] = useState([]);
+  const [chainState, setChainState] = useState('idle'); // idle|loading|ok|error|unavailable
+  const [chainError, setChainError] = useState(null);
+  const [chainAccount, setChainAccount] = useState(null); // address the list belongs to
+  const [lookupAddr, setLookupAddr] = useState('');
 
   const notify = (text, kind = 'ok') => {
     setToast({ text, kind });
@@ -146,14 +153,33 @@ export default function WalletPanel() {
     }
   }, []);
 
+  // Indexed history for the active account: what the ledger says arrived and
+  // left, read from the indexer. This is what makes an incoming transfer
+  // visible to the recipient, not just to the sender who signed it.
+  const refreshChain = useCallback(async (pubkey) => {
+    if (!isIndexerConfigured()) { setChainState('unavailable'); return; }
+    setChainState('loading');
+    try {
+      const r = await getAccountHistory(pubkey, 25);
+      setChain(Array.isArray(r?.items) ? r.items : []);
+      setChainAccount(pubkey);
+      setChainError(null);
+      setChainState('ok');
+    } catch (err) {
+      setChainError(String(err?.message || err));
+      setChainState('error');
+    }
+  }, []);
+
   useEffect(() => { setWallets(keystoreList()); }, []);
   useEffect(() => { void verifyNetwork(); }, [verifyNetwork]);
   useEffect(() => {
     if (active) {
       void refreshBalance(active.pubkey);
+      void refreshChain(active.pubkey);
       setHistory(historyLoad(active.name));
-    } else { setBalance(null); setHistory([]); }
-  }, [active, refreshBalance]);
+    } else { setBalance(null); setHistory([]); setChain([]); setChainState('idle'); }
+  }, [active, refreshBalance, refreshChain]);
 
   // Recipient/sender balance notifications.
   //
@@ -180,7 +206,7 @@ export default function WalletPanel() {
     }
     try {
       stream = new window.EventSource(accountEventsUrl(pubkey, 0));
-      stream.addEventListener('tx', () => { void refreshBalance(pubkey); });
+      stream.addEventListener('tx', () => { void refreshBalance(pubkey); void refreshChain(pubkey); });
       stream.addEventListener('error', () => {
         // The stream is bounded (the indexer closes it after ~1 minute) and a
         // proxy can buffer it; poll until EventSource reconnects.
@@ -215,6 +241,27 @@ export default function WalletPanel() {
       }
     } catch (err) { notify(String(err.message || err), 'err'); }
   }, [active?.name, notify]);
+
+  // Read-only lookup of ANY address: a recipient can check what arrived without
+  // importing a key, and the pass can verify a historical Mainnet row. GET only.
+  const lookupChain = useCallback(async () => {
+    const addr = lookupAddr.trim();
+    if (!ACCOUNT_RE.test(addr)) { notify('Address format is invalid.', 'err'); return; }
+    await refreshChain(addr);
+  }, [lookupAddr, refreshChain, notify]);
+
+  // Read-only re-check of one indexed row, by exact hash. Nothing here can
+  // upgrade a row: the label is whatever the ledger result says.
+  const checkChainHash = useCallback(async (hash) => {
+    try {
+      const verdict = await waitForConfirmation(hash, { timeoutMs: 8_000 });
+      if (verdict.status === 'confirmed' || verdict.status === 'failed') {
+        notify(`Ledger ${verdict.ledger}: ${verdict.result_code}.`, verdict.status === 'confirmed' ? 'ok' : 'err');
+      } else {
+        notify(`Still ${verdict.status}${verdict.reason ? ` (${verdict.reason})` : ''} — no ledger result for this hash yet.`, 'warn');
+      }
+    } catch (err) { notify(String(err?.message || err), 'err'); }
+  }, [notify]);
 
   // ---------------- wallet actions (logic unchanged from the audited build) ----
   async function doCreate(e) {
@@ -377,6 +424,7 @@ export default function WalletPanel() {
         notify(`Not confirmed yet (${verdict.status}${verdict.reason ? `: ${verdict.reason}` : ''}). Nothing is shown as confirmed until the ledger result for this hash is read.`, 'warn');
       }
       void refreshBalance(active.pubkey);
+      void refreshChain(active.pubkey);
       // Re-read the header so the ledger number and live fee do not go stale.
       void verifyNetwork();
       return true;
@@ -483,7 +531,12 @@ export default function WalletPanel() {
 
           {page === 'activity' && (
             <ActivityPage history={history} activeName={active?.name}
-              onRecheck={recheckTransfer} canRecheck={isIndexerConfigured()} />
+              onRecheck={recheckTransfer} canRecheck={isIndexerConfigured()}
+              chain={chain} chainState={chainState} chainError={chainError}
+              chainAccount={chainAccount} lookupAddr={lookupAddr}
+              onLookupAddr={setLookupAddr} onLookup={lookupChain}
+              onChainRefresh={() => active && refreshChain(active.pubkey)}
+              onChainCheck={checkChainHash} />
           )}
 
           {page === 'settings' && (
@@ -824,11 +877,90 @@ function ShieldedGatePage() {
 }
 
 /* -------------------------------- Activity ------------------------------- */
-function ActivityPage({ history, activeName, onRecheck, canRecheck }) {
+function ActivityPage({ history, activeName, onRecheck, canRecheck,
+  chain, chainState, chainError, chainAccount, lookupAddr, onLookupAddr, onLookup,
+  onChainRefresh, onChainCheck }) {
+  const indexed = Array.isArray(chain) ? chain : [];
   return (
-    <section className="nw-card">
+    <div>
+      <section className="nw-card">
+        <h2 style={{ color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          On-chain history
+          <span className="nw-badge info">indexed from finalized ledgers</span>
+          {onChainRefresh && (
+            <button type="button" className="nw-chip-btn" style={{ marginLeft: 'auto' }}
+              onClick={onChainRefresh} disabled={chainState === 'loading'}>Refresh</button>
+          )}
+        </h2>
+        <div className="nw-kv" style={{ marginTop: 8, alignItems: 'center', gap: 8 }}>
+          <span className="nw-k">Account</span>
+          <span className="nw-v" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <input style={{ flex: 1, minWidth: 220 }} aria-label="Account to look up"
+              placeholder="G… (read-only lookup)" value={lookupAddr}
+              onChange={(e) => onLookupAddr(e.target.value)} />
+            <button type="button" className="nw-chip-btn" onClick={onLookup}>Look up</button>
+          </span>
+        </div>
+        {chainAccount && (
+          <p className="nw-small nw-dim" style={{ marginTop: 6 }}>
+            Showing <span className="nw-mono">{shortAddr(chainAccount)}</span> · read-only
+          </p>
+        )}
+        {!activeName && !chainAccount && (
+          <EmptyState text={'Unlock a wallet, or look up any address above.\nIncoming and outgoing rows come from the indexer, not from this app.'} />
+        )}
+        {activeName && chainState === 'loading' && indexed.length === 0 && (
+          <p className="nw-small nw-dim" style={{ marginTop: 10 }}>Reading indexed history…</p>
+        )}
+        {activeName && chainState === 'unavailable' && (
+          <p className="nw-small nw-dim" style={{ marginTop: 10 }}>
+            No indexer is configured in this build, so chain history is unavailable.
+            Balance and signing still work; nothing here is invented.
+          </p>
+        )}
+        {activeName && chainState === 'error' && (
+          <p className="nw-small" style={{ marginTop: 10, color: 'var(--warn, #b45309)' }}>
+            Indexer unavailable: {chainError}. Nothing is shown as confirmed without a ledger result.
+          </p>
+        )}
+        {activeName && chainState === 'ok' && indexed.length === 0 && (
+          <EmptyState text={'No transfers indexed for this account yet.\nA payment appears here once its ledger is link-confirmed.'} />
+        )}
+        {indexed.length > 0 && (
+          <ul className="nw-tx-list" style={{ marginTop: 10 }}>
+            {indexed.map((row) => (
+              <li key={row.hash} className="nw-tx-row">
+                <div className={'nw-tx-dir ' + (row.direction === 'out' ? 'sent' : 'rec')}>
+                  {row.direction === 'out' ? '↗' : '↙'}</div>
+                <div style={{ flex: 1 }}>
+                  <div>
+                    {row.direction === 'out' ? 'To' : 'From'}{' '}
+                    <span className="nw-mono">{shortAddr(row.counterparty || '')}</span>{' '}
+                    <span className={'nw-badge ' + (row.success ? 'ok' : 'err')}>
+                      {row.result_code || 'indexed'}</span>
+                  </div>
+                  <div className="nw-small nw-dim">
+                    {new Date((row.close_time || 0) * 1000).toLocaleString()} · fee {row.fee ?? 0} · {row.kind || 'payment'}
+                  </div>
+                  <div className="nw-small nw-dim nw-mono">{row.hash}</div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  {fmtGroup(row.amount_stroops ?? row.amount ?? '0')} NSAT
+                  <div className="nw-small nw-dim">ledger {row.ledger}</div>
+                  {onChainCheck && (
+                    <button type="button" className="nw-chip-btn" style={{ marginTop: 4 }}
+                      onClick={() => onChainCheck(row.hash)}>Check ledger</button>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="nw-card" style={{ marginTop: 14 }}>
       <h2 style={{ color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        {activeName ? `History — ${activeName}` : 'History'}
+        {activeName ? `Signed here — ${activeName}` : 'Signed here'}
         <span className="nw-badge info">locally verified · not a chain indexer</span>
       </h2>
       {history.length === 0 ? (
@@ -865,7 +997,8 @@ function ActivityPage({ history, activeName, onRecheck, canRecheck }) {
           ))}
         </ul>
       )}
-    </section>
+      </section>
+    </div>
   );
 }
 
