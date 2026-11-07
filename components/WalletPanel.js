@@ -268,9 +268,20 @@ export default function WalletPanel() {
   function doBackup() {
     const blob = keystoreExport();
     const url = URL.createObjectURL(new Blob([blob], { type: 'application/json' }));
-    const a = document.createElement('a');
-    a.href = url; a.download = 'scw-web-backup.json'; a.click();
-    URL.revokeObjectURL(url);
+    // In the MV3 extension popup an anchor-click download is silently
+    // dropped; the chrome.downloads API (granted by the manifest) is the
+    // supported path there. The web page keeps the anchor-click flow.
+    const ext = typeof chrome !== 'undefined' && chrome?.downloads?.download;
+    if (ext) {
+      chrome.downloads.download(
+        { url, filename: 'scw-web-backup.json' },
+        () => URL.revokeObjectURL(url),
+      );
+    } else {
+      const a = document.createElement('a');
+      a.href = url; a.download = 'scw-web-backup.json'; a.click();
+      URL.revokeObjectURL(url);
+    }
     notify('Encrypted keystore downloaded. Keep it private.', 'ok');
   }
 

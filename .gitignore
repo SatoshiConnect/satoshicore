@@ -8,3 +8,4 @@ out/
 *.key
 npm-debug.log*
 .DS_Store
+extension/dist/
