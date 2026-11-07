@@ -15,6 +15,48 @@ servers:
       host:
         default: gateway.satoshicore.org
 paths:
+  /v1/confirmations/{hash}:
+    get:
+      summary: Exact-hash transaction verdict from the live indexer
+      description: |
+        Returns the ledger result for this exact transaction hash. Never inferred
+        from sequence or balance deltas. Fails closed (503) when the chain identity
+        cannot be verified or the indexer is unreachable.
+      parameters:
+        - { name: hash, in: path, required: true, schema: { type: string, pattern: '^[0-9a-f]{64}$' } }
+        - { name: submitted_at, in: query, required: false, schema: { type: integer } }
+      responses:
+        '200':
+          description: Verdict (confirmed / failed / pending / unknown / not_found)
+          content:
+            application/json:
+              schema: { type: object, properties: {
+                hash: { type: string },
+                status: { type: string, enum: [confirmed, failed, pending, unknown, not_found] },
+                result_code: { type: string, nullable: true },
+                ledger: { type: integer, nullable: true },
+                ledger_hash: { type: string, nullable: true },
+                evidence: { type: string, nullable: true },
+                confirmation_time: { type: integer, nullable: true } } }
+        '400': { description: Hash is not 64 lowercase hex characters }
+        '405': { description: Only GET is allowed }
+        '503': { description: Chain identity unverifiable or index unavailable }
+  /v1/accounts/{account}/events:
+    get:
+      summary: Server-sent events for confirmed rows touching this account
+      description: |
+        Streams one event per ledger with `id: <ledger>`. Reconnect resumes from
+        Last-Event-ID (or ?since=), whichever is newer. Bounded concurrent streams;
+        excess connections receive 503.
+      parameters:
+        - { name: account, in: path, required: true, schema: { type: string, pattern: '^G[A-Z2-7]{55}$' } }
+        - { name: since, in: query, required: false, schema: { type: integer } }
+        - { name: Last-Event-ID, in: header, required: false, schema: { type: string } }
+      responses:
+        '200': { description: text/event-stream }
+        '400': { description: Account is not a 56-character G strkey }
+        '405': { description: Only GET is allowed }
+        '503': { description: Too many streams, identity unverifiable, or index unavailable }
   /health:
     get:
       operationId: getHealth
@@ -67,6 +109,94 @@ paths:
                   ledger: { type: integer, nullable: true }
                   serverTime: { type: string, nullable: true }
                   network: { type: string }
+      security: []
+  /api/v1/explorer/snapshot:
+    get:
+      operationId: explorerSnapshot
+      summary: Read-only node snapshot for the explorer dashboard
+      description: >
+        Aggregates four read-only node GETs (/info, /peers, /quorum, /metrics)
+        into one cached reading, plus the ledger closes this gateway witnessed
+        itself. Values are real readings only — a source that fails is listed in
+        `partial` instead of being filled in. When the node is briefly
+        unreachable the last reading is served with `stale: true` and its
+        original `observedAt`, so clients can show its age.
+      responses:
+        "200":
+          description: Node snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, source, observedAt, ledger]
+                properties:
+                  ok: { type: boolean }
+                  source: { type: string, enum: [nsat-core] }
+                  observedAt: { type: integer, description: epoch milliseconds }
+                  stale: { type: boolean }
+                  partial:
+                    type: array
+                    items: { type: string, enum: [peers, quorum, metrics] }
+                  network: { type: string, nullable: true }
+                  protocolVersion: { type: integer, nullable: true }
+                  state: { type: string, nullable: true }
+                  ledger:
+                    type: object
+                    properties:
+                      num: { type: integer, nullable: true }
+                      closeTime: { type: integer, nullable: true }
+                      age: { type: integer, nullable: true }
+                      baseFee: { type: integer, nullable: true }
+                      maxTxSetSize: { type: integer, nullable: true }
+                      hash: { type: string, nullable: true }
+                  peers:
+                    type: object
+                    properties:
+                      authenticated: { type: integer, nullable: true }
+                      pending: { type: integer, nullable: true }
+                  quorum:
+                    type: object
+                    properties:
+                      agreeCount: { type: integer, nullable: true }
+                      validated: { type: boolean, nullable: true }
+                      phase: { type: string, nullable: true }
+                      lagMs: { type: integer, nullable: true }
+                      nodeCount: { type: integer, nullable: true }
+                  validators:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        self: { type: boolean }
+                        direction: { type: string, enum: [self, inbound, outbound] }
+                        latencyMs: { type: integer, nullable: true }
+                        version: { type: string, nullable: true }
+                        agree: { type: boolean, nullable: true }
+                  metrics:
+                    type: object
+                    description: Selected nsat-core /metrics values (ms, counts)
+                  history:
+                    type: object
+                    description: Ledger closes this gateway witnessed since `since`
+                    properties:
+                      since: { type: integer }
+                      closes:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            num: { type: integer }
+                            closeTime: { type: integer }
+                            seconds: { type: number, nullable: true }
+                            txs: { type: integer, nullable: true }
+                            tps: { type: number, nullable: true }
+                      samples:
+                        type: array
+                        items: { type: object }
+        "503":
+          description: Core node unreachable and no recent reading cached
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
       security: []
   /api/v1/account:
     get:
