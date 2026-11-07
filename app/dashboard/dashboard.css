@@ -1,0 +1,1449 @@
+/* NSAT Explorer dashboard — neon "consensus tunnel" look traced from the
+ * supplied mockup, composed to sit inside ONE 1440×900 desktop screen: the
+ * page hides the site footer, compresses spacing and caps every list at five
+ * rows so nothing important falls below the fold.
+ *
+ * The page is fed by lib/nsatExplorerMock.js (local simulation) and says so,
+ * so no simulated figure can be mistaken for a live chain reading. */
+
+body:has(.nsx) {
+  overflow-x: hidden;
+}
+
+body:has(.nsx) .site-main {
+  padding: 0;
+  max-width: none;
+}
+
+/* The global header/footer stay: the explorer used to hide them and ship its
+ * own brand bar, which is why the site felt like a separate website. Its bar is
+ * now a toolbar (sections + filter + live state) under the shared navigation. */
+body:has(.nsx) .site-header {
+  border-bottom-color: rgba(56, 189, 248, 0.22);
+}
+
+body:has(.nsx) .site-footer {
+  display: none;
+}
+
+.nsx {
+  --fg: #e6f3ff;
+  --dim: #7c93ad;
+  --line: rgba(56, 189, 248, 0.2);
+  --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+
+  position: relative;
+  width: 100%;
+  overflow-x: clip;
+  color: var(--fg);
+  font-size: 13px;
+}
+
+/* The shared page header keeps the same measured column as every other route. */
+.nsx > .page-head {
+  max-width: var(--page-max);
+  margin: 1.25rem auto 0;
+  padding: 0 var(--gutter);
+}
+
+.nsx > .page-head h1 {
+  font-size: clamp(1.75rem, 3vw, 2.35rem);
+}
+
+.nsx-body {
+  position: relative;
+  z-index: 1;
+  /* Same content measure as every other route. */
+  max-width: var(--page-max);
+  margin: 0 auto;
+  padding: 0.75rem var(--gutter) 0.6rem;
+  display: grid;
+  gap: 0.5rem;
+  /* Fill a desktop screen instead of leaving a dead band under the tables:
+   * the extra height is shared between the rows. Content taller than the
+   * viewport simply scrolls as before. */
+  align-content: start;
+}
+
+/* ------------------------------- Top bar -------------------------------- */
+
+.nsx-bar {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.4rem clamp(0.6rem, 1.4vw, 1.1rem);
+  border-bottom: 1px solid rgba(56, 189, 248, 0.2);
+  background: linear-gradient(180deg, rgba(8, 16, 32, 0.96), rgba(5, 10, 20, 0.9));
+  backdrop-filter: blur(18px);
+  /* The bar's gutter follows the shared content cap, not the window edge. */
+  padding-left: max(var(--gutter, 1.25rem), calc((100% - var(--page-max, 1240px)) / 2 + var(--gutter, 1.25rem)));
+  padding-right: max(var(--gutter, 1.25rem), calc((100% - var(--page-max, 1240px)) / 2 + var(--gutter, 1.25rem)));
+}
+
+.nsx-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex: 0 0 auto;
+  color: var(--fg);
+  text-decoration: none;
+}
+
+.nsx-brand:hover {
+  color: var(--fg);
+  text-decoration: none;
+}
+
+.nsx-brand-mark {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  color: #67e8f9;
+  background: linear-gradient(180deg, rgba(56, 189, 248, 0.3), rgba(56, 189, 248, 0.06));
+  border: 1px solid rgba(103, 232, 249, 0.6);
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.45), inset 0 0 10px rgba(56, 189, 248, 0.3);
+}
+
+.nsx-brand-mark svg {
+  width: 16px;
+  height: 16px;
+}
+
+.nsx-brand-text {
+  display: grid;
+  line-height: 1;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.nsx-brand-text em {
+  font-style: normal;
+  font-size: 0.5625rem;
+  font-weight: 500;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: #7dd3fc;
+  margin-top: 0.18rem;
+}
+
+.nsx-menu {
+  display: flex;
+  align-items: center;
+  gap: 0.05rem;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.nsx-menu button {
+  appearance: none;
+  border: 1px solid transparent;
+  background: none;
+  color: #8aa2bb;
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.26rem 0.48rem;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.nsx-menu button:hover {
+  color: #e6f3ff;
+  background: rgba(56, 189, 248, 0.1);
+}
+
+.nsx-menu button.is-active {
+  color: #dff3ff;
+  border-color: rgba(103, 232, 249, 0.65);
+  background: linear-gradient(180deg, rgba(56, 189, 248, 0.3), rgba(56, 189, 248, 0.1));
+  box-shadow: 0 0 14px rgba(56, 189, 248, 0.4);
+}
+
+.nsx-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 1 1 170px;
+  max-width: 250px;
+  min-width: 140px;
+  margin-left: auto;
+  padding: 0.24rem 0.5rem;
+  border-radius: 7px;
+  border: 1px solid rgba(56, 189, 248, 0.26);
+  background: rgba(6, 14, 28, 0.92);
+  color: #6f8aa6;
+}
+
+.nsx-search svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
+.nsx-search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  outline: none;
+}
+
+.nsx-search input::placeholder {
+  color: #5b7793;
+}
+
+.nsx-search:focus-within {
+  border-color: rgba(103, 232, 249, 0.7);
+  box-shadow: 0 0 14px rgba(56, 189, 248, 0.32);
+}
+
+.nsx-status {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex: 0 0 auto;
+}
+
+.nsx-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 0.5625rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #9fb6cc;
+  padding: 0.2rem 0.44rem;
+  border-radius: 999px;
+  border: 1px solid rgba(120, 150, 180, 0.26);
+  background: rgba(12, 22, 40, 0.8);
+  white-space: nowrap;
+}
+
+.nsx-pill i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #4ade80;
+  box-shadow: 0 0 7px #4ade80;
+}
+
+.nsx-pill i.is-amber {
+  background: #fbbf24;
+  box-shadow: 0 0 7px #fbbf24;
+}
+
+.nsx-pill.is-green {
+  color: #86efac;
+  border-color: rgba(74, 222, 128, 0.4);
+  background: rgba(74, 222, 128, 0.1);
+}
+
+.nsx-pill.is-dim {
+  color: #7c93ad;
+  border-style: dashed;
+}
+
+.nsx-pill.is-live {
+  color: #86efac;
+  border-color: rgba(74, 222, 128, 0.45);
+  background: rgba(74, 222, 128, 0.1);
+}
+
+.nsx-pill.is-stale {
+  color: #fcd34d;
+  border-color: rgba(251, 191, 36, 0.45);
+  background: rgba(251, 191, 36, 0.1);
+}
+
+.nsx-pill.is-offline {
+  color: #fca5a5;
+  border-color: rgba(248, 113, 113, 0.45);
+  background: rgba(248, 113, 113, 0.1);
+}
+
+.nsx-pill.is-link {
+  color: #7dd3fc;
+  text-decoration: none;
+}
+
+/* Live/stale/offline notice — shown only when a reading is not fresh. */
+.nsx-banner {
+  position: relative;
+  z-index: 2;
+  padding: 0.32rem clamp(0.8rem, 3vw, 2rem);
+  font-family: var(--mono);
+  font-size: 0.5625rem;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid rgba(56, 189, 248, 0.16);
+}
+
+.nsx-banner.is-amber {
+  color: #fcd34d;
+  background: rgba(251, 191, 36, 0.1);
+  border-bottom-color: rgba(251, 191, 36, 0.35);
+}
+
+.nsx-banner.is-red {
+  color: #fca5a5;
+  background: rgba(248, 113, 113, 0.1);
+  border-bottom-color: rgba(248, 113, 113, 0.35);
+}
+
+.nsx-pill.is-link:hover {
+  color: #e6f3ff;
+  text-decoration: none;
+  border-color: rgba(103, 232, 249, 0.6);
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.32);
+}
+
+/* -------------------------------- KPIs ---------------------------------- */
+
+.nsx-kpis {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 0.35rem;
+  scroll-margin-top: 3.5rem;
+}
+
+.nsx-kpi {
+  --tone: #38bdf8;
+  position: relative;
+  padding: 0.3rem 0.45rem 0.35rem;
+  border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--tone) 34%, transparent);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--tone) 13%, transparent), transparent 80%),
+    rgba(6, 13, 26, 0.94);
+  box-shadow:
+    0 0 12px color-mix(in srgb, var(--tone) 18%, transparent),
+    inset 0 0 18px color-mix(in srgb, var(--tone) 8%, transparent);
+  overflow: hidden;
+}
+
+.nsx-kpi::after {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  background: linear-gradient(90deg, var(--tone), transparent 70%);
+  opacity: 0.6;
+}
+
+.nsx-kpi-label {
+  font-family: var(--mono);
+  font-size: 0.5rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #7f97ae;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nsx-kpi-value {
+  margin-top: 0.08rem;
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  line-height: 1.15;
+  color: color-mix(in srgb, var(--tone) 85%, white);
+  text-shadow: 0 0 12px color-mix(in srgb, var(--tone) 50%, transparent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nsx-kpi-value.is-muted {
+  color: #8aa2bb;
+  text-shadow: none;
+}
+
+.nsx-kpi-unit {
+  font-size: 0.5625rem;
+  font-weight: 500;
+  margin-left: 0.08rem;
+  color: color-mix(in srgb, var(--tone) 70%, white);
+}
+
+.nsx-kpi-spark {
+  height: 16px;
+  margin: 0.1rem -0.1rem 0;
+  opacity: 0.85;
+}
+
+.nsx-spark {
+  display: block;
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--tone) 60%, transparent));
+}
+
+.nsx-kpi-note {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-family: var(--mono);
+  font-size: 0.5rem;
+  letter-spacing: 0.03em;
+  color: #6d859c;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nsx-delta {
+  color: #4ade80;
+}
+
+/* ----------------------------- Flow tunnel ------------------------------ */
+
+.nsx-hall {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 186px minmax(0, 1fr);
+  gap: 0.45rem;
+  padding: 0.5rem 0.5rem 0.45rem;
+  border-radius: 14px;
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  background:
+    radial-gradient(420px 260px at 50% 50%, rgba(74, 222, 128, 0.14), transparent 70%),
+    radial-gradient(560px 280px at 8% 50%, rgba(56, 189, 248, 0.2), transparent 72%),
+    radial-gradient(560px 280px at 92% 50%, rgba(248, 60, 60, 0.17), transparent 72%),
+    rgba(4, 9, 18, 0.9);
+  box-shadow: 0 0 26px rgba(56, 189, 248, 0.1), inset 0 0 54px rgba(56, 189, 248, 0.04);
+  overflow: hidden;
+  scroll-margin-top: 3.5rem;
+}
+
+.nsx-hall-glow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.45;
+  background-image:
+    radial-gradient(1px 1px at 40px 30px, rgba(255, 255, 255, 0.8), transparent),
+    radial-gradient(1px 1px at 140px 90px, rgba(160, 220, 255, 0.7), transparent),
+    radial-gradient(1.4px 1.4px at 210px 40px, rgba(255, 255, 255, 0.6), transparent);
+  background-size: 260px 180px;
+}
+
+.nsx-hall-col {
+  position: relative;
+  display: grid;
+  align-content: start;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.nsx-hall-head {
+  display: grid;
+  gap: 0.05rem;
+  text-align: right;
+  padding-right: 0.15rem;
+}
+
+.nsx-hall-head.is-right {
+  text-align: left;
+  padding-right: 0;
+  padding-left: 0.15rem;
+}
+
+.nsx-hall-title {
+  font-family: var(--mono);
+  font-size: 0.5625rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #7dd3fc;
+  text-shadow: 0 0 10px rgba(56, 189, 248, 0.6);
+}
+
+.nsx-hall-col--right .nsx-hall-title {
+  color: #fca5a5;
+  text-shadow: 0 0 10px rgba(248, 113, 113, 0.6);
+}
+
+.nsx-hall-sub {
+  font-family: var(--mono);
+  font-size: 0.5rem;
+  letter-spacing: 0.04em;
+  color: #6f8aa6;
+}
+
+/* 3D cascade of ledger chips receding toward the gate */
+
+.nsx-cascade {
+  perspective: 900px;
+  display: grid;
+  gap: 0.1rem;
+  /* Room for the leftward recession, or the oldest chip is clipped. */
+  padding-left: 2.6rem;
+  padding-right: 0.25rem;
+}
+
+.nsx-cascade.is-right {
+  padding-right: 2.6rem;
+  padding-left: 0.25rem;
+}
+
+.nsx-chip.is-placeholder {
+  border-style: dashed;
+  opacity: 0.8;
+  box-shadow: none;
+}
+
+.nsx-chip {
+  --i: 0;
+  --tone: #38bdf8;
+  display: grid;
+  gap: 0.02rem;
+  padding: 0.2rem 0.42rem;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--tone) 55%, transparent);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--tone) 24%, transparent), color-mix(in srgb, var(--tone) 6%, transparent)),
+    rgba(4, 10, 20, 0.9);
+  box-shadow:
+    0 0 11px color-mix(in srgb, var(--tone) 34%, transparent),
+    inset 0 0 12px color-mix(in srgb, var(--tone) 15%, transparent);
+  transform: translateX(calc(var(--i) * -11px)) rotateY(9deg) scale(calc(1 - var(--i) * 0.03));
+  transform-origin: right center;
+  opacity: calc(1 - var(--i) * 0.1);
+  transition: transform 0.4s ease, opacity 0.4s ease;
+}
+
+.nsx-chip--right {
+  transform: translateX(calc(var(--i) * 11px)) rotateY(-9deg) scale(calc(1 - var(--i) * 0.03));
+  transform-origin: left center;
+}
+
+.nsx-chip-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.3rem;
+}
+
+.nsx-chip-top b {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  color: color-mix(in srgb, var(--tone) 82%, white);
+  text-shadow: 0 0 9px color-mix(in srgb, var(--tone) 50%, transparent);
+}
+
+.nsx-chip-time {
+  font-family: var(--mono);
+  font-size: 0.5rem;
+  color: #8aa2bb;
+}
+
+.nsx-chip-meta {
+  font-family: var(--mono);
+  font-size: 0.5rem;
+  color: #7890a8;
+}
+
+.nsx-chip-badge {
+  justify-self: start;
+  font-family: var(--mono);
+  font-size: 0.4375rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 0.02rem 0.28rem;
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--tone) 60%, white);
+  border: 1px solid color-mix(in srgb, var(--tone) 50%, transparent);
+  background: color-mix(in srgb, var(--tone) 16%, transparent);
+}
+
+/* Consensus gate */
+
+.nsx-gate {
+  position: relative;
+  display: grid;
+  grid-template-columns: 8px 1fr 8px;
+  gap: 0.2rem;
+  padding: 0.4rem 0.1rem;
+  border-radius: 11px;
+  border: 1px solid rgba(74, 222, 128, 0.55);
+  background:
+    radial-gradient(circle at 50% 50%, rgba(74, 222, 128, 0.22), transparent 68%),
+    rgba(3, 16, 12, 0.85);
+  box-shadow:
+    0 0 24px rgba(74, 222, 128, 0.32),
+    inset 0 0 30px rgba(74, 222, 128, 0.12);
+}
+
+/* Vertical data-stream texture inside the gate, like the mockup's particle
+ * column — pure decoration, no interaction. */
+.nsx-gate::before {
+  content: '';
+  position: absolute;
+  inset: 8px 14px;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(74, 222, 128, 0.22) 0 1px,
+    transparent 1px 6px
+  );
+  opacity: 0.32;
+  mask-image: linear-gradient(180deg, transparent, #000 24%, #000 76%, transparent);
+}
+
+.nsx-gate-rail {
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(74, 222, 128, 0.15), #4ade80, rgba(74, 222, 128, 0.15));
+  box-shadow: 0 0 12px rgba(74, 222, 128, 0.8);
+  opacity: 0.85;
+}
+
+.nsx-gate-inner {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 0.05rem;
+  text-align: center;
+  padding: 0 0.1rem;
+}
+
+.nsx-gate-title {
+  font-family: var(--mono);
+  font-size: 0.5rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #86efac;
+  text-shadow: 0 0 9px rgba(74, 222, 128, 0.8);
+}
+
+.nsx-gate-label {
+  font-family: var(--mono);
+  font-size: 0.4375rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: #4b7a5f;
+  margin-top: 0.3rem;
+}
+
+.nsx-gate-clock {
+  font-family: var(--mono);
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #ecfdf5;
+  text-shadow: 0 0 18px rgba(74, 222, 128, 0.9), 0 0 36px rgba(74, 222, 128, 0.45);
+  line-height: 1.15;
+}
+
+.nsx-gate-bar {
+  width: 88%;
+  height: 3px;
+  margin: 0.25rem 0 0.35rem;
+  border-radius: 999px;
+  background: rgba(74, 222, 128, 0.16);
+  overflow: hidden;
+}
+
+.nsx-gate-bar span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #4ade80, #a7f3d0);
+  box-shadow: 0 0 9px rgba(74, 222, 128, 0.9);
+  transition: width 0.12s linear;
+}
+
+.nsx-gate-ledger {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  color: #d9fbe6;
+}
+
+.nsx-gate-tx {
+  font-family: var(--mono);
+  font-size: 0.4375rem;
+  letter-spacing: 0.05em;
+  color: #6f8f7c;
+}
+
+.nsx-gate-verify {
+  margin-top: 0.3rem;
+  font-family: var(--mono);
+  font-size: 0.4375rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #4ade80;
+  border: 1px solid rgba(74, 222, 128, 0.5);
+  border-radius: 999px;
+  padding: 0.04rem 0.4rem;
+  background: rgba(74, 222, 128, 0.12);
+  animation: nsx-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes nsx-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+/* Lifecycle strip */
+
+.nsx-lifecycle {
+  grid-column: 1 / -1;
+  order: 5;
+  display: grid;
+  grid-template-columns: auto minmax(110px, 1fr);
+  align-items: center;
+  gap: 0.25rem 0.6rem;
+  margin-top: 0.35rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid rgba(56, 189, 248, 0.14);
+}
+
+.nsx-lifecycle-tag {
+  font-family: var(--mono);
+  font-size: 0.4375rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #7f97ae;
+}
+
+.nsx-lifecycle-bar {
+  display: flex;
+  gap: 2px;
+  height: 5px;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.nsx-lifecycle-seg {
+  display: block;
+  height: 100%;
+}
+
+.nsx-lifecycle-legend {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+  font-family: var(--mono);
+  font-size: 0.4375rem;
+  letter-spacing: 0.05em;
+  color: #7f97ae;
+}
+
+.nsx-lifecycle-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.nsx-lifecycle-legend i,
+.nsx-node i,
+.nsx-alert i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* Dots only — never paint a bare .is-* span, those are also used as text
+ * colours in the chart footers. */
+i.is-blue { background: #38bdf8; box-shadow: 0 0 7px #38bdf8; }
+i.is-green { background: #4ade80; box-shadow: 0 0 7px #4ade80; }
+i.is-teal { background: #2dd4bf; box-shadow: 0 0 7px #2dd4bf; }
+i.is-amber { background: #fbbf24; box-shadow: 0 0 7px #fbbf24; }
+i.is-red { background: #f87171; box-shadow: 0 0 7px #f87171; }
+i.is-violet { background: #a855f7; box-shadow: 0 0 7px #a855f7; }
+i.is-dim { background: #64748b; }
+
+.nsx-chart-foot .is-blue { color: #7dd3fc; }
+.nsx-chart-foot .is-green { color: #86efac; }
+.nsx-chart-foot .is-violet { color: #d8b4fe; }
+.nsx-chart-foot .is-dim { color: #64748b; }
+
+.nsx-lifecycle-seg.is-blue {
+  background: linear-gradient(90deg, #0ea5e9, #38bdf8);
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.8);
+}
+
+.nsx-lifecycle-seg.is-green {
+  background: linear-gradient(90deg, #4ade80, #16a34a);
+  box-shadow: 0 0 10px rgba(74, 222, 128, 0.8);
+}
+
+.nsx-lifecycle-seg.is-red {
+  background: linear-gradient(90deg, #fbbf24, #ef4444);
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.8);
+}
+
+.nsx-lifecycle-seg.is-dim {
+  background: rgba(120, 150, 180, 0.22);
+}
+
+/* -------------------------------- Cards --------------------------------- */
+
+.nsx-card {
+  background: linear-gradient(180deg, rgba(12, 23, 42, 0.92), rgba(5, 11, 22, 0.94));
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  border-radius: 11px;
+  box-shadow: 0 0 18px rgba(56, 189, 248, 0.09), inset 0 0 30px rgba(56, 189, 248, 0.03);
+  padding: 0.4rem 0.55rem 0.45rem;
+  scroll-margin-top: 3.5rem;
+  min-width: 0;
+}
+
+.nsx-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.22rem;
+  min-height: 1.05rem;
+}
+
+.nsx-card-head h2 {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.5625rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #cfe9ff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nsx-card-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-family: var(--mono);
+  font-size: 0.5rem;
+  letter-spacing: 0.05em;
+  color: #7f97ae;
+  white-space: nowrap;
+}
+
+.nsx-live-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #4ade80;
+  box-shadow: 0 0 7px #4ade80;
+}
+
+/* -------------------------------- Charts -------------------------------- */
+
+.nsx-charts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.35rem;
+  scroll-margin-top: 3.5rem;
+}
+
+.nsx-chart {
+  display: block;
+  width: 100%;
+  height: 64px;
+  filter: drop-shadow(0 0 5px rgba(56, 189, 248, 0.32));
+}
+
+/* Shown until this tab has two readings to draw a line between. */
+.nsx-chart-empty {
+  display: grid;
+  place-items: center;
+  height: 64px;
+  border-radius: 7px;
+  border: 1px dashed rgba(56, 189, 248, 0.22);
+  background: rgba(6, 14, 28, 0.5);
+  font-family: var(--mono);
+  font-size: 0.5rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6f8aa6;
+}
+
+.nsx-chart-empty span {
+  color: #4f6a85;
+}
+
+.nsx-chart-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.4rem;
+  margin-top: 0.2rem;
+  font-family: var(--mono);
+  font-size: 0.5rem;
+  letter-spacing: 0.04em;
+  color: #7f97ae;
+}
+
+/* -------------------------------- Tables -------------------------------- */
+
+.nsx-tables {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.35rem;
+  scroll-margin-top: 3.5rem;
+}
+
+.nsx-table:nth-child(1) { border-color: rgba(56, 189, 248, 0.32); box-shadow: 0 0 18px rgba(56, 189, 248, 0.14); }
+.nsx-table:nth-child(2) { border-color: rgba(168, 85, 247, 0.28); box-shadow: 0 0 18px rgba(168, 85, 247, 0.12); }
+.nsx-table:nth-child(3) { border-color: rgba(45, 212, 191, 0.28); box-shadow: 0 0 18px rgba(45, 212, 191, 0.12); }
+.nsx-table:nth-child(4) { border-color: rgba(251, 191, 36, 0.26); box-shadow: 0 0 18px rgba(251, 191, 36, 0.11); }
+
+.nsx-scroll {
+  overflow-x: auto;
+}
+
+.nsx-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--mono);
+  font-size: 0.5625rem;
+}
+
+.nsx-table th {
+  text-align: left;
+  font-weight: 500;
+  font-size: 0.4375rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: #6f8aa6;
+  padding: 0.12rem 0.3rem;
+  border-bottom: 1px solid rgba(56, 189, 248, 0.15);
+  white-space: nowrap;
+}
+
+.nsx-table td {
+  padding: 0.16rem 0.3rem;
+  border-bottom: 1px solid rgba(56, 189, 248, 0.06);
+  color: #c6dcf0;
+  white-space: nowrap;
+}
+
+.nsx-table .is-dim,
+.nsx-table td.is-dim {
+  color: #7b93ad;
+}
+
+.nsx-table .is-num {
+  color: #e6f3ff;
+}
+
+.nsx-addr {
+  display: block;
+  max-width: 116px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nsx-table tbody tr:hover td {
+  background: rgba(56, 189, 248, 0.07);
+}
+
+.nsx-empty {
+  white-space: normal;
+  color: #7f97ae;
+  padding: 0.5rem 0.3rem;
+}
+
+.nsx-badge {
+  --tone: #38bdf8;
+  display: inline-block;
+  font-size: 0.4375rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  padding: 0.02rem 0.26rem;
+  border-radius: 999px;
+  color: var(--tone);
+  border: 1px solid color-mix(in srgb, var(--tone) 46%, transparent);
+  background: color-mix(in srgb, var(--tone) 15%, transparent);
+}
+
+.nsx-badge.is-blue { --tone: #7dd3fc; }
+.nsx-badge.is-teal { --tone: #5eead4; }
+.nsx-badge.is-amber { --tone: #fcd34d; }
+.nsx-badge.is-red { --tone: #fca5a5; }
+
+.nsx-node {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.nsx-alert {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  white-space: normal;
+  font-size: 0.5313rem;
+  line-height: 1.3;
+}
+
+.nsx-tabs {
+  display: inline-flex;
+  gap: 0.05rem;
+  padding: 0.06rem;
+  border-radius: 5px;
+  border: 1px solid rgba(251, 191, 36, 0.22);
+  background: rgba(251, 191, 36, 0.06);
+}
+
+.nsx-tabs button {
+  appearance: none;
+  border: none;
+  background: none;
+  font-family: var(--mono);
+  font-size: 0.4375rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #9a8257;
+  padding: 0.08rem 0.26rem;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.nsx-tabs button:hover {
+  color: #fde68a;
+}
+
+.nsx-tabs button.is-active {
+  color: #1a1206;
+  background: #fbbf24;
+  box-shadow: 0 0 8px rgba(251, 191, 36, 0.55);
+}
+
+/* -------------------------------- Tools --------------------------------- */
+
+.nsx-tools {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.3rem;
+}
+
+.nsx-tools a {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  padding: 0.22rem 0.45rem;
+  border-radius: 7px;
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  background: rgba(56, 189, 248, 0.05);
+  color: #cfe9ff;
+  text-decoration: none;
+  overflow: hidden;
+}
+
+.nsx-tools a:hover {
+  text-decoration: none;
+  color: #fff;
+  border-color: rgba(103, 232, 249, 0.65);
+  box-shadow: 0 0 14px rgba(56, 189, 248, 0.3);
+}
+
+.nsx-tools b {
+  font-family: var(--mono);
+  font-size: 0.5625rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.nsx-tools span {
+  font-size: 0.5rem;
+  color: #7f97ae;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ------------------------------ Foot strip ------------------------------- */
+
+.nsx-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.3rem 0.2rem 0;
+  border-top: 1px solid rgba(56, 189, 248, 0.14);
+  font-family: var(--mono);
+  font-size: 0.5rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #5f7a92;
+  flex-wrap: wrap;
+}
+
+.nsx-foot-brand {
+  color: #7dd3fc;
+  text-shadow: 0 0 10px rgba(56, 189, 248, 0.4);
+}
+
+.nsx-foot-brand em {
+  font-style: normal;
+  color: #4ade80;
+  margin: 0 0.15rem;
+}
+
+.nsx-foot-note {
+  color: #5f7a92;
+}
+
+.nsx-foot-note a {
+  color: #9fb6cc;
+}
+
+/* ------------------------------- Tones ---------------------------------- */
+
+.tone-blue { --tone: #38bdf8; }
+.tone-cyan { --tone: #22d3ee; }
+.tone-teal { --tone: #2dd4bf; }
+.tone-green { --tone: #4ade80; }
+.tone-yellow { --tone: #facc15; }
+.tone-amber { --tone: #fbbf24; }
+.tone-orange { --tone: #fb923c; }
+.tone-red { --tone: #f87171; }
+.tone-crimson { --tone: #f43f5e; }
+.tone-violet { --tone: #a855f7; }
+.tone-pink { --tone: #f472b6; }
+.tone-slate { --tone: #64748b; }
+.tone-ok { --tone: #4ade80; }
+.tone-warn { --tone: #fbbf24; }
+.tone-info { --tone: #38bdf8; }
+
+/* ----------------------------- Responsive -------------------------------
+ * Four layout tiers, widest first:
+ *   ≥1181px  desktop  — everything on one screen (the mockup composition)
+ *   ≤1180px  laptop   — same order, two-up rows
+ *   ≤1080px  tablet   — top bar wraps, tunnel stacks vertically
+ *   ≤760px   phone    — single column, touch-sized rows
+ *   ≤430px   small phone — same column, tighter chrome
+ * Plus a height tier so 1280×800 laptops keep the one-screen promise.
+ */
+
+/* Shorter screens (1280×800 laptops) compress the same layout instead of
+ * pushing the last row below the fold. Desktop only: phones scroll anyway. */
+@media (max-height: 860px) and (min-width: 761px) {
+  .nsx-body {
+    gap: 0.35rem;
+  }
+  .nsx-chart {
+    height: 52px;
+  }
+  .nsx-kpi-spark {
+    height: 11px;
+  }
+  .nsx-chip {
+    padding: 0.15rem 0.38rem;
+  }
+  .nsx-table td {
+    padding: 0.11rem 0.28rem;
+  }
+  .nsx-gate-clock {
+    font-size: 1.1rem;
+  }
+}
+
+/* Keep the eight-KPI / four-chart row intact down to 1180px, so a 1280-wide
+ * laptop still gets the whole dashboard on one screen. */
+@media (max-width: 1180px) {
+  .nsx-kpis {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .nsx-charts,
+  .nsx-tables,
+  .nsx-tools {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Tablets and narrow windows: the bar wraps instead of clipping the nav, and
+ * the tunnel becomes a vertical story (gate first, then in and out flows). */
+@media (max-width: 1080px) {
+  .nsx-bar {
+    flex-wrap: wrap;
+    gap: 0.45rem;
+  }
+  .nsx-menu {
+    order: 2;
+    /* Zero basis lets the nav shrink and scroll on the first row instead of
+     * forcing the status pills onto a row of their own. */
+    flex: 1 1 0;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .nsx-menu::-webkit-scrollbar {
+    display: none;
+  }
+  .nsx-status {
+    order: 3;
+    margin-left: auto;
+  }
+  .nsx-search {
+    order: 4;
+    flex: 1 1 100%;
+    max-width: none;
+    margin-left: 0;
+  }
+  .nsx-hall {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.55rem;
+  }
+  .nsx-gate {
+    order: 1;
+    /* Centred portal rather than a stretched band, so the stacked tunnel still
+     * reads as a gate the flows pass through. */
+    justify-self: center;
+    width: min(100%, 430px);
+    padding: 0.8rem 0.1rem;
+  }
+  .nsx-hall-col--left {
+    order: 2;
+  }
+  .nsx-hall-col--right {
+    order: 3;
+  }
+  .nsx-hall-head,
+  .nsx-hall-head.is-right {
+    text-align: left;
+    padding: 0;
+  }
+  .nsx-cascade,
+  .nsx-cascade.is-right {
+    perspective: none;
+    padding-left: 0;
+    padding-right: 0;
+  }
+  .nsx-chip,
+  .nsx-chip--right {
+    transform: none;
+    opacity: 1;
+    transform-origin: center;
+  }
+}
+
+/* Below 900px the nav needs more room than the brand and pill row leaves, so
+ * it takes a full-width scrolling strip of its own (all items visible). */
+@media (max-width: 900px) {
+  .nsx-menu {
+    order: 5;
+    flex: 1 1 100%;
+    margin: 0 -0.5rem;
+    padding: 0.05rem 0.5rem 0.15rem;
+  }
+  .nsx-menu button {
+    padding: 0.38rem 0.5rem;
+    font-size: 0.5938rem;
+  }
+  .nsx-search {
+    order: 6;
+  }
+}
+
+/* Phones: a single readable column. Charts keep some height, tables scroll
+ * horizontally inside their card, and every tappable row grows. */
+@media (max-width: 760px) {
+  .nsx {
+    font-size: 14px;
+  }
+  .nsx-body {
+    min-height: 0;
+    align-content: start;
+    gap: 0.45rem;
+    padding: 0.45rem 0.5rem 0.7rem;
+  }
+  .nsx-menu {
+    margin: 0 -0.5rem;
+    padding: 0.05rem 0.5rem 0.15rem;
+  }
+  .nsx-menu button {
+    padding: 0.42rem 0.55rem;
+    font-size: 0.625rem;
+  }
+  .nsx-status {
+    gap: 0.25rem;
+  }
+  .nsx-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.4rem;
+  }
+  .nsx-kpi {
+    padding: 0.45rem 0.55rem 0.5rem;
+    border-radius: 10px;
+  }
+  .nsx-kpi-label {
+    font-size: 0.5625rem;
+  }
+  .nsx-kpi-value {
+    font-size: 0.9375rem;
+  }
+  .nsx-kpi-unit {
+    font-size: 0.625rem;
+  }
+  .nsx-kpi-spark {
+    height: 20px;
+  }
+  .nsx-kpi-note {
+    font-size: 0.5625rem;
+  }
+  .nsx-charts,
+  .nsx-tables,
+  .nsx-tools {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .nsx-chart {
+    height: 68px;
+  }
+  .nsx-card {
+    padding: 0.5rem 0.55rem 0.55rem;
+    border-radius: 10px;
+  }
+  .nsx-card-head h2 {
+    font-size: 0.625rem;
+  }
+  .nsx-card-hint {
+    font-size: 0.5625rem;
+  }
+  .nsx-tabs button {
+    padding: 0.3rem 0.42rem;
+    font-size: 0.5rem;
+  }
+  .nsx-table table {
+    font-size: 0.625rem;
+  }
+  .nsx-table th {
+    padding: 0.3rem 0.35rem;
+    font-size: 0.5rem;
+  }
+  .nsx-table td {
+    padding: 0.36rem 0.35rem;
+  }
+  .nsx-badge {
+    font-size: 0.5rem;
+    padding: 0.1rem 0.3rem;
+  }
+  .nsx-addr {
+    max-width: 100%;
+  }
+  .nsx-tools a {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.12rem;
+    padding: 0.45rem 0.55rem;
+  }
+  .nsx-tools b {
+    font-size: 0.625rem;
+  }
+  .nsx-tools span {
+    font-size: 0.5625rem;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+  }
+  .nsx-gate {
+    padding: 0.75rem 0.1rem;
+  }
+  .nsx-gate-clock {
+    font-size: 1.5rem;
+  }
+  .nsx-gate-inner {
+    gap: 0.12rem;
+  }
+  .nsx-chip {
+    padding: 0.35rem 0.5rem;
+  }
+  .nsx-chip-top b {
+    font-size: 0.6875rem;
+  }
+  .nsx-chip-time,
+  .nsx-chip-meta {
+    font-size: 0.5625rem;
+  }
+  .nsx-lifecycle {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.3rem;
+  }
+  .nsx-lifecycle-bar {
+    height: 7px;
+  }
+  .nsx-lifecycle-legend {
+    gap: 0.3rem 0.9rem;
+    font-size: 0.5rem;
+  }
+  .nsx-foot {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.3rem;
+    line-height: 1.55;
+    padding-top: 0.45rem;
+  }
+  .nsx-foot-note {
+    text-transform: none;
+    letter-spacing: 0.02em;
+  }
+}
+
+/* Small phones: keep the two KPI columns but shrink the chrome, so the values
+ * (not the labels) stay the loudest thing on screen. */
+@media (max-width: 430px) {
+  .nsx-kpis {
+    gap: 0.35rem;
+  }
+  .nsx-kpi {
+    padding: 0.4rem 0.45rem 0.45rem;
+  }
+  .nsx-kpi-value {
+    font-size: 0.8125rem;
+  }
+  .nsx-kpi-spark {
+    height: 17px;
+  }
+  .nsx-brand-text {
+    font-size: 0.72rem;
+  }
+  .nsx-pill {
+    font-size: 0.5rem;
+    padding: 0.18rem 0.36rem;
+  }
+  /* Both of these repeat something already on screen (the brand links home,
+   * the latency is simulated), so dropping them keeps the top row on one
+   * line without hiding the network or the simulated-data label. */
+  .nsx-pill.is-link,
+  .nsx-status .nsx-pill:nth-of-type(2) {
+    display: none;
+  }
+  .nsx-gate-clock {
+    font-size: 1.35rem;
+  }
+  .nsx-tabs {
+    width: 100%;
+    justify-content: space-between;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nsx-gate-verify {
+    animation: none;
+  }
+  .nsx-chip,
+  .nsx-gate-bar span {
+    transition: none;
+  }
+}

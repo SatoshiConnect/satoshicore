@@ -3,9 +3,19 @@ import Header from '../components/Header';
 import Footer from '../components/Footer';
 
 export const metadata = {
-  title: 'SatoshiCore — Web Platform',
+  title: 'SatoshiCore — NSAT wallet & explorer',
   description:
-    'SatoshiCore Web Platform v24.0. Static web platform for the SatoshiCore ecosystem.'
+    'NSAT, the coin of the SatoshiCore chain — a working, non-commercial study '
+    + 'project with 0 decimals and 10 NSAT per operation. Web wallet, block '
+    + 'explorer and live network status.'
+};
+
+// Same chrome colors as the iPhone app: #F2F2F7 light, #1C1C1E dark.
+export const viewport = {
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#f2f2f7' },
+    { media: '(prefers-color-scheme: dark)', color: '#1c1c1e' }
+  ]
 };
 
 // Site-wide Content-Security-Policy (<meta http-equiv> is honored only when
@@ -17,13 +27,35 @@ export const metadata = {
 //  - frame-ancestors is header-only (ignored in meta delivery) and belongs
 //    to the gateway's HTTP responses, not here.
 const DEV_EVAL = process.env.NODE_ENV === 'development' ? "'unsafe-eval'" : '';
+
+// https: covers any TLS origin (the production gateway included). Plain-HTTP
+// endpoints are listed explicitly, so a LAN or loopback gateway works in dev
+// without widening the policy to every http origin.
+function originOf(value) {
+  try {
+    return new URL(value || '').origin;
+  } catch {
+    return null;
+  }
+}
+const PLAIN_HTTP_ORIGINS = [
+  originOf(process.env.NEXT_PUBLIC_API_GATEWAY_URL),
+  originOf(process.env.NEXT_PUBLIC_INDEXER_URL),
+  'http://127.0.0.1:8787',
+  'http://127.0.0.1:8789',
+  'http://localhost:8787',
+  'http://localhost:8789'
+]
+  .filter((origin) => origin && origin.startsWith('http://'))
+  .join(' ');
+
 const SITE_CSP = [
   "default-src 'self'",
   `script-src 'self' 'unsafe-inline' ${DEV_EVAL}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data:",
   "font-src 'self'",
-  "connect-src 'self' https: http://127.0.0.1:8790 http://localhost:8790 http://127.0.0.1:8787",
+  `connect-src 'self' https: ${PLAIN_HTTP_ORIGINS}`.trim(),
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'none'",
