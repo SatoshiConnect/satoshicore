@@ -2,14 +2,14 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import {
-  isGatewayConfigured, EXPECTED_NETWORK_ID,
+  isGatewayConfigured, isIndexerConfigured, waitForConfirmation, EXPECTED_NETWORK_ID,
   verifyNetworkIdentity, getChainInfo, getAccount,
   submitSignedTransaction, estimateFee, formatExactBalance,
 } from '../lib/nsatClient';
 import {
   keystoreCreate, keystoreImport, keystoreUnlock, keystoreList,
   keystoreExport, keystoreRestore,
-  buildSignedTx, waitSeqReached, historyLoad, historyPush,
+  buildSignedTx, historyLoad, historyPush, historyPatch,
 } from '../lib/nsatWallet';
 import { decodeSeed } from '../lib/nsatCodec';
 import { startBalanceRefresh } from '../lib/walletBalanceRefresh.mjs';
@@ -64,6 +64,7 @@ export default function WalletPanel() {
   const [amount, setAmount] = useState('');
   const [review, setReview] = useState(null);    // { amount, fee, total }
   const [history, setHistory] = useState([]);
+  const [checkingHash, setCheckingHash] = useState(null);
 
   const notify = (text, kind = 'ok') => {
     setToast({ text, kind });
@@ -143,6 +144,43 @@ export default function WalletPanel() {
     if (!active?.pubkey) return undefined;
     return startBalanceRefresh(active.pubkey, refreshBalance, window);
   }, [active?.pubkey, refreshBalance]);
+
+  async function recheckTransfer(entry) {
+    if (!active?.name || !entry?.txhash || checkingHash) return;
+    if (!isIndexerConfigured()) {
+      notify('No indexer configured — this transaction cannot be verified yet.', 'err');
+      return;
+    }
+    setCheckingHash(entry.txhash);
+    try {
+      const verdict = await waitForConfirmation(entry.txhash, { timeoutMs: 8_000 });
+      if (['confirmed', 'failed', 'not_found'].includes(verdict.status)) {
+        setHistory(historyPatch(active.name, entry.txhash, {
+          status: verdict.status, ledger: verdict.ledger,
+          ledger_hash: verdict.ledger_hash, result_code: verdict.result_code,
+          evidence: verdict.evidence, confirmed_at: verdict.confirmation_time,
+          reason: verdict.reason,
+        }));
+        notify(verdict.status === 'confirmed'
+          ? `Confirmed on ledger ${verdict.ledger} (${verdict.result_code}).`
+          : verdict.status === 'failed'
+            ? `Ledger ${verdict.ledger} reports failure: ${verdict.result_code}.`
+            : 'The caught-up indexer found no ledger result for this hash.',
+        verdict.status === 'confirmed' ? 'ok' : 'err');
+      } else {
+        historyPatch(active.name, entry.txhash, {
+          status: 'unconfirmed', ledger: null, ledger_hash: null,
+          evidence: verdict.evidence || 'none', reason: verdict.reason || verdict.status,
+        });
+        setHistory(historyLoad(active.name));
+        notify(`Still ${verdict.status}${verdict.reason ? ` (${verdict.reason})` : ''}; no exact ledger result yet.`, 'warn');
+      }
+    } catch (err) {
+      notify(`Could not verify this transaction: ${err.message}`, 'err');
+    } finally {
+      setCheckingHash(null);
+    }
+  }
 
   // ---------------- wallet actions (logic unchanged from the audited build) ----
   async function doCreate(e) {
@@ -234,20 +272,18 @@ export default function WalletPanel() {
         setBusy(false);
         return false;
       }
-      let prevBalance = null;
       const signed = await buildSignedTx({
         seed32: active.seed32,
         netPassphrase: EXPECTED_NETWORK_ID,   // the VERIFIED identity, exact
         seqFetch: async () => {
-          const d = await getAccount(active.pubkey);
-          prevBalance = d.balance128 ?? (d.balance != null ? String(d.balance) : null);
-          return d;
+          return getAccount(active.pubkey);
         },
         destG: dest.trim(),
         amount: amount.trim(),
         fee: baseFee,
         create: createDest,
       });
+      const submittedAt = Math.floor(Date.now() / 1000);
       const r = await submitSignedTransaction(signed.envelopeBase64);
       // Core /tx statuses (verified in nsat-core TransactionQueue.cpp):
       //   PENDING | DUPLICATE | ERROR | TRY_AGAIN_LATER | FILTERED
@@ -271,44 +307,30 @@ export default function WalletPanel() {
           r.status === 'DUPLICATE' ? 'warn' : 'err');
         return true;
       }
-      notify('Submitted — waiting for finalization…', 'warn');
-      // Finalization: the account sequence only moves when the transaction is
-      // APPLIED in a closed ledger.
-      const ok = await waitSeqReached(
-        async () => {
-          const d = await getAccount(active.pubkey);
-          return Number(d.seqnum ?? d.sequence ?? 0);
-        },
-        signed.seq, 90000, 2000);
-      if (!ok) { notify('Not finalized within 90 s — check Activity later.', 'warn'); return true; }
-      // Ledger truth: seq-advance also happens on a FAILED operation (fee
-      // charged, nothing moved). CONFIRMED requires the exact debit.
-      const afterD = await getAccount(active.pubkey).catch(() => null);
-      const afterBal = afterD?.status === 'ok'
-        ? BigInt(afterD.balance ?? afterD.balance128) : null;
-      const debited = prevBalance != null && afterBal != null
-        && BigInt(prevBalance) - afterBal === BigInt(amount) + BigInt(signed.fee);
-      const li = await getChainInfo().catch(() => null);
-      const liLedger = li?.info?.ledger ?? null;
-      if (!debited) {
-        historyPush(active.name, {
-          time: new Date().toLocaleString(), dir: 'sent', to: dest.trim(),
-          amount: amount.trim(), fee: signed.fee, txhash: signed.txHashHex,
-          ledger: liLedger?.num, ledger_hash: liLedger?.hash, status: 'op_failed_on_chain',
-        });
-        setHistory(historyLoad(active.name));
-        notify('Finalized but the operation FAILED on-chain — only the fee was charged. No funds moved.', 'err');
-        return true;
-      }
-      historyPush(active.name, {
+      notify('Submitted — checking this exact transaction hash…', 'warn');
+      const verdict = await waitForConfirmation(signed.txHashHex, { submittedAt });
+      const base = {
         time: new Date().toLocaleString(), dir: 'sent', to: dest.trim(),
         amount: amount.trim(), fee: signed.fee, txhash: signed.txHashHex,
-        ledger: liLedger?.num, ledger_hash: liLedger?.hash, status: 'confirmed',
-      });
+      };
+      historyPush(active.name, verdict.status === 'confirmed' || verdict.status === 'failed'
+        ? { ...base, ledger: verdict.ledger, ledger_hash: verdict.ledger_hash,
+          status: verdict.status, result_code: verdict.result_code,
+          evidence: verdict.evidence, confirmed_at: verdict.confirmation_time }
+        : { ...base, ledger: null, ledger_hash: null, status: 'unconfirmed',
+          reason: verdict.reason || verdict.status });
       setHistory(historyLoad(active.name));
-      notify(`Confirmed on ledger ${liLedger?.num ?? '(latest)'}.`, 'ok');
-      setAmount(''); setDest(''); setReview(null);
+      notify(verdict.status === 'confirmed'
+        ? `Confirmed on ledger ${verdict.ledger} (${verdict.result_code}).`
+        : verdict.status === 'failed'
+          ? `Included on ledger ${verdict.ledger} but failed: ${verdict.result_code}.`
+          : `Not confirmed yet (${verdict.status}${verdict.reason ? `: ${verdict.reason}` : ''}).`,
+      verdict.status === 'confirmed' ? 'ok' : verdict.status === 'failed' ? 'err' : 'warn');
+      if (verdict.status === 'confirmed' || verdict.status === 'failed') {
+        setAmount(''); setDest(''); setReview(null);
+      }
       void refreshBalance(active.pubkey);
+      void verifyNetwork();
       return true;
     } catch (err) { notify(String(err.message || err), 'err'); return false; }
     finally { setBusy(false); }
@@ -423,7 +445,8 @@ export default function WalletPanel() {
           {page === 'shielded' && <ShieldedGatePage />}
 
           {page === 'activity' && (
-            <ActivityPage history={history} activeName={active?.name} />
+            <ActivityPage history={history} activeName={active?.name}
+              checkingHash={checkingHash} onRecheck={recheckTransfer} />
           )}
 
           {page === 'settings' && (
@@ -712,19 +735,22 @@ function ShieldedGatePage() {
 }
 
 /* -------------------------------- Activity ------------------------------- */
-function ActivityPage({ history, activeName }) {
+function ActivityPage({ history, activeName, checkingHash, onRecheck }) {
   return (
     <section className="nw-card">
       <h2 style={{ color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         {activeName ? `History — ${activeName}` : 'History'}
-        <span className="nw-badge info">locally verified · not a chain indexer</span>
+        <span className="nw-badge info">ledger result checked by exact hash</span>
       </h2>
       {history.length === 0 ? (
         <EmptyState
-          text={'No verified transactions yet.\nThe list records transfers this app signed and confirmed on-chain.'} />
+          text={'No transactions recorded yet.\nOlder entries may need exact-hash verification.'} />
       ) : (
         <ul className="nw-tx-list" style={{ marginTop: 10 }}>
-          {history.map((h, i) => (
+          {history.map((h, i) => {
+            const needsVerification = !h.evidence && ['confirmed', 'op_failed_on_chain'].includes(h.status);
+            const canRecheck = h.status === 'unconfirmed' || needsVerification;
+            return (
             <li key={i} className="nw-tx-row">
               <div className={'nw-tx-dir ' + (h.dir === 'sent' ? 'sent' : 'rec')}>
                 {h.dir === 'sent' ? '↗' : '↙'}</div>
@@ -732,17 +758,23 @@ function ActivityPage({ history, activeName }) {
                 <div>
                   {h.dir === 'sent' ? 'To' : 'Received'}{' '}
                   <span className="nw-mono">{shortAddr(h.to)}</span>{' '}
-                  <span className={'nw-badge ' + (h.status === 'confirmed' ? 'ok' : 'err')}>
-                    {h.status}</span>
+                  <span className={'nw-badge ' + (h.status === 'confirmed' && h.evidence ? 'ok' : h.status === 'unconfirmed' || needsVerification ? 'warn' : 'err')}>
+                    {needsVerification ? 'needs verification' : h.status}</span>
                 </div>
                 <div className="nw-small nw-dim">{h.time} · fee {h.fee}</div>
+                {h.txhash && canRecheck && (
+                  <button className="nw-chip-btn" disabled={checkingHash === h.txhash || Boolean(checkingHash)}
+                    aria-label={`Verify transaction ${h.txhash}`} onClick={() => onRecheck(h)}>
+                    {checkingHash === h.txhash ? 'Checking…' : 'Verify transaction'}
+                  </button>
+                )}
               </div>
               <div style={{ textAlign: 'right' }}>
                 {h.amount} NSAT
                 {h.ledger && <div className="nw-small nw-dim">ledger {h.ledger}</div>}
               </div>
             </li>
-          ))}
+          );})}
         </ul>
       )}
     </section>
