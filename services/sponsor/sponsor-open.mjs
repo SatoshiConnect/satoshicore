@@ -45,9 +45,15 @@ const LEDGER_FILE = process.env.NSAT_SPONSOR_LEDGER_FILE || '';
 const SEED_FILE = process.env.NSAT_SPONSOR_SEED_FILE || '';
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+class CliError extends Error {
+  constructor(message, code) {
+    super(message);
+    this.code = code;
+  }
+}
+
 function fail(message, code = 1) {
-  process.stderr.write(JSON.stringify({ ok: false, error: message }) + '\n');
-  process.exit(code);
+  throw new CliError(message, code);
 }
 
 function parseArgs(argv) {
@@ -79,18 +85,61 @@ function getJson(pathname) {
   });
 }
 
-function readLedger() {
-  if (!LEDGER_FILE) return [];
-  let raw;
-  try {
-    raw = fs.readFileSync(LEDGER_FILE, 'utf8');
-  } catch (err) {
-    if (err.code === 'ENOENT') return [];
-    throw err;
+function readLedger(fd) {
+  const raw = fs.readFileSync(fd, 'utf8');
+  return raw.split('\n').filter(Boolean).map((line, index) => {
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      fail(`sponsor ledger has invalid JSON on line ${index + 1}`, 5);
+    }
+    if (!entry || !Number.isSafeInteger(entry.at) || entry.at <= 0 ||
+        typeof entry.reserve_stroops !== 'string' ||
+        !/^[0-9]+$/.test(entry.reserve_stroops)) {
+      fail(`sponsor ledger has invalid accounting data on line ${index + 1}`, 5);
+    }
+    return entry;
+  });
+}
+
+async function withLockedLedger(callback) {
+  if (!LEDGER_FILE) {
+    fail('NSAT_SPONSOR_LEDGER_FILE is required for daily budget enforcement', 2);
   }
-  return raw.split('\n').filter(Boolean).map((line) => {
-    try { return JSON.parse(line); } catch { return null; }
-  }).filter(Boolean);
+
+  const lockPath = `${LEDGER_FILE}.lock`;
+  let lockFd;
+  let ledgerFd;
+  try {
+    try {
+      lockFd = fs.openSync(lockPath, 'wx', 0o600);
+    } catch (err) {
+      if (err.code === 'EEXIST') {
+        fail('sponsor ledger is locked by another request; retry later', 5);
+      }
+      throw err;
+    }
+
+    ledgerFd = fs.openSync(
+      LEDGER_FILE,
+      fs.constants.O_RDWR | fs.constants.O_APPEND | fs.constants.O_CREAT |
+        (fs.constants.O_NOFOLLOW || 0),
+      0o600
+    );
+    const stat = fs.fstatSync(ledgerFd);
+    if (!stat.isFile() || (stat.mode & 0o077) !== 0) {
+      fail('sponsor ledger must be a regular file with mode 0600', 2);
+    }
+
+    return await callback(ledgerFd);
+  } finally {
+    if (ledgerFd !== undefined) fs.closeSync(ledgerFd);
+    if (lockFd !== undefined) {
+      fs.closeSync(lockFd);
+      fs.unlinkSync(lockPath);
+    }
+  }
 }
 
 function windowSpend(entries, now) {
@@ -115,6 +164,9 @@ async function main() {
   const sponsoredPub = decodeG(args.account);
 
   if (!EXPECTED_NETWORK) fail('NSAT_EXPECT_NETWORK is required (fail closed)', 2);
+  if (!LEDGER_FILE) {
+    fail('NSAT_SPONSOR_LEDGER_FILE is required for daily budget enforcement', 2);
+  }
 
   const info = await getJson('/info');
   if (info.status !== 200 || !info.body || !info.body.info) fail('core /info unavailable', 3);
@@ -131,52 +183,55 @@ async function main() {
   const reserve = reserveForNewAccount(baseReserve);
 
   if (DAILY_BUDGET <= 0n) fail('NSAT_SPONSOR_DAILY_BUDGET_STROOPS must be set (> 0)', 2);
-  if (!(MAX_PER_DAY > 0)) fail('NSAT_SPONSOR_MAX_PER_DAY must be set (> 0)', 2);
-
-  const now = Date.now();
-  const { count, spent } = windowSpend(readLedger(), now);
-  if (count >= MAX_PER_DAY) fail(`daily request cap reached (${count}/${MAX_PER_DAY})`, 5);
-  if (spent + reserve > DAILY_BUDGET) {
-    fail(`daily reserve budget would be exceeded `
-      + `(spent ${spent} + ${reserve} > ${DAILY_BUDGET} stroops)`, 5);
+  if (!Number.isSafeInteger(MAX_PER_DAY) || MAX_PER_DAY <= 0) {
+    fail('NSAT_SPONSOR_MAX_PER_DAY must be a positive integer', 2);
   }
 
-  // Sponsoring an account that already exists pays nothing and is not what
-  // this tool is for; report it instead of quietly signing.
-  const existing = await getJson(`/account?acc=${encodeURIComponent(args.account)}`);
-  if (existing.status === 200 && existing.body && existing.body.status === 'ok') {
-    fail('account already exists on this network; nothing to sponsor', 6);
-  }
+  return withLockedLedger(async (ledgerFd) => {
+    const now = Date.now();
+    const { count, spent } = windowSpend(readLedger(ledgerFd), now);
+    if (count >= MAX_PER_DAY) {
+      fail(`daily request cap reached (${count}/${MAX_PER_DAY})`, 5);
+    }
+    if (spent + reserve > DAILY_BUDGET) {
+      fail(`daily reserve budget would be exceeded `
+        + `(spent ${spent} + ${reserve} > ${DAILY_BUDGET} stroops)`, 5);
+    }
 
-  if (args.check) {
-    process.stdout.write(JSON.stringify({
-      ok: true, check: true, network, protocolVersion,
-      reservePerAccount: reserve.toString(), fee: fee.toString(),
-      usedToday: count, spentToday: spent.toString(), budget: DAILY_BUDGET.toString(),
-    }) + '\n');
-    return;
-  }
+    // Sponsoring an account that already exists pays nothing; do not sign it.
+    const existing = await getJson(`/account?acc=${encodeURIComponent(args.account)}`);
+    if (existing.status === 200 && existing.body && existing.body.status === 'ok') {
+      fail('account already exists on this network; nothing to sponsor', 6);
+    }
 
-  const sponsorSeed = loadSponsorSeed();
-  const sponsorG = encodeG(ed25519Keypair(sponsorSeed).pub32);
-  const sponsorAccount = await getJson(`/account?acc=${encodeURIComponent(sponsorG)}`);
-  if (sponsorAccount.status !== 200 || sponsorAccount.body.status !== 'ok') {
-    fail('sponsor account is not funded on this network', 7);
-  }
-  const seq = BigInt(sponsorAccount.body.seqnum) + 1n;
+    if (args.check) {
+      process.stdout.write(JSON.stringify({
+        ok: true, check: true, network, protocolVersion,
+        reservePerAccount: reserve.toString(), fee: fee.toString(),
+        usedToday: count, spentToday: spent.toString(), budget: DAILY_BUDGET.toString(),
+      }) + '\n');
+      return;
+    }
 
-  const signed = await signSponsoredOpen({
-    sponsorSeed32: sponsorSeed,
-    newPub32: sponsoredPub,
-    fee: Number(fee),
-    seq,
-    netPassphrase: network,
-  });
+    const sponsorSeed = loadSponsorSeed();
+    const sponsorG = encodeG(ed25519Keypair(sponsorSeed).pub32);
+    const sponsorAccount = await getJson(`/account?acc=${encodeURIComponent(sponsorG)}`);
+    if (sponsorAccount.status !== 200 || sponsorAccount.body.status !== 'ok') {
+      fail('sponsor account is not funded on this network', 7);
+    }
+    const seq = BigInt(sponsorAccount.body.seqnum) + 1n;
 
-  const selfCheck = verifySponsoredOpenTx(signed.txXdr, sponsoredPub);
-  if (!selfCheck.ok) fail(`self-check failed: ${selfCheck.reason}`, 8);
+    const signed = await signSponsoredOpen({
+      sponsorSeed32: sponsorSeed,
+      newPub32: sponsoredPub,
+      fee: Number(fee),
+      seq,
+      netPassphrase: network,
+    });
 
-  if (LEDGER_FILE) {
+    const selfCheck = verifySponsoredOpenTx(signed.txXdr, sponsoredPub);
+    if (!selfCheck.ok) fail(`self-check failed: ${selfCheck.reason}`, 8);
+
     const entry = {
       at: now,
       sponsored: args.account,
@@ -187,29 +242,35 @@ async function main() {
       tx_hash: crypto.createHash('sha256')
         .update(Buffer.from(signed.txXdr, 'base64')).digest('hex'),
     };
-    fs.appendFileSync(LEDGER_FILE, JSON.stringify(entry) + '\n', { mode: 0o600 });
-  }
+    fs.writeSync(ledgerFd, JSON.stringify(entry) + '\n');
+    fs.fsyncSync(ledgerFd);
 
-  const payload = JSON.stringify({
-    ok: true,
-    network,
-    protocolVersion,
-    sponsor: sponsorG,
-    sponsored: args.account,
-    reserve_stroops: reserve.toString(),
-    fee_stroops: fee.toString(),
-    seq: seq.toString(),
-    tx_xdr: signed.txXdr,
-    envelope_xdr: signed.envelopeXdr,
-  }) + '\n';
+    const payload = JSON.stringify({
+      ok: true,
+      network,
+      protocolVersion,
+      sponsor: sponsorG,
+      sponsored: args.account,
+      reserve_stroops: reserve.toString(),
+      fee_stroops: fee.toString(),
+      seq: seq.toString(),
+      tx_xdr: signed.txXdr,
+      envelope_xdr: signed.envelopeXdr,
+    }) + '\n';
 
-  if (args.out) {
-    const target = path.resolve(args.out);
-    fs.writeFileSync(target, payload, { mode: 0o600 });
-    process.stdout.write(JSON.stringify({ ok: true, wrote: target }) + '\n');
-  } else {
-    process.stdout.write(payload);
-  }
+    if (args.out) {
+      const target = path.resolve(args.out);
+      fs.writeFileSync(target, payload, { mode: 0o600 });
+      process.stdout.write(JSON.stringify({ ok: true, wrote: target }) + '\n');
+    } else {
+      process.stdout.write(payload);
+    }
+  });
 }
 
-main().catch((err) => fail(err && err.message ? err.message : String(err), 9));
+main().catch((err) => {
+  const code = err instanceof CliError ? err.code : 9;
+  const message = err && err.message ? err.message : String(err);
+  process.stderr.write(JSON.stringify({ ok: false, error: message }) + '\n');
+  process.exitCode = code;
+});
