@@ -43,7 +43,18 @@ const CONFIG = {
   // definitive zero balance / missing account / failed submit — retry with
   // exponential backoff, then propagate an explicit 503.
   busyRetries: Number(process.env.CORE_BUSY_RETRIES) || 4,
-  busyBaseDelayMs: Number(process.env.CORE_BUSY_DELAY_MS) || 150
+  busyBaseDelayMs: Number(process.env.CORE_BUSY_DELAY_MS) || 150,
+
+  // Account accessibility (Core protocol 30 reserve sponsorship). The
+  // gateway holds NO keys: it publishes the policy the wallet gates on and
+  // relays already-signed envelopes like any other transaction. Sponsorship
+  // itself is executed by an operator-held sponsor account
+  // (services/sponsor/sponsor-open.js).
+  sponsorship: {
+    enabled: process.env.NSAT_SPONSORSHIP_ENABLED === '1',
+    requiredProtocol: 30,
+    reserveUnits: 2
+  }
 };
 
 // --- logging (structured, secret-free) -------------------------------------
@@ -560,6 +571,48 @@ const ROUTES = {
       res.end(up.body);
     } catch (err) {
       log('error', 'account_query_failed', { error: err.message });
+      sendJson(res, 502, { error: 'core node unreachable' }, req);
+    }
+  },
+
+  // Sponsorship policy: what the wallet needs to decide whether the flow is
+  // offerable on THIS network, and how much reserve a sponsor locks. Read
+  // from the live core /info, never hard-coded, so a node on protocol 29
+  // reports 29 and the wallet keeps the flow closed.
+  'GET /api/v1/sponsorship/policy': async (req, res) => {
+    try {
+      const up = await coreFetchRead('/info');
+      if (up.status !== 200) {
+        return sendJson(res, 503, { error: 'core node unavailable' }, req);
+      }
+      let info = null;
+      try {
+        info = JSON.parse(up.body).info || null;
+      } catch {
+        return sendJson(res, 503, { error: 'core info malformed' }, req);
+      }
+      const protocolVersion = Number(info && info.protocol_version);
+      const baseReserve = Number(info && info.ledger && info.ledger.baseReserve);
+      const hasProtocol = Number.isSafeInteger(protocolVersion) && protocolVersion > 0;
+      const hasReserve = Number.isSafeInteger(baseReserve) && baseReserve > 0;
+      sendJson(res, 200, {
+        enabled: CONFIG.sponsorship.enabled,
+        requiredProtocol: CONFIG.sponsorship.requiredProtocol,
+        protocolVersion: hasProtocol ? protocolVersion : null,
+        baseReserve: hasReserve ? baseReserve : null,
+        // Exact integer as a decimal string: reserves are treasury-scale.
+        reservePerAccount: hasReserve
+          ? String(BigInt(baseReserve) * BigInt(CONFIG.sponsorship.reserveUnits))
+          : null,
+        // The flow is only offerable when the deployment opted in AND the
+        // ledger itself has reached the protocol that supports it.
+        available: Boolean(
+          CONFIG.sponsorship.enabled && hasProtocol &&
+          protocolVersion >= CONFIG.sponsorship.requiredProtocol
+        )
+      }, req);
+    } catch (err) {
+      log('error', 'sponsorship_policy_failed', { error: err.message });
       sendJson(res, 502, { error: 'core node unreachable' }, req);
     }
   },
