@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import QRCode from 'qrcode';
 import PageHeader from './PageHeader';
 import {
   isGatewayConfigured, isIndexerConfigured, EXPECTED_NETWORK_ID,
@@ -779,11 +780,34 @@ function SendPage({ state, gate, busy, active, balance, onReview }) {
 
 /* -------------------------------- Receive -------------------------------- */
 function ReceivePage({ activePubkey, notify }) {
+  const [qrCode, setQrCode] = useState('');
+  const [qrError, setQrError] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setQrCode('');
+    setQrError(false);
+    if (!activePubkey) return () => { cancelled = true; };
+
+    QRCode.toDataURL(activePubkey, { errorCorrectionLevel: 'M', margin: 2, width: 240 })
+      .then((dataUrl) => { if (!cancelled) setQrCode(dataUrl); })
+      .catch(() => { if (!cancelled) setQrError(true); });
+    return () => { cancelled = true; };
+  }, [activePubkey]);
+
   return (
     <section className="nw-card" style={{ textAlign: 'center' }}>
       {!activePubkey
         ? <EmptyState text="No wallet selected" />
         : (<>
+          {qrCode && <img
+            src={qrCode}
+            alt="QR code for your public NSAT receive address"
+            width="240"
+            height="240"
+            style={{ display: 'block', margin: '0 auto 16px', background: '#fff', padding: 10, borderRadius: 8 }}
+          />}
+          {qrError && <p className="nw-small nw-dim" role="status">QR code is unavailable. You can still copy your public address below.</p>}
           <div className="nw-mono"
             style={{ wordBreak: 'break-all', padding: '12px 0', color: 'var(--cyan)' }}>
             {activePubkey}
