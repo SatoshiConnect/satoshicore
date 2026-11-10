@@ -1,6 +1,6 @@
 # NSAT Web Wallet — Security Review (transparent release)
 
-Review cycle: 2026-10-31 · Commit `0575685`. No security certification is claimed by this document; findings and invariants only.
+Review cycle: 2026-11-11 · branch `codex/web-eslint-security`. No security certification is claimed by this document; findings and invariants only.
 
 ## 1. Key custody (browser)
 
@@ -18,7 +18,7 @@ Review cycle: 2026-10-31 · Commit `0575685`. No security certification is claim
 
 - Encrypted `localStorage` is NOT hardware-wallet-grade security. XSS in the page context can reach the DOM; mitigations for this release are: absence of secret auto-exposure, hardcoded CSP policy at the deployment layer, and no network egress of secrets. An XSS finding would still be high severity → treat as a standing release gate.
 - Single-key custody (no multisig, no OS-keychain enclave in this release). OS-backed storage is future work.
-- `npm audit --omit=dev --audit-level=high` is wired into the deploy workflow; current deviations are reported as CI warnings and must be answered in this document before public release.
+- Full dependency audit is wired as a CI gate for high and critical findings. The latest local audit reports 7 moderate findings in development-only `typescript-eslint`/`minimatch` dependencies; they remain visible and unresolved because the current npm registry still resolves `typescript-eslint` to the affected 8.72.2 release. Production dependencies report 0 vulnerabilities. No audit warning is suppressed.
 
 ## 3. Mainnet identity protection
 
@@ -36,10 +36,13 @@ Review cycle: 2026-10-31 · Commit `0575685`. No security certification is claim
 ## 5. Supply chain
 
 - Web app: zero runtime dependencies beyond the Next.js build toolchain declared in `package.json`; gateway server is dependency-free (`require('node:…')` only).
-- Pinned versions in `package-lock.json`; deploy workflow runs `npm audit --omit=dev --audit-level=high` and flags findings.
+- Exact `next` 16.4.6, `eslint` 9.39.5, and `eslint-config-next` 16.4.6 pins in `package.json`/`package-lock.json`.
+- CI runs `npm run lint`, static build/tests, secret scan, and full-tree `npm audit --audit-level=high`; latest local checks passed. The full audit still reports the 7 moderate development-tool findings above.
+- Next 16 currently builds with React 18.3.1, but warns that React 18 support will be removed in Next 17; a React major upgrade is not included in this patch.
 
 ## 6. Open security items before PUBLIC_WALLET_LIVE
 
 1. Production HTTPS origin with CSP/HSTS secure headers verified against the real deployment (deploy-time check, checklist in WEB-WALLET-GATEWAY-DEPLOYMENT.md).
 2. Cross-browser (Safari/WebKit, Android Chromium) key-derivation consistency test (web crypto available subset differences).
 3. Independent review of the Ed25519/codec implementation is NOT done; functional tests pass but this is not a cryptographic certification.
+4. Resolve the 7 moderate development dependency advisories after a patched `typescript-eslint` release is available; no high or critical advisory remains in the current dependency graph.

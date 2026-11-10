@@ -7,13 +7,11 @@ import { getChainInfo, isGatewayConfigured } from '../lib/nsatClient';
 // Gateway; falls back to the offline/experimental notice when the gateway is
 // not configured or unreachable.
 export default function ChainStatus() {
-  const [state, setState] = useState({ phase: 'loading' });
+  const configured = isGatewayConfigured();
+  const [state, setState] = useState({ phase: configured ? 'loading' : 'offline' });
 
   useEffect(() => {
-    if (!isGatewayConfigured()) {
-      setState({ phase: 'offline' });
-      return;
-    }
+    if (!configured) return undefined;
     let cancelled = false;
     getChainInfo()
       .then((info) => {
@@ -25,7 +23,7 @@ export default function ChainStatus() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [configured]);
 
   if (state.phase === 'online') {
     const ledger = state.info?.info?.ledger || {};

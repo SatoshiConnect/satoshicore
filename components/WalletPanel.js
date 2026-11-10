@@ -41,8 +41,9 @@ const PAGE_TITLE = {
 };
 
 export default function WalletPanel() {
+  const configured = isGatewayConfigured();
   // gateway/network
-  const [net, setNet] = useState(null);          // { ok, network, reason, ledger }
+  const [net, setNet] = useState(configured ? null : { ok: false, network: null, reason: 'gateway not configured' }); // { ok, network, reason, ledger }
   const [fee, setFee] = useState(null);          // live base fee (stroops)
   // wallet session
   const [wallets, setWallets] = useState([]);
@@ -95,21 +96,6 @@ export default function WalletPanel() {
     };
   }, [active?.name, idleLockMs]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const configured = isGatewayConfigured();
-
-  const verifyNetwork = useCallback(async () => {
-    if (!configured) {
-      setNet({ ok: false, network: null, reason: 'gateway not configured' });
-      return null;
-    }
-    const r = await verifyNetworkIdentity();
-    setNet(r);
-    if (r.ok) {
-      try { setFee(await estimateFee()); } catch { setFee(null); }
-    }
-    return r;
-  }, [configured]);
-
   const refreshWallets = useCallback(() => setWallets(keystoreList()), []);
 
   const refreshBalance = useCallback(async (pubkey) => {
@@ -130,10 +116,30 @@ export default function WalletPanel() {
     }
   }, []);
 
-  useEffect(() => { setWallets(keystoreList()); }, []);
-  useEffect(() => { void verifyNetwork(); }, [verifyNetwork]);
+  // Read browser-only keystore state after hydration to avoid SSR mismatch.
+  useEffect(() => { setWallets(keystoreList()); }, []); // eslint-disable-line react-hooks/set-state-in-effect
+  useEffect(() => {
+    if (!configured) return undefined;
+    let cancelled = false;
+    const loadNetwork = async () => {
+      const r = await verifyNetworkIdentity();
+      if (cancelled) return;
+      setNet(r);
+      if (r.ok) {
+        try {
+          const nextFee = await estimateFee();
+          if (!cancelled) setFee(nextFee);
+        } catch {
+          if (!cancelled) setFee(null);
+        }
+      }
+    };
+    void loadNetwork();
+    return () => { cancelled = true; };
+  }, [configured]);
   useEffect(() => {
     if (active) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- refreshBalance sets state only after awaiting the node request.
       void refreshBalance(active.pubkey);
       setHistory(historyLoad(active.name));
     } else { setBalance(null); setHistory([]); }
@@ -786,7 +792,7 @@ function SettingsPage({ s }) {
         <h2 style={{ color: 'var(--text)' }}>Backup & restore</h2>
         <p className="nw-small nw-dim" style={{ margin: '8px 0 12px' }}>
           Exports the ENCRYPTED keystore (AES-GCM, PBKDF2 600k). Restoring it
-          here rebuilds this wallet's locker — the same file also imports into
+          here rebuilds this wallet&apos;s locker — the same file also imports into
           fresh browsers.
         </p>
         <div className="nw-btn-row" style={{ margin: 0 }}>
