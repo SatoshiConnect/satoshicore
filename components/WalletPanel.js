@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import PageHeader from './PageHeader';
 import {
@@ -860,7 +860,17 @@ function ShieldedGatePage() {
 
 /* -------------------------------- Activity ------------------------------- */
 function ActivityPage({ history, activeName, onRecheck, canRecheck }) {
+  const [selectedTx, setSelectedTx] = useState(null);
+  const dialogRef = useRef(null);
+
+  useEffect(() => {
+    if (selectedTx && dialogRef.current && !dialogRef.current.open) {
+      dialogRef.current.showModal();
+    }
+  }, [selectedTx]);
+
   return (
+    <>
     <section className="nw-card">
       <h2 style={{ color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         {activeName ? `History — ${activeName}` : 'History'}
@@ -891,16 +901,65 @@ function ActivityPage({ history, activeName, onRecheck, canRecheck }) {
               <div style={{ textAlign: 'right' }}>
                 {fmtGroup(h.amount)} NSAT
                 {h.ledger && <div className="nw-small nw-dim">ledger {h.ledger}</div>}
-                {canRecheck && h.status !== 'confirmed' && h.status !== 'failed' && (
-                  <button type="button" className="nw-chip-btn" style={{ marginTop: 4 }}
-                    onClick={() => onRecheck(h)}>Check ledger</button>
-                )}
+                <div className="nw-activity-actions">
+                  <button type="button" className="nw-chip-btn"
+                    onClick={() => setSelectedTx(h)}>View details</button>
+                  {canRecheck && h.status !== 'confirmed' && h.status !== 'failed' && (
+                    <button type="button" className="nw-chip-btn"
+                      onClick={() => onRecheck(h)}>Check ledger</button>
+                  )}
+                </div>
               </div>
             </li>
           ))}
         </ul>
       )}
     </section>
+    {selectedTx && (
+      <dialog
+        ref={dialogRef}
+        className="nw-activity-dialog"
+        aria-labelledby="nw-activity-dialog-title"
+        onClose={() => setSelectedTx(null)}
+        onClick={(event) => { if (event.target === event.currentTarget) event.currentTarget.close(); }}
+      >
+        <section className="nw-modal" aria-label="Transaction details">
+          <div className="nw-step">LOCAL WALLET HISTORY</div>
+          <h3 id="nw-activity-dialog-title" style={{ color: 'var(--text)' }}>Transaction details</h3>
+          <div className="nw-kv"><span className="nw-k">Status</span>
+            <span className={'nw-badge ' + (selectedTx.status === 'confirmed' ? 'ok' : selectedTx.status === 'failed' || selectedTx.status === 'rejected' ? 'err' : 'warn')}>
+              {selectedTx.status || 'unknown'}
+            </span>
+          </div>
+          <div className="nw-kv"><span className="nw-k">Direction</span>
+            <span className="nw-v">{selectedTx.dir === 'sent' ? 'Sent' : 'Received'}</span></div>
+          <div className="nw-kv"><span className="nw-k">Address</span>
+            <span className="nw-v nw-mono nw-small">{selectedTx.to || '—'}</span></div>
+          <div className="nw-kv"><span className="nw-k">Amount</span>
+            <span className="nw-v">{fmtGroup(selectedTx.amount)} NSAT</span></div>
+          <div className="nw-kv"><span className="nw-k">Fee</span>
+            <span className="nw-v">{fmtGroup(selectedTx.fee)} NSAT</span></div>
+          <div className="nw-kv"><span className="nw-k">Transaction hash</span>
+            <span className="nw-v nw-mono nw-small">{selectedTx.txhash || '—'}</span></div>
+          <div className="nw-kv"><span className="nw-k">Ledger</span>
+            <span className="nw-v">{selectedTx.ledger ?? 'Not confirmed'}</span></div>
+          {selectedTx.ledger_hash && <div className="nw-kv"><span className="nw-k">Ledger hash</span>
+            <span className="nw-v nw-mono nw-small">{selectedTx.ledger_hash}</span></div>}
+          {selectedTx.result_code && <div className="nw-kv"><span className="nw-k">Result</span>
+            <span className="nw-v">{selectedTx.result_code}{selectedTx.evidence ? ` · ${selectedTx.evidence}` : ''}</span></div>}
+          {selectedTx.reason && <div className="nw-kv"><span className="nw-k">Reason</span>
+            <span className="nw-v">{selectedTx.reason}</span></div>}
+          <div className="nw-kv"><span className="nw-k">Recorded</span>
+            <span className="nw-v">{selectedTx.confirmed_at || selectedTx.time || '—'}</span></div>
+          <p className="nw-small nw-dim">This record is stored in this wallet. Its status reflects the exact-hash ledger check shown above.</p>
+          <div className="nw-btn-row">
+            <button type="button" className="nw-ghost-btn" autoFocus
+              onClick={() => dialogRef.current?.close()}>Close</button>
+          </div>
+        </section>
+      </dialog>
+    )}
+    </>
   );
 }
 
