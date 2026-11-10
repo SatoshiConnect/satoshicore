@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "test": "node --test tests/static-export.test.mjs tests/receive-qr.test.mjs",
+    "test": "node --test tests/static-export.test.mjs tests/receive-qr.test.mjs tests/activity-details.test.mjs",
     "test:extension": "npm run build:extension && node --test tests/extension.test.mjs",
     "build:extension": "node scripts/build-extension.mjs",
     "lint": "next lint"
