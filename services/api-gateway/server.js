@@ -44,7 +44,6 @@ const CONFIG = {
   // exponential backoff, then propagate an explicit 503.
   busyRetries: Number(process.env.CORE_BUSY_RETRIES) || 4,
   busyBaseDelayMs: Number(process.env.CORE_BUSY_DELAY_MS) || 150,
-
   // Account accessibility (Core protocol 30 reserve sponsorship). The
   // gateway holds NO keys: it publishes the policy the wallet gates on and
   // relays already-signed envelopes like any other transaction. Sponsorship
@@ -54,7 +53,20 @@ const CONFIG = {
     enabled: process.env.NSAT_SPONSORSHIP_ENABLED === '1',
     requiredProtocol: 30,
     reserveUnits: 2
-  }
+  },
+
+  // Read-only confirmation indexer. The upstream is fixed by configuration so a
+  // request path can never select a different origin (no SSRF surface).
+  indexer: {
+    url: (process.env.NSAT_INDEXER_URL || 'http://127.0.0.1:8789').replace(/\/$/, ''),
+    timeoutMs: Number(process.env.INDEXER_TIMEOUT_MS) || 5_000,
+    maxStreams: Number(process.env.INDEXER_MAX_STREAMS) || 48,
+    streamIdleMs: Number(process.env.INDEXER_STREAM_IDLE_MS) || 120_000,
+    eventsRateMax: Number(process.env.INDEXER_EVENTS_RATE_MAX) || 60
+  },
+  // When set, confirmation and event routes refuse to answer unless the chain
+  // itself reports exactly this identity. Empty = skip the comparison (local dev).
+  expectedNetwork: (process.env.NSAT_EXPECTED_NETWORK || '').trim()
 };
 
 // --- logging (structured, secret-free) -------------------------------------
@@ -193,6 +205,248 @@ async function coreFetchRead(path) {
   }
   // unreachable
   return { status: 503, body: JSON.stringify({ error: 'core ledger busy' }) };
+}
+
+// --- read-only indexer proxy ------------------------------------------------
+// GET only, read-only, and every answer is gated on the chain identity:
+//   GET /v1/confirmations/{hash}
+//   GET /v1/accounts/{G...}/events          (SSE, streamed)
+//   GET /v1/accounts/{G...}/transactions    (wallet history)
+//   GET /v1/tx/{hash}                       (wallet detail)
+//   GET /v1/health                          (index freshness)
+// The same-origin wallet points its indexer base URL at this gateway, so these
+// five are the whole read surface it can reach. The identity is checked against
+// the running core before any of them answers, so a misconfigured upstream can
+// never return another network's verdict as if it belonged to this chain.
+const TX_HASH_RE = /^[0-9a-f]{64}$/;
+const EVENTS_PATH_RE = /^\/v1\/accounts\/(G[A-Z2-7]{55})\/events$/;
+const EVENT_ROUTE_RE = /^\/v1\/accounts\/([^/]+)\/events$/;
+const TX_DETAIL_RE = /^\/v1\/tx\/([^/]+)$/;
+const ACCOUNT_TX_RE = /^\/v1\/accounts\/([^/]+)\/transactions$/;
+const CONFIRMATION_PREFIX = '/v1/confirmations/';
+const MAX_HISTORY_LIMIT = 200;
+
+let activeEventStreams = 0;
+let identityCache = { at: 0, network: null };
+
+async function chainNetworkIdentity() {
+  if (identityCache.network && Date.now() - identityCache.at < 30_000) return identityCache.network;
+  const up = await coreFetchRead('/info');
+  if (up.status !== 200) throw new Error('core unavailable');
+  let parsed;
+  try {
+    parsed = JSON.parse(up.body);
+  } catch {
+    throw new Error('core info malformed');
+  }
+  const network = parsed && parsed.info && typeof parsed.info.network === 'string' ? parsed.info.network : null;
+  if (!network) throw new Error('chain identity missing');
+  identityCache = { at: Date.now(), network };
+  return network;
+}
+
+async function requireChainIdentity(res, req) {
+  let network;
+  try {
+    network = await chainNetworkIdentity();
+  } catch (err) {
+    log('error', 'identity_check_failed', { error: err.message });
+    sendJson(res, 503, { error: 'chain identity unavailable' }, req);
+    return false;
+  }
+  if (CONFIG.expectedNetwork && network !== CONFIG.expectedNetwork) {
+    log('error', 'chain_identity_mismatch', { expected: CONFIG.expectedNetwork, actual: network });
+    sendJson(res, 503, { error: 'chain identity mismatch' }, req);
+    return false;
+  }
+  return true;
+}
+
+function indexerConnect(path, extraHeaders = {}) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(path, CONFIG.indexer.url);
+    const upstream = http.request(
+      url,
+      { method: 'GET', timeout: CONFIG.indexer.timeoutMs, headers: { Accept: 'application/json', ...extraHeaders } },
+      (up) => resolve(up)
+    );
+    upstream.on('timeout', () => upstream.destroy(new Error('indexer timeout')));
+    upstream.on('error', reject);
+    upstream.end();
+  });
+}
+
+async function indexerJson(path) {
+  const up = await indexerConnect(path);
+  let data = '';
+  up.setEncoding('utf8');
+  up.on('data', (c) => {
+    data += c;
+    if (data.length > 1024 * 1024) up.destroy();
+  });
+  await new Promise((resolve, reject) => {
+    up.on('end', resolve);
+    up.on('error', reject);
+    up.on('close', resolve);
+  });
+  return { status: up.statusCode, body: data };
+}
+
+async function handleConfirmation(req, res, hash) {
+  if (!TX_HASH_RE.test(hash)) {
+    return sendJson(res, 400, { error: 'hash must be 64 lowercase hex characters' }, req);
+  }
+  if (!(await requireChainIdentity(res, req))) return;
+
+  const query = new URL(req.url, 'http://x').searchParams.toString();
+  const target = `${CONFIRMATION_PREFIX}${hash}${query ? `?${query}` : ''}`;
+  try {
+    const up = await indexerJson(target);
+    if (up.status !== 200) {
+      log('warn', 'indexer_confirmation_error', { upstream_status: up.status });
+      return sendJson(res, 503, { error: 'confirmation index unavailable' }, req);
+    }
+    res.writeHead(200, {
+      ...corsHeaders(req),
+      ...securityHeaders(),
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Length': Buffer.byteLength(up.body)
+    });
+    res.end(up.body);
+  } catch (err) {
+    log('error', 'indexer_confirmation_failed', { error: err.message });
+    sendJson(res, 503, { error: 'confirmation index unavailable' }, req);
+  }
+}
+
+async function handleAccountEvents(req, res, account) {
+  if (activeEventStreams >= CONFIG.indexer.maxStreams) {
+    res.writeHead(503, { ...securityHeaders(), 'Retry-After': '5', 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ error: 'too many event streams' }));
+  }
+  if (!(await requireChainIdentity(res, req))) return;
+
+  const query = new URL(req.url, 'http://x').searchParams.toString();
+  // Resume cursor: the browser sends Last-Event-ID on reconnect; forward it so the
+  // indexer replays from there instead of from the original `since`.
+  const lastEventId = String(req.headers['last-event-id'] || '').trim();
+  const headers = {};
+  if (/^\d{1,12}$/.test(lastEventId)) headers['Last-Event-ID'] = lastEventId;
+
+  activeEventStreams += 1;
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    activeEventStreams -= 1;
+  };
+
+  let upstream;
+  try {
+    upstream = await indexerConnect(`/v1/accounts/${account}/events${query ? `?${query}` : ''}`, headers);
+  } catch (err) {
+    release();
+    log('error', 'indexer_events_failed', { error: err.message });
+    return sendJson(res, 503, { error: 'event stream unavailable' }, req);
+  }
+
+  if (upstream.statusCode !== 200) {
+    release();
+    upstream.resume();
+    log('warn', 'indexer_events_status', { upstream_status: upstream.statusCode });
+    return sendJson(res, upstream.statusCode === 503 ? 503 : 502, { error: 'event stream unavailable' }, req);
+  }
+
+  res.writeHead(200, {
+    ...corsHeaders(req),
+    ...securityHeaders(),
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-store',
+    Connection: 'keep-alive',
+    // Disable reverse-proxy buffering; SSE must arrive event by event.
+    'X-Accel-Buffering': 'no'
+  });
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
+
+  // An abandoned stream must free its slot promptly, not when the next event
+  // happens to be written.
+  res.setTimeout(CONFIG.indexer.streamIdleMs, () => {
+    upstream.destroy();
+    res.destroy();
+  });
+  upstream.on('data', (chunk) => res.write(chunk));
+  upstream.on('end', () => {
+    release();
+    res.end();
+  });
+  upstream.on('error', () => {
+    release();
+    res.destroy();
+  });
+  res.on('close', () => {
+    release();
+    upstream.destroy();
+  });
+}
+
+// A plain read that the indexer already validates: pass its body through and
+// keep its 404 so the wallet can tell "no such transaction" from "index down".
+async function handleIndexerRead(req, res, target) {
+  if (!(await requireChainIdentity(res, req))) return;
+  try {
+    const up = await indexerJson(target);
+    if (up.status !== 200 && up.status !== 404) {
+      log('warn', 'indexer_read_error', { upstream_status: up.status });
+      return sendJson(res, 503, { error: 'indexer unavailable' }, req);
+    }
+    res.writeHead(up.status, {
+      ...corsHeaders(req),
+      ...securityHeaders(),
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Content-Length': Buffer.byteLength(up.body)
+    });
+    res.end(up.body);
+  } catch (err) {
+    log('error', 'indexer_read_failed', { error: err.message });
+    sendJson(res, 503, { error: 'indexer unavailable' }, req);
+  }
+}
+
+function handleIndexerRoute(req, res, pathname) {
+  if (pathname.startsWith(CONFIRMATION_PREFIX)) {
+    return handleConfirmation(req, res, pathname.slice(CONFIRMATION_PREFIX.length));
+  }
+  if (pathname === '/v1/health') {
+    return handleIndexerRead(req, res, '/v1/health');
+  }
+  const txDetail = TX_DETAIL_RE.exec(pathname);
+  if (txDetail) {
+    if (!TX_HASH_RE.test(txDetail[1])) {
+      return sendJson(res, 400, { error: 'hash must be 64 lowercase hex characters' }, req);
+    }
+    return handleIndexerRead(req, res, `/v1/tx/${txDetail[1]}`);
+  }
+  const accountTx = ACCOUNT_TX_RE.exec(pathname);
+  if (accountTx) {
+    if (!/^G[A-Z2-7]{55}$/.test(accountTx[1])) {
+      return sendJson(res, 400, { error: 'account must be a 56-character G strkey' }, req);
+    }
+    // Bound the page size here rather than trusting the caller: the indexer's
+    // own limit is honoured but never allowed to grow the response without end.
+    const raw = new URL(req.url, 'http://x').searchParams.get('limit');
+    const parsed = Number.parseInt(raw ?? '', 10);
+    const limit = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, MAX_HISTORY_LIMIT) : 50;
+    return handleIndexerRead(req, res, `/v1/accounts/${accountTx[1]}/transactions?limit=${limit}`);
+  }
+  const match = EVENT_ROUTE_RE.exec(pathname);
+  if (!match) return sendJson(res, 404, { error: 'not found' }, req);
+  // Shape matches the endpoint but the account is not a valid G-strkey: answer
+  // 400 rather than letting it look like a missing route.
+  if (!EVENTS_PATH_RE.test(pathname)) {
+    return sendJson(res, 400, { error: 'account must be a 56-character G strkey' }, req);
+  }
+  return handleAccountEvents(req, res, match[1]);
 }
 
 // --- read-only explorer snapshot -------------------------------------------
@@ -575,6 +829,24 @@ const ROUTES = {
     }
   },
 
+  // One read-only snapshot of the running node for the explorer dashboard:
+  // ledger head, peers, quorum agreement and the node's own metrics. Real
+  // readings only — nothing is filled in when a source is missing.
+  'GET /api/v1/explorer/snapshot': async (req, res) => {
+    try {
+      const snapshot = await explorerSnapshot();
+      sendJson(res, 200, snapshot, req);
+    } catch (err) {
+      log('warn', 'explorer_snapshot_failed', { error: err.message });
+      sendJson(res, 503, {
+        ok: false,
+        source: 'nsat-core',
+        observedAt: Date.now(),
+        error: 'core node unreachable'
+      }, req);
+    }
+  },
+
   // Sponsorship policy: what the wallet needs to decide whether the flow is
   // offerable on THIS network, and how much reserve a sponsor locks. Read
   // from the live core /info, never hard-coded, so a node on protocol 29
@@ -614,24 +886,6 @@ const ROUTES = {
     } catch (err) {
       log('error', 'sponsorship_policy_failed', { error: err.message });
       sendJson(res, 502, { error: 'core node unreachable' }, req);
-    }
-  },
-
-  // One read-only snapshot of the running node for the explorer dashboard:
-  // ledger head, peers, quorum agreement and the node's own metrics. Real
-  // readings only — nothing is filled in when a source is missing.
-  'GET /api/v1/explorer/snapshot': async (req, res) => {
-    try {
-      const snapshot = await explorerSnapshot();
-      sendJson(res, 200, snapshot, req);
-    } catch (err) {
-      log('warn', 'explorer_snapshot_failed', { error: err.message });
-      sendJson(res, 503, {
-        ok: false,
-        source: 'nsat-core',
-        observedAt: Date.now(),
-        error: 'core node unreachable'
-      }, req);
     }
   },
 
@@ -683,7 +937,22 @@ function createServer() {
       return sendJson(res, 429, { error: 'rate limit exceeded' });
     }
 
-    const route = ROUTES[`${req.method} ${req.pathname ?? new URL(req.url, 'http://x').pathname}`];
+    const pathname = new URL(req.url, 'http://x').pathname;
+    const isIndexerRoute =
+      pathname.startsWith(CONFIRMATION_PREFIX) ||
+      pathname === '/v1/health' ||
+      EVENT_ROUTE_RE.test(pathname) ||
+      TX_DETAIL_RE.test(pathname) ||
+      ACCOUNT_TX_RE.test(pathname);
+    if (isIndexerRoute) {
+      if (req.method !== 'GET') {
+        res.writeHead(405, { ...securityHeaders(), Allow: 'GET', 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'method not allowed' }));
+      }
+      return handleIndexerRoute(req, res, pathname);
+    }
+
+    const route = ROUTES[`${req.method} ${pathname}`];
     if (!route) {
       return sendJson(res, 404, { error: 'not found' });
     }
@@ -729,3 +998,4 @@ if (require.main === module) {
 }
 
 module.exports = { createServer, validateEnvelope, validAccountId, CONFIG };
+
