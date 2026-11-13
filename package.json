@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "test": "node tests/static-export.test.mjs",
+    "verify:deployed": "node scripts/verify-deployed-site.mjs",
     "test:extension": "npm run build:extension && npm run build:extension:firefox && node --test tests/extension.test.mjs",
     "build:extension": "node scripts/build-extension.mjs",
     "lint": "next lint",

@@ -26,7 +26,8 @@ Commit ล่าสุดของรอบนี้: `e4952520f7fc0cf8a96371c65
 | 12 | `https://wallet.satoshicore.org/` | **BROKEN / NOT RESOLVING** | 000 — ต้องตัดสินใจว่าจะคงโดเมนนี้หรือย้ายไป `/wallet` |
 | 13 | Website connection (dApp provider) | **MISSING (โดยเจตนา)** | ยังไม่มี `window.nsat` provider / connected sites — อยู่นอก Release 1; ต้องมี security review แยก |
 | 14 | Legal / compliance review | **BLOCKED** | ต้องให้เจ้าของ/ที่ปรึกษากฎหมายตรวจ (Thai digital asset / PDPA) ก่อนขึ้น public messaging |
-| 15 | Deployment รอบใหม่ | **BLOCKED** | ต้องได้รับการอนุมัติจากเจ้าของ (Pages/CI) — รอบนี้ยังไม่ deploy |
+| 15 | Deployment รอบใหม่ | **BLOCKED** | CI เตรียมเสร็จแล้ว (`main` / `workflow_dispatch`) แต่ยังไม่รันจริง — ต้องอนุมัติเจ้าของ |
+| 16 | Post-deploy verification | **VERIFIED** | `scripts/verify-deployed-site.mjs`: ผ่าน 8/8 กับ build ท้องถิ่น, ตรวจเจอ build เก่าบน production (6 FAIL, exit 1) |
 
 ---
 
@@ -77,7 +78,7 @@ npm run test:extension (2 targets)     tests 10 / pass 10 / fail 0
 
 ## 4. Next action
 
-1. เจ้าของอนุมัติ deploy → push ขึ้น branch ที่ CI Pages ใช้ แล้วตรวจ `manifest.webmanifest` 200 บนโดเมนจริง
+1. เจ้าของอนุมัติ deploy → merge เข้า `main` (หรือ Actions → Run workflow ด้วย `custom_domain=true`, `custom_domain_name=satoshicore.org`) แล้ว job `verify` จะยืนยันด้วยหลักฐานจาก URL จริง
 2. โหลด `extension/dist` (Chromium) และ `dist-firefox` เข้าเบราว์เซอร์จริง ทดสอบ create → receive → send ด้วยกระเป๋า synthetic ที่ไม่มียอด
 3. ตัดสินใจเรื่อง `www` + `wallet.satoshicore.org` (redirect หรือคงไว้)
 4. เริ่ม security review ของ website-connection (dApp provider) ก่อนเปิดเป็นฟีเจอร์
