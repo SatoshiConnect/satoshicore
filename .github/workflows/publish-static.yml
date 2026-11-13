@@ -1,0 +1,194 @@
+name: Publish static export (build, package, optional rsync)
+
+# satoshicore.org is NOT served by GitHub Pages: the apex A record points at
+# 87.124.102.86 and the responses carry `server: Caddy` (HTTPS via Let's
+# Encrypt, HTTP/3, HSTS). So the artifact has to reach that host, not Pages.
+#
+# This workflow therefore does two separate things:
+#   1. build  — always: npm ci, production build, static-export tests, security
+#               scan, Mainnet-identity check, then a tar.gz + sha256 the owner
+#               can verify offline. Downloadable from the run page, no secrets.
+#   2. publish — only when `publish` is true AND the deploy secrets exist:
+#               rsync the artifact into $DEPLOY_PATH/releases/<sha>/ and stop
+#               there. Activating it (symlink/flip) stays a human step, so a
+#               bad build cannot go live by itself.
+#
+# Nothing here runs on push. No DNS is changed. No secret is required to build.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Upload the built artifact to the deploy host (requires DEPLOY_* secrets)'
+        type: boolean
+        default: false
+      site_url:
+        description: 'Public URL to report after publishing'
+        type: string
+        default: 'https://satoshicore.org'
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '20'
+  # Production endpoints and the exact Mainnet identity. Root base path: the
+  # live site proves it (`/_next/...` in its HTML).
+  NEXT_PUBLIC_BASE_PATH: ''
+  NEXT_PUBLIC_API_GATEWAY_URL: https://gateway.satoshicore.org
+  NEXT_PUBLIC_INDEXER_URL: https://gateway.satoshicore.org
+  NEXT_PUBLIC_NSAT_NETWORK_ID: NSAT Mainnet ; October 2026 ; bc3098829fffc717
+
+jobs:
+  build:
+    name: Build and package the static export
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build static export
+        run: npm run build
+
+      - name: Static-export verification tests
+        run: npm test
+
+      - name: Security scan of static output
+        run: node tests/security-scan.mjs out
+
+      - name: Mainnet identity present in the artifact
+        run: |
+          set -e
+          count=$(grep -rl 'NSAT Mainnet ; October 2026 ; bc3098829fffc717' out/_next/static/chunks | wc -l | tr -d ' ')
+          echo "full-identity chunks: $count"
+          test "$count" -ge 1
+
+      - name: Package artifact with checksum
+        run: |
+          set -e
+          name="satoshicore-web-${GITHUB_SHA:0:12}"
+          tar -czf "${name}.tar.gz" -C out .
+          sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256"
+          # The file list is part of the evidence: it shows what a reviewer is
+          # being asked to serve, without them unpacking the archive first.
+          find out -type f | sort > "${name}.files.txt"
+          echo "artifact: ${name}.tar.gz $(stat -c%s "${name}.tar.gz") bytes"
+          cat "${name}.tar.gz.sha256"
+          echo "ARTIFACT_NAME=${name}" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: satoshicore-web-${{ github.sha }}
+          path: |
+            satoshicore-web-*.tar.gz
+            satoshicore-web-*.tar.gz.sha256
+            satoshicore-web-*.files.txt
+          retention-days: 30
+
+      - name: Summary
+        run: |
+          {
+            echo "### Static export packaged"
+            echo ""
+            echo "- Commit: \`${{ github.sha }}\`"
+            echo "- Archive: \`${{ env.ARTIFACT_NAME }}.tar.gz\`"
+            echo "- Checksum: \`$(sha256sum "${ARTIFACT_NAME}.tar.gz" | cut -d" " -f1)\`"
+            echo "- Files: $(wc -l < "${ARTIFACT_NAME}.files.txt")"
+            echo ""
+            echo "Download it from this run's Artifacts, verify with \`sha256sum -c\`, then copy to the Caddy root."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Upload to the deploy host (owner secrets required)
+    runs-on: ubuntu-latest
+    needs: build
+    if: inputs.publish == true
+    environment: production
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: satoshicore-web-${{ github.sha }}
+
+      - name: Check deploy configuration
+        id: config
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -e
+          missing=""
+          for v in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY DEPLOY_PATH; do
+            eval "val=\$$v"
+            test -n "$val" || missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Deploy secrets missing:$missing — the artifact is built and downloadable, nothing was uploaded."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install SSH key
+        if: steps.config.outputs.configured == 'true'
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          set -e
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      # A new release goes to its own directory. The live symlink is NOT
+      # switched here on purpose: activating a release is the owner's action,
+      # and rollback is just the previous directory.
+      - name: Upload release directory
+        if: steps.config.outputs.configured == 'true'
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -e
+          archive=$(ls satoshicore-web-*.tar.gz | head -1)
+          sha256sum -c "${archive}.sha256"
+          release="${DEPLOY_PATH}/releases/${GITHUB_SHA:0:12}"
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$release'"
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$archive" "${archive}.sha256" "$DEPLOY_USER@$DEPLOY_HOST:$release/"
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+            "cd '$release' && sha256sum -c '${archive}.sha256' && tar -xzf '$archive' && rm '$archive' && echo uploaded '$release'"
+
+      - name: Publish summary
+        run: |
+          {
+            echo "### Publish"
+            if [ "${{ steps.config.outputs.configured }}" = "true" ]; then
+              echo ""
+              echo "Uploaded to \`\$DEPLOY_PATH/releases/${{ github.sha }}\` (12-char prefix). **Not yet live.**"
+              echo ""
+              echo "Activate on the host (owner):"
+              echo '```'
+              echo "ln -sfn <releases/${{ github.sha }}> \$DEPLOY_PATH/current"
+              echo '```'
+              echo "Then confirm with \`node scripts/verify-deployed-site.mjs ${{ inputs.site_url }}\`."
+              echo "Rollback: point \`current\` back at the previous release directory."
+            else
+              echo ""
+              echo "Deploy secrets are not configured, so nothing was uploaded."
+              echo "Set \`DEPLOY_HOST\`, \`DEPLOY_USER\`, \`DEPLOY_PATH\` and \`DEPLOY_SSH_KEY\` in Settings → Secrets, then re-run with \`publish\`."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

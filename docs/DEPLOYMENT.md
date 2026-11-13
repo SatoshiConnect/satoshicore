@@ -52,7 +52,21 @@ the nsat-core node (see `SatoshiConnect/nsat-core`, branch
 - Website integration: set `NEXT_PUBLIC_API_GATEWAY_URL` at build time. When
   unset or unreachable, the site renders its offline/experimental state.
 
-## GitHub Pages hosting
+## Where the site actually runs (read first)
+
+`satoshicore.org` is served by **Caddy on the owner's host** (apex A record
+`87.124.102.86`, `server: Caddy`, Let's Encrypt, HTTP/3). It is *not* served by
+GitHub Pages. The Pages workflow below is a prepared, owner-gated alternative,
+not the current live path. For the verified DNS state, the copy-to-host
+procedure, rollback and the DNS work a Pages migration needs, see
+[`DOMAINS.md`](./DOMAINS.md).
+
+The artifact path that matches the live host is
+`.github/workflows/publish-static.yml`: it builds, tests, packages a
+checksummed `tar.gz`, and only uploads into `releases/<sha>/` when the owner
+sets the `DEPLOY_*` secrets and asks for it. Activating a release stays manual.
+
+## GitHub Pages hosting (prepared alternative)
 
 1. **Build pipeline** (`.github/workflows/deploy-pages.yml`):
    - Installs dependencies, runs `next build` with `output: 'export'`.

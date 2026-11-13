@@ -113,6 +113,26 @@ test('offline shell service worker ships and never caches other origins', () => 
   assert.doesNotMatch(sw, /gateway\.satoshicore\.org|satoshicore\.org\/v1/, 'worker must not name a money endpoint');
 });
 
+test('offline shell precache list resolves inside the export', () => {
+  const sw = readFileSync(join(OUT, 'sw.js'), 'utf8');
+  const list = sw.match(/const SHELL = \[([\s\S]*?)\];/)?.[1];
+  assert.ok(list, 'service worker has no SHELL list');
+
+  const paths = [...list.matchAll(/'([^']*)'/g)].map((m) => m[1]);
+  assert.ok(paths.length >= 5, `SHELL list looks incomplete (${paths.length} entries)`);
+
+  for (const p of paths) {
+    // The install handler resolves each entry against the registration scope,
+    // so every entry must be relative and must exist in the export — otherwise
+    // the offline shell promises a page it cannot show.
+    assert.ok(!/^(https?:)?\/\//.test(p) && !p.startsWith('/'), `SHELL entry "${p}" is not relative to the scope`);
+    const rel = p === '' ? 'index.html' : p.endsWith('/') ? `${p}index.html` : p;
+    assert.ok(existsSync(join(OUT, rel)), `SHELL precaches ${p} but ${rel} is not in the export`);
+  }
+  assert.ok(paths.includes('wallet/'), 'the wallet itself must be part of the offline shell');
+  assert.ok(paths.includes('offline.html'), 'offline.html must be part of the offline shell');
+});
+
 test('homepage is wallet-first and download page exists', () => {
   const home = readFileSync(join(OUT, 'index.html'), 'utf8');
   assert.match(home, /Open NSAT Wallet/, 'homepage must offer the wallet as the primary action');

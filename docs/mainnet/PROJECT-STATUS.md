@@ -23,6 +23,10 @@ Commit ล่าสุดของรอบนี้: `e4952520f7fc0cf8a96371c65
 | 9 | Indexer production | **VERIFIED** | `https://satoshicore.org/v1/health` 200, `/v1/accounts/<G>/transactions` 200 |
 | 10 | `https://www.satoshicore.org/` | **BROKEN** | DNS ไม่ resolve (curl 000) — ยังไม่มี www |
 | 11 | `https://satoshicore.org/` | **VERIFIED (deployed, build เก่า)** | 200 แต่ไม่มี `manifest.webmanifest` (404) และ homepage ยังเป็นหน้าโปรโมตเดิม |
+| 17 | Hosting จริงของ satoshicore.org | **VERIFIED: Caddy ที่ 87.124.102.86** | `server: Caddy`, Let's Encrypt, HTTP/3, HSTS — **ไม่ใช่ GitHub Pages** (ดู `docs/DOMAINS.md`) |
+| 18 | Publish pipeline ตาม host จริง | **IMPLEMENTED (ยังไม่รัน)** | `publish-static.yml`: build → test → tar.gz + sha256 → artifact; upload เข้า `releases/<sha>/` เฉพาะเมื่อมี secrets + `publish=true`; ยังไม่ activate |
+| 19 | Release artifact ตรงกับ release.json | **VERIFIED** | `scripts/extension-release.mjs`: ตรวจ zip ↔ release.json ↔ manifest ใน zip; จับ sha ปลอมได้ (exit 1) |
+| 20 | Offline shell (precache list) | **VERIFIED (static)** | เทสต์ใหม่: ทุก entry ของ `SHELL` ต้องมีไฟล์จริงใน `out/` และต้อง relative |
 | 12 | `https://wallet.satoshicore.org/` | **BROKEN / NOT RESOLVING** | 000 — ต้องตัดสินใจว่าจะคงโดเมนนี้หรือย้ายไป `/wallet` |
 | 13 | Website connection (dApp provider) | **MISSING (โดยเจตนา)** | ยังไม่มี `window.nsat` provider / connected sites — อยู่นอก Release 1; ต้องมี security review แยก |
 | 14 | Legal / compliance review | **BLOCKED** | ต้องให้เจ้าของ/ที่ปรึกษากฎหมายตรวจ (Thai digital asset / PDPA) ก่อนขึ้น public messaging |
@@ -71,7 +75,7 @@ npm run test:extension (2 targets)     tests 10 / pass 10 / fail 0
 | Offline shell end-to-end | NOT TESTED | ตัดเน็ตแล้วเปิด `/wallet/` เพื่อยืนยัน behavior |
 | www / DNS / TLS | BLOCKED | ตั้ง CNAME `www` + redirect ไป apex หรือตัดสินใจไม่ใช้ www |
 | Deploy build ใหม่ | BLOCKED | ต้องอนุมัติ (Pages/CI) — ยังไม่มีการ deploy |
-| `extension/release.json` | MANUAL | ต้องอัปเดต sha/version ทุกครั้งที่ rebuild (ควรทำให้ build เขียนไฟล์นี้อัตโนมัติ) |
+| `extension/release.json` | AUTOMATED | `npm run release:extension` เขียน bytes/sha256 จาก zip จริง; `npm run test:extension` ตรวจซ้ำให้ |
 | Legal disclosures | BLOCKED | ร่างข้อความ + ให้เจ้าของ/ที่ปรึกษาตรวจ |
 
 ---
