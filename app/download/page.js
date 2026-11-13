@@ -69,6 +69,13 @@ export default function DownloadPage() {
           <p style={{ color: 'var(--muted)', fontSize: '.85rem' }}>
             Verify before loading: <code>shasum -a 256 {release.file}</code>
           </p>
+          <p style={{ color: 'var(--muted)', fontSize: '.85rem' }}>
+            Firefox package: <code>{release.firefoxFile}</code>
+            {' '}({release.firefoxBytes.toLocaleString()} bytes)
+          </p>
+          <p className="mono" style={{ fontSize: '.78rem', color: 'var(--muted)', wordBreak: 'break-all' }}>
+            sha256 {release.firefoxSha256}
+          </p>
           <a className="button secondary" href="/docs/">Read the security model</a>
         </article>
       </div>
