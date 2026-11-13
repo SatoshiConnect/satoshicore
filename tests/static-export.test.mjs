@@ -85,8 +85,14 @@ test('no obvious secrets or key material in output', () => {
 // shell service worker and icons must ship as plain files next to the pages.
 
 test('PWA manifest is present, installable and subpath-safe', () => {
-  const manifestPath = join(OUT, 'manifest.webmanifest');
-  assert.ok(existsSync(manifestPath), 'manifest.webmanifest missing from export');
+  // .json deliberately: the production static host serves unknown extensions
+  // as text/plain, which is not a manifest MIME type.
+  const manifestPath = join(OUT, 'manifest.json');
+  assert.ok(existsSync(manifestPath), 'manifest.json missing from export');
+  assert.ok(
+    readFileSync(join(OUT, 'index.html'), 'utf8').includes('manifest.json'),
+    'layout must link the manifest as manifest.json'
+  );
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
 
   assert.equal(manifest.display, 'standalone');

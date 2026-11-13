@@ -21,24 +21,43 @@ pipeline, not the live one.
 
 The build is a plain static export, so publishing is copying files.
 
+Caddy is a launchd job on this machine, configured by
+`/usr/local/etc/satoshicore/Caddyfile.all` (it imports `Caddyfile.site` for the
+site and `Caddyfile.api` for same-origin `/api/v1/*`, `/v1/*`). The served
+directory is **not** fixed in the repo — it comes from `NSAT_WEB_ROOT` in
+`/Library/LaunchDaemons/com.satoshicore.caddy-standard-ports.plist`. Read it
+before publishing instead of assuming a path:
+
 ```bash
-# 1. Build + verify locally
-npm ci && npm run build && npm test
-node tests/security-scan.mjs out
-
-# 2. Package (CI does this in .github/workflows/publish-static.yml)
-tar -czf satoshicore-web-$(git rev-parse --short=12 HEAD).tar.gz -C out .
-
-# 3. Copy into a NEW release directory, never over the live one
-scp satoshicore-web-*.tar.gz deploy@87.124.102.86:/srv/satoshicore/releases/<sha>/
-ssh deploy@87.124.102.86 'cd /srv/satoshicore/releases/<sha> && tar -xzf *.tar.gz && rm *.tar.gz'
-
-# 4. Activate (owner action) — the old directory stays for rollback
-ssh deploy@87.124.102.86 'ln -sfn /srv/satoshicore/releases/<sha> /srv/satoshicore/current'
-
-# 5. Prove what is live
-node scripts/verify-deployed-site.mjs https://satoshicore.org
+plutil -p /Library/LaunchDaemons/com.satoshicore.caddy-standard-ports.plist | grep NSAT_WEB_ROOT
 ```
+
+At the time of writing that value is
+`/Users/migssa-ngakhaonu/nsat-ops/satoshicore-webroot`. The publish itself:
+
+```bash
+# 1. Build for production: same-origin API, or the wallet would call another
+#    origin and lose the same-domain CORS-free path.
+NEXT_PUBLIC_API_SAME_ORIGIN=1 npm run build
+node tests/static-export.test.mjs && node tests/security-scan.mjs out
+
+# 2. Back up what is live right now (rollback = copy it back)
+ROOT=$(plutil -extract EnvironmentVariables.NSAT_WEB_ROOT raw -o - \
+  /Library/LaunchDaemons/com.satoshicore.caddy-standard-ports.plist)
+rsync -a "$ROOT/" "$ROOT.bak-$(date +%Y%m%d-%H%M%S)/"
+
+# 3. Publish
+rsync -a --delete out/ "$ROOT/"
+
+# 4. Prove what is live (curl only; no browser needed)
+node scripts/verify-deployed-site.mjs https://satoshicore.org
+curl -s -o /dev/null -w '%{http_code}\n' https://satoshicore.org/api/v1/chain/info
+```
+
+Caddy serves files immediately — no reload is needed for a static publish, and
+none should be attempted: reloading renders the config from the environment of
+the calling shell, and a missing `NSAT_WEB_ROOT` would repoint the site at
+`./out`.
 
 Rollback is one command: point `current` back at the previous release
 directory. Nothing is deleted, so a bad build costs seconds, not data.
@@ -90,7 +109,7 @@ curl -sI https://www.satoshicore.org/ | head -3   # expect 301 → https://satos
 ```bash
 dig +short satoshicore.org A                    # apex address unchanged / intended
 dig +short www.satoshicore.org                  # a record, once configured
-curl -sI https://satoshicore.org/manifest.webmanifest | head -3
+curl -sI https://satoshicore.org/manifest.json | head -3
 node scripts/verify-deployed-site.mjs https://satoshicore.org
 ```
 

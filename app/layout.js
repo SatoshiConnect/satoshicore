@@ -74,7 +74,9 @@ export default function RootLayout({ children }) {
       <head>
         <meta httpEquiv="Content-Security-Policy" content={SITE_CSP} />
         {/* PWA: installable, standalone, offline shell (public/sw.js). */}
-        <link rel="manifest" href={`${BASE}/manifest.webmanifest`} />
+        {/* .json, not .webmanifest: the static host has no manifest+json MIME
+            mapping, so a .webmanifest file was served as text/plain. */}
+        <link rel="manifest" href={`${BASE}/manifest.json`} />
         <link rel="apple-touch-icon" href={`${BASE}/icons/apple-touch-icon.png`} />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-title" content="NSAT Wallet" />

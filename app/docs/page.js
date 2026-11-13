@@ -118,8 +118,11 @@ export default function DocsPage() {
 {`# build with the same-origin API switch
 NEXT_PUBLIC_API_SAME_ORIGIN=1 npx next build
 
-# publish the export to the directory Caddy serves
-rsync -a --delete out/ /usr/local/var/satoshicore/web/`}
+# publish the export into the directory Caddy serves (NSAT_WEB_ROOT)
+rsync -a --delete out/ "$NSAT_WEB_ROOT"/
+
+# then prove what is actually live
+node scripts/verify-deployed-site.mjs https://satoshicore.org`}
           </pre>
         </div>
       </section>

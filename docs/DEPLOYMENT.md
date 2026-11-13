@@ -124,8 +124,9 @@ origin serves:
   link to `/wallet/`) — an old landing page fails;
 - `/wallet/`, `/docs/` and `/download/` as HTML (the download page must carry
   the sha256 and say the artifact is unpublished);
-- `/manifest.webmanifest` as parsable JSON with `display: standalone`, a
-  **relative** `start_url`, and 192/512 icons that actually resolve as images;
+- `/manifest.json` (JSON MIME, `display: standalone`, **relative** `start_url`,
+  192/512 icons that actually resolve as images) — the file is `.json` because
+  the static host serves unknown extensions as `text/plain`;
 - `/sw.js` as JavaScript that ignores cross-origin requests, ignores non-GET
   requests and names no money endpoint;
 - `/offline.html`.

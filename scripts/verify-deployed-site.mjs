@@ -121,11 +121,11 @@ async function main() {
 
   // --- PWA: manifest, service worker, shell --------------------------------
   await check('Web app manifest is deployed and installable', async () => {
-    const { status, type, body } = await get('/manifest.webmanifest');
+    const { status, type, body } = await get('/manifest.json');
     assert(status === 200, `manifest returned HTTP ${status} — this build has no PWA manifest deployed`);
     // Hosts vary between application/manifest+json and octet-stream for this
     // extension; the parsed contents below are what actually matters.
-    assert(/json|octet-stream|text\/plain/i.test(type), `manifest served as ${type || 'no content-type'}`);
+    assert(/json/i.test(type), `manifest served as ${type || 'no content-type'}; it must be a JSON MIME type`);
     const manifest = JSON.parse(body);
     assert(manifest.display === 'standalone', `display is ${manifest.display}, expected standalone`);
     assert(manifest.name && manifest.short_name, 'manifest needs name and short_name');
@@ -136,7 +136,7 @@ async function main() {
   });
 
   await check('Manifest icons are served as PNG', async () => {
-    const { body: manifestBody } = await get('/manifest.webmanifest');
+    const { body: manifestBody } = await get('/manifest.json');
     const manifest = JSON.parse(manifestBody);
     for (const icon of manifest.icons || []) {
       const res = await fetch(url(icon.src), { signal: AbortSignal.timeout(SITE_TIMEOUT_MS) });

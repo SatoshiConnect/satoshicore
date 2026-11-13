@@ -14,7 +14,7 @@
  * works offline".
  */
 
-const VERSION = 'nsat-pwa-v1';
+const VERSION = 'nsat-pwa-v2';
 
 // Relative to the registration scope, so the same file works from the domain
 // root and from a GitHub Pages project subpath.
@@ -23,7 +23,7 @@ const SHELL = [
   'wallet/',
   'download/',
   'offline.html',
-  'manifest.webmanifest',
+  'manifest.json',
   'icons/icon-192.png',
   'icons/icon-512.png',
 ];

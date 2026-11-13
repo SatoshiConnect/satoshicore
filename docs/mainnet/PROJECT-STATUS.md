@@ -8,6 +8,18 @@ Commit ล่าสุดของรอบนี้: `e4952520f7fc0cf8a96371c65
 
 ---
 
+## 0. Deployment log — ขึ้น production แล้ว
+
+| รายการ | ค่า |
+|---|---|
+| เวลาที่ deploy | 2026-11-13 (local 2026-11-14 02:52) |
+| Commit ที่ build | `29b1f60` + การแก้ manifest/DOMAINS ในรอบนี้ (commit ถัดไป) |
+| โหมด build | `NEXT_PUBLIC_API_SAME_ORIGIN=1` (same-origin `/api/v1/*`, `/v1/*`) |
+| Caddy root | `NSAT_WEB_ROOT` จาก `/Library/LaunchDaemons/com.satoshicore.caddy-standard-ports.plist` → `/Users/migssa-ngakhaonu/nsat-ops/satoshicore-webroot` |
+| Backup ก่อน deploy | `satoshicore-webroot.bak-20261114-025324` และ `.bak` รอบที่สอง (rollback = copy กลับ) |
+| หลักฐาน | `verify-deployed-site` 8 passed / 0 failed; `index.html` sha256 ตรงระหว่าง `out/` กับ root ที่เสิร์ฟ; security scan 45 ไฟล์สะอาด; mainnet identity 4 chunks |
+| ไม่ได้แตะ | DNS, Caddy config, mainnet/genesis/mint, ไม่มีธุรกรรมใด ๆ |
+
 ## 1. ผลตรวจสภาพปัจจุบัน (§3)
 
 | # | หัวข้อ | สถานะ | หลักฐาน / หมายเหตุ |
@@ -16,13 +28,13 @@ Commit ล่าสุดของรอบนี้: `e4952520f7fc0cf8a96371c65
 | 2 | Shared wallet logic | **VERIFIED** | `lib/nsatClient.js`, `lib/nsatWallet.js`, `lib/nsatCodec.js`, `lib/nsatSendPreflight.js` ถูกใช้ร่วมกันทั้งเว็บและ extension (ไฟล์เดียวกัน ไม่ได้ fork) |
 | 3 | Extension (Chromium MV3) | **BUILD_PRODUCED** | `extension/dist` + zip; artifact suite 10/10; ยังไม่มีคนโหลดเข้า Chrome จริง |
 | 4 | Extension (Firefox) | **BUILD_PRODUCED** | `extension/dist-firefox` + zip; manifest มี `browser_specific_settings.gecko.id = wallet@satoshicore.org`; ยังไม่ทดสอบใน Firefox |
-| 5 | PWA (manifest + SW + offline) | **VERIFIED (build)** | `public/manifest.webmanifest`, `public/sw.js`, `public/offline.html`, ไอคอน 192/512/180; static-export suite 8/8 |
+| 5 | PWA (manifest + SW + offline) | **VERIFIED (live)** | `public/manifest.json` (`.json` เพราะ host ไม่มี MIME ของ `.webmanifest`), `public/sw.js` v2, `public/offline.html`, ไอคอน 192/512/180; static-export 9/9; ตรวจบน `https://satoshicore.org` จริง: manifest `application/json`, SW `activated`, cache มีเฉพาะ `nsat-pwa-v2` |
 | 6 | Homepage wallet-first | **IMPLEMENTED** | `/` = Open NSAT Wallet + Install Browser Extension + Network/Explorer/Docs |
 | 7 | `/download` | **IMPLEMENTED** | แสดงขนาด/sha256/permissions/endpoints จริง และสถานะต่อเบราว์เซอร์ (ยังไม่ขึ้น store ใด ๆ) |
 | 8 | Gateway production | **VERIFIED** | `https://gateway.satoshicore.org/health` 200, `/api/v1/chain/info` 200 (ledger สด) |
 | 9 | Indexer production | **VERIFIED** | `https://satoshicore.org/v1/health` 200, `/v1/accounts/<G>/transactions` 200 |
 | 10 | `https://www.satoshicore.org/` | **BROKEN** | DNS ไม่ resolve (curl 000) — ยังไม่มี www |
-| 11 | `https://satoshicore.org/` | **VERIFIED (deployed, build เก่า)** | 200 แต่ไม่มี `manifest.webmanifest` (404) และ homepage ยังเป็นหน้าโปรโมตเดิม |
+| 11 | `https://satoshicore.org/` | **DEPLOYED (2026-11-13)** | build ปัจจุบันขึ้นจริง: homepage wallet-first, `/download/` 200, manifest/SW/offline 200, `verify-deployed-site` 8/8; same-origin `/api/v1/chain/info` + `/v1/health` 200; wallet แสดง `Mainnet verified · ledger 328,791` |
 | 17 | Hosting จริงของ satoshicore.org | **VERIFIED: Caddy ที่ 87.124.102.86** | `server: Caddy`, Let's Encrypt, HTTP/3, HSTS — **ไม่ใช่ GitHub Pages** (ดู `docs/DOMAINS.md`) |
 | 18 | Publish pipeline ตาม host จริง | **IMPLEMENTED (ยังไม่รัน)** | `publish-static.yml`: build → test → tar.gz + sha256 → artifact; upload เข้า `releases/<sha>/` เฉพาะเมื่อมี secrets + `publish=true`; ยังไม่ activate |
 | 19 | Release artifact ตรงกับ release.json | **VERIFIED** | `scripts/extension-release.mjs`: ตรวจ zip ↔ release.json ↔ manifest ใน zip; จับ sha ปลอมได้ (exit 1) |
@@ -38,7 +50,7 @@ Commit ล่าสุดของรอบนี้: `e4952520f7fc0cf8a96371c65
 ## 2. งานที่เสร็จในรอบนี้
 
 ### Workstream C — PWA (§5)
-- `public/manifest.webmanifest`: `display: standalone`, `start_url: ./wallet/`, `scope: ./` (relative → ใช้ได้ทั้งโดเมนจริงและ GitHub Pages subpath), ไอคอน 192/512 (any + maskable)
+- `public/manifest.json`: `display: standalone`, `start_url: ./wallet/`, `scope: ./` (relative → ใช้ได้ทั้งโดเมนจริงและ subpath), ไอคอน 192/512 (any + maskable) — ใช้ `.json` เพราะ Caddy ไม่มี MIME mapping ของ `.webmanifest` และเสิร์ฟเป็น `text/plain`
 - `public/sw.js`: offline shell เท่านั้น — **ไม่แตะ cross-origin** (gateway/indexer) และ **ไม่แตะ non-GET** เพื่อไม่ให้ยอดเงิน/ผล ledger ถูกเสิร์ฟจาก cache
 - `public/offline.html`: บอกตรง ๆ ว่าต้องมีเน็ตเวิร์กสำหรับยอดเงิน/ค่าธรรมเนียม/การยืนยัน
 - `components/SwRegister.js`: ลงทะเบียน SW เฉพาะ production + secure context, base-path-safe
