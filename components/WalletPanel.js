@@ -53,9 +53,25 @@ const PAGE_LEAD = {
   settings: 'Session control, stored wallets and the encrypted keystore backup.',
 };
 
+// Founder Mint policy (docs/NSAT-FOUNDER-MINT-ENGINE.md): 18,175 units were
+// intended through ledger 313,988, and the engine mints 4 units per ledger.
+// The mint is an internal credit, so it never appears as a transfer of its
+// own while a 2.1e24 balance barely moves in its last digits; this figure
+// starts small and therefore visibly ticks. Pure read: no key, no transaction.
+const MINT_REFERENCE_LEDGER = 313_988;
+const MINT_THROUGH_REFERENCE = 18_175;
+const MINT_PER_LEDGER = 4;
+
+function policyMinted(ledger) {
+  const n = Number(ledger);
+  if (!Number.isFinite(n) || n < MINT_REFERENCE_LEDGER) return null;
+  return MINT_THROUGH_REFERENCE + MINT_PER_LEDGER * (n - MINT_REFERENCE_LEDGER);
+}
+
 export default function WalletPanel() {
   // gateway/network
   const [net, setNet] = useState(null);          // { ok, network, reason, ledger }
+  const [liveLedger, setLiveLedger] = useState(null); // public ledger height, polled
   const [fee, setFee] = useState(null);          // live base fee (NSAT integer unit)
   const [reserve, setReserve] = useState(null);  // live base reserve (NSAT integer unit)
   // wallet session
@@ -148,6 +164,25 @@ export default function WalletPanel() {
 
   useEffect(() => { setWallets(keystoreList()); }, []);
   useEffect(() => { void verifyNetwork(); }, [verifyNetwork]);
+
+  // Ledger height for the policy-issuance figure: public, cheap, key-free, so
+  // it can run every few seconds whether or not a wallet is unlocked.
+  useEffect(() => {
+    if (!configured) return undefined;
+    let alive = true;
+    const tick = async () => {
+      try {
+        const info = await getChainInfo();
+        const num = info?.info?.ledger?.num;
+        if (alive && num != null) setLiveLedger(Number(num));
+      } catch {
+        // A miss keeps the last value; nothing is invented.
+      }
+    };
+    void tick();
+    const id = window.setInterval(tick, 4000);
+    return () => { alive = false; window.clearInterval(id); };
+  }, [configured]);
   useEffect(() => {
     if (active) {
       void refreshBalance(active.pubkey);
@@ -430,7 +465,7 @@ export default function WalletPanel() {
             title={PAGE_TITLE[page]}
             lead={PAGE_LEAD[page]}
             meta={`${active ? active.name : 'Locked'} · NSAT · ${connLine}`}
-            actions={<NetworkBadge net={net} />}
+            actions={<NetworkBadge net={net ? { ...net, ledger: liveLedger ?? net.ledger } : net} />}
           />
 
           {/* Section switcher in a horizontal strip — the same pattern as the
@@ -472,7 +507,7 @@ export default function WalletPanel() {
             <OverviewPage active={active} wallets={wallets} balance={balance} funded={funded}
               bus={{ busy, doCreate, doImport, newName, setNewName, newPass, setNewPass,
                 importSeed, setImportSeed }}
-              net={{ net, netOk, ledger, fee }}
+              net={{ net, netOk, ledger: liveLedger ?? ledger, fee, minted: policyMinted(liveLedger ?? ledger) }}
               notify={notify}
               onSend={() => setPage('send')} onReceive={() => setPage('receive')}
               onManage={() => setPage('settings')} />
@@ -665,6 +700,10 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
               {fundedBadge === true ? 'Yes' : fundedBadge === false ? 'No / not funded' : 'unknown'}</span></span></div>
           <div className="nw-kv"><span className="nw-k">Latest ledger</span>
             <span className="nw-v">{net.ledger == null ? '—' : Number(net.ledger).toLocaleString()}</span></div>
+          <div className="nw-kv"><span className="nw-k">Issuance (policy)</span>
+            <span className="nw-v"><span className="nw-mono">
+              {net.minted == null ? '—' : net.minted.toLocaleString()}</span>
+              <small className="nw-dim"> +4 / ledger</small></span></div>
         </section>
         <section className="nw-card">
           <h2 style={{ color: 'var(--text)' }}>Network</h2>

@@ -33,17 +33,36 @@ built once by `scripts/build-extension.mjs` (esbuild, no other tooling).
 
 ```sh
 npm install
-npm run build:extension          # dev build → gateway 127.0.0.1:8787, indexer 127.0.0.1:8789
+npm run build:extension          # → gateway.satoshicore.org + satoshicore.org (domains)
 npm run test:extension           # builds + runs tests/extension.test.mjs
 ```
 
-Production endpoints / devnet identity:
+The build bakes in **domain endpoints only** — a bare IP or loopback origin is
+refused unless a devnet build opts in explicitly, so a shipped artifact never
+carries `127.0.0.1` that would need fixing later:
 
 ```sh
-NSAT_EXT_GATEWAY_URL=https://gw.satoshicore.org \
-NSAT_EXT_INDEXER_URL=https://idx.satoshicore.org \
+# devnet build against this machine (explicit opt-in; never ship this)
+NSAT_EXT_GATEWAY_URL=http://127.0.0.1:8787 \
+NSAT_EXT_INDEXER_URL=http://127.0.0.1:8789 \
+NSAT_EXT_ALLOW_LOOPBACK=1 \
 npm run build:extension
 ```
+
+Override the domains with `NSAT_EXT_GATEWAY_URL` / `NSAT_EXT_INDEXER_URL` for a
+staging origin; `tests/extension.test.mjs` fails the run if either the bundle or
+`host_permissions` contains an IP or loopback origin.
+
+Verified production endpoints for this build (`2026-11-13`):
+`https://gateway.satoshicore.org/health` 200, `https://gateway.satoshicore.org/api/v1/chain/info` 200,
+`https://satoshicore.org/v1/health` 200. The resulting manifest grants only
+`https://gateway.satoshicore.org/*` and `https://satoshicore.org/*` with permissions
+`storage` + `downloads`.
+
+Packaged artifact: `extension/nsat-wallet-v24.0.0.zip` (80,457 B, sha256
+`bf125183db43b5d3…`) — contents: `manifest.json`, `popup.html`, `popup.js`,
+`wallet.css`, `icons/`. Load it with **Load unpacked** after unzipping, or upload it
+to the Chrome Web Store listing.
 
 `NSAT_EXT_NETWORK_ID` overrides the baked-in signing passphrase for a devnet build —
 the identity gate still refuses to sign against any node that does not report the exact

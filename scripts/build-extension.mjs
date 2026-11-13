@@ -13,10 +13,14 @@
 //   NSAT_EXT_GATEWAY_URL=https://gw.example  NSAT_EXT_INDEXER_URL=... \
 //     npm run build:extension            # production endpoints
 //
-// Dev defaults target the local fee-10 devnet gateway (127.0.0.1:8787) and
-// indexer (127.0.0.1:8789). host_permissions are derived from the same
-// values, so the popup's fetches are exempt from CORS for exactly the
-// configured wallet backends and nothing else.
+// Defaults are the public DOMAIN endpoints — gateway.satoshicore.org and
+// satoshicore.org — never a bare IP, so a plain `npm run build:extension`
+// ships something that keeps working after the machine/host changes. A
+// devnet build must opt in explicitly:
+//   NSAT_EXT_GATEWAY_URL=http://127.0.0.1:8787 NSAT_EXT_INDEXER_URL=http://127.0.0.1:8789
+// host_permissions are derived from the same values, so the popup's fetches
+// are exempt from CORS for exactly the configured wallet backends and nothing
+// else.
 import { build } from 'esbuild';
 import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -26,8 +30,18 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const src = join(root, 'extension');
 const dist = join(src, 'dist');
 
-const GATEWAY = (process.env.NSAT_EXT_GATEWAY_URL || 'http://127.0.0.1:8787').replace(/\/+$/, '');
-const INDEXER = (process.env.NSAT_EXT_INDEXER_URL || 'http://127.0.0.1:8789').replace(/\/+$/, '');
+const GATEWAY = (process.env.NSAT_EXT_GATEWAY_URL || 'https://gateway.satoshicore.org').replace(/\/+$/, '');
+const INDEXER = (process.env.NSAT_EXT_INDEXER_URL || 'https://satoshicore.org').replace(/\/+$/, '');
+
+// An IP or loopback origin is a development convenience, never a release
+// artifact: refuse to bake one in unless the caller asks for a devnet build.
+const LOOPBACK = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/i;
+if ((LOOPBACK.test(GATEWAY) || LOOPBACK.test(INDEXER)) && process.env.NSAT_EXT_ALLOW_LOOPBACK !== '1') {
+  throw new Error(
+    `refusing to bake a loopback endpoint into the extension (gateway ${GATEWAY}, indexer ${INDEXER}).\n`
+    + 'Use the public domains, or set NSAT_EXT_ALLOW_LOOPBACK=1 for a local devnet build.',
+  );
+}
 // The network passphrase is the signing identity — the exact Mainnet
 // constant by default, overridable only for a devnet build. nsatClient
 // refuses to sign when the node's reported identity differs (fail-closed).

@@ -74,6 +74,23 @@ test('bundle carries the build-time identity, not a runtime-configurable one', (
   assert.doesNotMatch(js, /new\s+Function\s*\(/, 'new Function() is forbidden in the bundle');
 });
 
+test('release bundle uses domain endpoints, never a bare IP or loopback', () => {
+  if (process.env.NSAT_EXT_ALLOW_LOOPBACK === '1') return; // explicit devnet build
+  const js = readFileSync(join(DIST, 'popup.js'), 'utf8');
+  const manifest = JSON.parse(readFileSync(join(DIST, 'manifest.json'), 'utf8'));
+  const loopback = /(https?:\/\/)?(127\.0\.0\.1|localhost|\[::1\])(:\d+)?/i;
+
+  assert.doesNotMatch(js, loopback,
+    'popup bundle must not bake a loopback/IP endpoint — use the satoshicore.org domains');
+  assert.ok(js.includes('https://gateway.satoshicore.org'), 'gateway domain missing from bundle');
+  assert.ok(js.includes('https://satoshicore.org'), 'indexer domain missing from bundle');
+
+  for (const host of manifest.host_permissions) {
+    assert.match(host, /^https:\/\/([a-z0-9-]+\.)*satoshicore\.org\/\*$/, `non-domain host permission: ${host}`);
+    assert.ok(!loopback.test(host), `IP/loopback host permission: ${host}`);
+  }
+});
+
 test('no secrets in extension sources or build output', () => {
   const S_RE = /\bS[A-Z2-7]{55}\b/;
   for (const f of [...walk(join(ROOT, 'extension')), ...walk(join(ROOT, 'scripts'))]) {
