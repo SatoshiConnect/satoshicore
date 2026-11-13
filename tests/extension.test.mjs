@@ -167,3 +167,27 @@ test('setItem mirrors writes to the storage area asynchronously', async () => {
   assert.equal(area.data.get('scw-web-history-x'), '[{"txhash":"ab"}]',
     'write-through to chrome.storage did not land');
 });
+
+// --------------------------- Firefox target ------------------------------
+// One shared popup bundle, a Firefox-specific manifest adapter. The manifest
+// must carry a stable gecko id (Firefox refuses an unpacked MV3 add-on without
+// one) and must not claim a Chrome minimum version.
+
+test('firefox build is MV3 with a gecko id and domain-only hosts', () => {
+  const dir = join(ROOT, 'extension', 'dist-firefox');
+  const manifestPath = join(dir, 'manifest.json');
+  assert.ok(existsSync(manifestPath), 'firefox build missing — run npm run build:extension:firefox');
+
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  assert.equal(manifest.manifest_version, 3);
+  assert.equal(manifest.minimum_chrome_version, undefined, 'chrome-only key leaked into firefox manifest');
+  assert.equal(manifest.browser_specific_settings?.gecko?.id, 'wallet@satoshicore.org');
+  assert.ok(manifest.browser_specific_settings.gecko.strict_min_version, 'gecko strict_min_version required');
+  assert.deepEqual(manifest.permissions, ['storage', 'downloads']);
+
+  for (const host of manifest.host_permissions) {
+    assert.match(host, /^https:\/\/([a-z0-9-]+\.)*satoshicore\.org\/\*$/, `non-domain host: ${host}`);
+  }
+  assert.ok(existsSync(join(dir, 'popup.js')), 'firefox popup.js missing');
+  assert.ok(existsSync(join(dir, 'popup.html')), 'firefox popup.html missing');
+});

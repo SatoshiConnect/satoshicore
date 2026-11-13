@@ -11,6 +11,7 @@ const NAV = [
   { href: '/dashboard', label: 'Explorer' },
   { href: '/explorer', label: 'Search' },
   { href: '/wallet', label: 'Wallet' },
+  { href: '/download', label: 'Download' },
   { href: '/docs', label: 'Docs' },
   { href: '/status', label: 'Status' }
 ];

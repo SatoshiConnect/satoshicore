@@ -6,9 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "test": "node tests/static-export.test.mjs",
-    "test:extension": "npm run build:extension && node --test tests/extension.test.mjs",
+    "test:extension": "npm run build:extension && npm run build:extension:firefox && node --test tests/extension.test.mjs",
     "build:extension": "node scripts/build-extension.mjs",
-    "lint": "next lint"
+    "lint": "next lint",
+    "build:extension:firefox": "NSAT_EXT_TARGET=firefox node scripts/build-extension.mjs"
   },
   "dependencies": {
     "next": "14.2.15",

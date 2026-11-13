@@ -79,3 +79,46 @@ test('no obvious secrets or key material in output', () => {
     }
   }
 });
+
+// ----------------------------- PWA assets --------------------------------
+// The wallet is installable from the static export: a manifest, an offline
+// shell service worker and icons must ship as plain files next to the pages.
+
+test('PWA manifest is present, installable and subpath-safe', () => {
+  const manifestPath = join(OUT, 'manifest.webmanifest');
+  assert.ok(existsSync(manifestPath), 'manifest.webmanifest missing from export');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+
+  assert.equal(manifest.display, 'standalone');
+  assert.ok(manifest.name && manifest.short_name, 'name/short_name required for install');
+  assert.equal(manifest.start_url, './wallet/', 'start_url must open the wallet and stay relative');
+  assert.equal(manifest.scope, './', 'scope must stay relative for subpath hosting');
+  assert.ok(!manifest.start_url.startsWith('/'), 'absolute start_url breaks the base path');
+
+  const sizes = new Set(manifest.icons.map((i) => i.sizes));
+  assert.ok(sizes.has('192x192') && sizes.has('512x512'), '192 and 512 icons required');
+  for (const icon of manifest.icons) {
+    assert.ok(existsSync(join(OUT, icon.src)), `icon missing from export: ${icon.src}`);
+  }
+});
+
+test('offline shell service worker ships and never caches other origins', () => {
+  const swPath = join(OUT, 'sw.js');
+  assert.ok(existsSync(swPath), 'sw.js missing from export');
+  const sw = readFileSync(swPath, 'utf8');
+
+  assert.ok(existsSync(join(OUT, 'offline.html')), 'offline.html missing from export');
+  assert.match(sw, /url\.origin !== self\.location\.origin/, 'cross-origin requests must be ignored');
+  assert.match(sw, /request\.method !== 'GET'/, 'non-GET requests must never be intercepted');
+  assert.doesNotMatch(sw, /gateway\.satoshicore\.org|satoshicore\.org\/v1/, 'worker must not name a money endpoint');
+});
+
+test('homepage is wallet-first and download page exists', () => {
+  const home = readFileSync(join(OUT, 'index.html'), 'utf8');
+  assert.match(home, /Open NSAT Wallet/, 'homepage must offer the wallet as the primary action');
+  assert.match(home, /Install Browser Extension/, 'homepage must offer the extension action');
+  assert.match(home, /href="\/wallet\/"/, 'wallet action must link to /wallet/');
+
+  assert.ok(existsSync(join(OUT, 'download/index.html')), 'download page missing from export');
+  assert.ok(existsSync(join(OUT, 'wallet/index.html')), 'wallet page missing from export');
+});

@@ -28,7 +28,17 @@ import { dirname, join } from 'node:path';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const src = join(root, 'extension');
-const dist = join(src, 'dist');
+
+// One shared application, one adapter per browser family. The JS bundle is
+// identical (the popup only uses chrome.* APIs that Firefox exposes as
+// browser.*/chrome.* alike); only the manifest differs. Target output:
+//   chromium → extension/dist          (Chrome, Edge, Brave, Opera, Vivaldi)
+//   firefox  → extension/dist-firefox
+const TARGET = (process.env.NSAT_EXT_TARGET || 'chromium').toLowerCase();
+if (!['chromium', 'firefox'].includes(TARGET)) {
+  throw new Error(`unknown NSAT_EXT_TARGET "${TARGET}" (expected chromium or firefox)`);
+}
+const dist = join(src, TARGET === 'firefox' ? 'dist-firefox' : 'dist');
 
 const GATEWAY = (process.env.NSAT_EXT_GATEWAY_URL || 'https://gateway.satoshicore.org').replace(/\/+$/, '');
 const INDEXER = (process.env.NSAT_EXT_INDEXER_URL || 'https://satoshicore.org').replace(/\/+$/, '');
@@ -94,7 +104,6 @@ const manifest = {
     'NSAT wallet for SatoshiCore. Keys are generated and encrypted on this device; '
     + 'transactions are signed locally and relayed unsigned-keyless through the gateway.',
   version: pkg.version,
-  minimum_chrome_version: '114',
   action: {
     default_title: 'NSAT Wallet',
     default_popup: 'popup.html',
@@ -104,9 +113,22 @@ const manifest = {
   permissions: ['storage', 'downloads'],
   host_permissions: [`${GATEWAY}/*`, `${INDEXER}/*`],
 };
+
+if (TARGET === 'firefox') {
+  // Firefox ignores minimum_chrome_version and needs a stable add-on ID for
+  // an unpacked MV3 install plus a minimum version that supports MV3 action
+  // popups. Firefox exposes the same storage/downloads APIs to an extension
+  // page, so the bundle is shared unchanged.
+  manifest.browser_specific_settings = {
+    gecko: { id: 'wallet@satoshicore.org', strict_min_version: '121.0' },
+  };
+} else {
+  manifest.minimum_chrome_version = '114';
+}
+
 writeFileSync(join(dist, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
 
-console.log(`extension built → ${dist}`);
+console.log(`extension built (${TARGET}) → ${dist}`);
 console.log(`  gateway:  ${GATEWAY}`);
 console.log(`  indexer:  ${INDEXER}`);
 console.log(`  network:  ${NETWORK_ID}`);

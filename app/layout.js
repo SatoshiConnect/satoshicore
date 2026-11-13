@@ -1,6 +1,7 @@
 import './globals.css';
 import Header from '../components/Header';
 import Footer from '../components/Footer';
+import SwRegister from '../components/SwRegister';
 
 export const metadata = {
   title: 'SatoshiCore — NSAT wallet & explorer',
@@ -15,8 +16,14 @@ export const viewport = {
   themeColor: [
     { media: '(prefers-color-scheme: light)', color: '#f2f2f7' },
     { media: '(prefers-color-scheme: dark)', color: '#1c1c1e' }
-  ]
+  ],
+  // An installed PWA should fill the screen like the native apps do.
+  viewportFit: 'cover'
 };
+
+// The manifest and icons are static files in public/, so their URLs follow the
+// base path of the deployment (domain root or a GitHub Pages project subpath).
+const BASE = process.env.NEXT_PUBLIC_BASE_PATH || '';
 
 // Site-wide Content-Security-Policy (<meta http-equiv> is honored only when
 // it is a DIRECT child of <head>; GitHub Pages cannot add response headers,
@@ -66,11 +73,18 @@ export default function RootLayout({ children }) {
     <html lang="en">
       <head>
         <meta httpEquiv="Content-Security-Policy" content={SITE_CSP} />
+        {/* PWA: installable, standalone, offline shell (public/sw.js). */}
+        <link rel="manifest" href={`${BASE}/manifest.webmanifest`} />
+        <link rel="apple-touch-icon" href={`${BASE}/icons/apple-touch-icon.png`} />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-title" content="NSAT Wallet" />
+        <meta name="mobile-web-app-capable" content="yes" />
       </head>
       <body>
         <Header />
         <main className="container site-main">{children}</main>
         <Footer />
+        <SwRegister />
       </body>
     </html>
   );
