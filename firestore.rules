@@ -1,0 +1,33 @@
+rules_version = '2';
+
+// Firestore rules for the optional website theme sync.
+//
+// The only client-writable data on this site is one document per signed-in
+// website account at websitePreferences/{uid}, and it holds nothing but the
+// light/dark theme. Everything else is denied, including any wallet material —
+// the wallet never writes to Firestore at all.
+//
+// Deploy from the Firebase console (Firestore Database → Rules) or with:
+//   firebase deploy --only firestore:rules
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /websitePreferences/{uid} {
+      // Only the owner of the document may read it or delete it (delete is how
+      // "turn off theme sync" removes the entry).
+      allow read, delete: if request.auth != null && request.auth.uid == uid;
+
+      // A create/update must be the owner's, must contain the single theme
+      // field, and must hold one of the two allowed values. hasOnly() makes any
+      // additional field — a wallet name, address, balance, seed — a rejection.
+      allow create, update: if request.auth != null
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['theme'])
+        && request.resource.data.theme in ['light', 'dark'];
+    }
+
+    // No other collection or document is reachable from the browser.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

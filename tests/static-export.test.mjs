@@ -172,6 +172,32 @@ test('security, terms and privacy pages ship and are linked from the footer', ()
   }
 });
 
+test('Google sign-in disclosures, setup UI, and targeted CSP ship in the static export', () => {
+  const privacy = readFileSync(join(OUT, 'privacy/index.html'), 'utf8');
+  assert.match(privacy, /Google sign-in is optional/);
+  assert.match(privacy, /does not request Gmail mailbox access/);
+  assert.match(privacy, /does not send wallet name, address, seed, password, balance or history/);
+  const clientBundles = files
+    .filter((f) => f.endsWith('.js'))
+    .map((f) => readFileSync(f, 'utf8'))
+    .join('\n');
+  assert.match(clientBundles, /Website account/);
+  assert.match(clientBundles, /This does not unlock, back up, or sync your NSAT wallet/);
+  assert.match(clientBundles, /Google sign-in is not configured in this build yet/);
+
+  const home = readFileSync(join(OUT, 'index.html'), 'utf8');
+  const csp = home.match(/http-equiv="Content-Security-Policy" content="([^"]+)"/)?.[1]
+    ?.replaceAll('&#x27;', "'");
+  assert.ok(csp, 'static shell must include its site CSP');
+  const scriptSrc = csp.match(/(?:^|;\s*)script-src\s+([^;]+)/)?.[1] || '';
+  assert.ok(scriptSrc.split(/\s+/).includes('https://apis.google.com'));
+  const frameSrc = csp.match(/(?:^|;\s*)frame-src\s+([^;]+)/)?.[1] || '';
+  const frameOrigins = frameSrc.split(/\s+/);
+  assert.ok(frameOrigins.includes('https://accounts.google.com'));
+  assert.ok(frameOrigins.includes('https://*.firebaseapp.com'));
+  assert.ok(!frameOrigins.includes('https:'), 'auth iframe policy must not permit every HTTPS frame');
+});
+
 test('the homepage IS the wallet, not a landing page', () => {
   const home = readFileSync(join(OUT, 'index.html'), 'utf8');
 

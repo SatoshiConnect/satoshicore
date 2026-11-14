@@ -16,7 +16,7 @@ const SECTIONS = [
   {
     title: 'What this software is',
     body: [
-      'An independent, non-commercial study project. The wallet is non-custodial: it generates and encrypts keys on your device and signs locally. No company, operator or developer holds your keys, funds, or the ability to move them. There is no account, no login and no recovery service.'
+      'An independent, non-commercial study project. The wallet is non-custodial: it generates and encrypts keys on your device and signs locally. No company, operator or developer holds your keys, funds, or the ability to move them. Optional Google sign-in identifies a website session only; it does not unlock, sync or recover a wallet. There is no wallet login or recovery service.'
     ]
   },
   {
@@ -28,7 +28,7 @@ const SECTIONS = [
   {
     title: 'Your responsibility',
     body: [
-      'You alone hold the seed and password. If they are lost, or a device is lost, reset or compromised, nobody — including the project — can recover the funds at that address.',
+      'You alone hold the wallet seed and password. Google website sign-in is a separate website identity session and cannot recover wallet access. If the seed/password are lost, or a device is lost, reset or compromised, nobody — including the project — can recover the funds at that address.',
       'A signed transaction is final: the ledger records it whether or not the recipient was correct. Verify address and amount on the confirmation screen before signing.'
     ]
   },

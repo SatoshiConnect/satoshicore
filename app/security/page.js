@@ -57,6 +57,10 @@ const LIMITS = [
     body: 'Private transfers need the native prover, which does not run in a browser.'
   },
   {
+    title: 'Google sign-in is not wallet custody',
+    body: 'Optional Google sign-in identifies a website session only. It does not unlock, sync or recover an NSAT wallet key — the only optional account data is your light/dark theme choice. The app does not request Gmail mailbox access.'
+  },
+  {
     title: 'Website connections are not enabled',
     body: 'No dApp provider or connect-wallet prompt ships yet; a web page cannot request a signature or spend NSAT.'
   },

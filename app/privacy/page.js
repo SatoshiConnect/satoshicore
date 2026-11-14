@@ -4,7 +4,7 @@ import PageHeader from '../../components/PageHeader';
 export const metadata = {
   title: 'Privacy — NSAT Wallet (draft)',
   description:
-    'Draft privacy disclosure: no accounts, no analytics, keys stay on the device, and the only network calls are chain reads and a signed-envelope relay.'
+    'Draft privacy disclosure: optional Google sign-in for the website only; wallet keys stay on the device, alongside chain reads and signed-envelope relay.'
 };
 
 const STORED = [
@@ -25,9 +25,14 @@ const STORED = [
     detail: 'Recipient, amount, fee, hash and the ledger result once read. Not a full chain history, and never sent anywhere.'
   },
   {
+    what: 'Google website sign-in session (optional)',
+    where: 'Firebase Authentication, browser-session persistence',
+    detail: 'When you choose Google sign-in, Firebase stores the website identity session for this browser session. It is not connected to the wallet keystore and does not sync or recover signing keys.'
+  },
+  {
     what: 'Theme and session preferences',
-    where: 'localStorage / in memory',
-    detail: 'Theme persists; session state clears when the page closes.'
+    where: 'localStorage / in memory · optional account copy',
+    detail: 'Theme persists on this device. If you turn on theme sync with Google sign-in, only your light or dark choice is stored with your website account in Firebase; turning sync off deletes it. Wallet signing state clears when the page closes.'
   }
 ];
 
@@ -47,6 +52,14 @@ const TRANSMITTED = [
   {
     what: 'GET transactions / confirmations by hash',
     why: 'Indexed history and the ledger verdict for one transaction.'
+  },
+  {
+    what: 'Google sign-in (only when you choose it)',
+    why: 'Google and Firebase Authentication receive the identity data needed to authenticate your website session, such as your Google account ID, name and email. The app does not request Gmail mailbox access and does not send wallet name, address, seed, password, balance or history.'
+  },
+  {
+    what: 'Theme sync (only when you turn it on)',
+    why: 'Writes one document containing your light or dark theme choice, readable only by your own signed-in account. The site database rejects any other field, so wallet name, address, balance, history, seed and password cannot be stored there.'
   }
 ];
 
@@ -82,15 +95,16 @@ export default function PrivacyPage() {
       <section className="panel">
         <div className="panel-head">
           <h2 className="panel-title">What we do not collect</h2>
-          <span className="panel-meta">no account · no tracking</span>
+          <span className="panel-meta">optional account · no analytics</span>
         </div>
         <div className="panel-body">
           <ul className="status-list">
-            <li>No account, email, phone number or identity document.</li>
-            <li>No analytics, advertising, fingerprinting or third-party scripts.</li>
-            <li>No cookies.</li>
-            <li>No seed, password or private key transmitted, logged or stored in plaintext.</li>
-            <li>Nothing sold or shared, because nothing is collected.</li>
+            <li>No wallet account is required. Google sign-in is optional and only identifies a website session.</li>
+            <li>Theme sync is off by default and separate from sign-in: nothing is uploaded unless you turn it on, and it covers the light or dark theme only.</li>
+            <li>No analytics, advertising or fingerprinting. Firebase Auth code is bundled locally; authentication requests may restore an existing browser-session login and interactive sign-in starts only after you choose Google.</li>
+            <li>The site does not set its own cookies. Google/Firebase may use their own authentication cookies during sign-in.</li>
+            <li>No seed, wallet password or private key transmitted to Google/Firebase, logged or stored in plaintext.</li>
+            <li>Google/Firebase receive account identity data only if you opt into sign-in; SatoshiCore does not use it to access your Gmail mailbox or wallet keys.</li>
           </ul>
         </div>
       </section>
@@ -129,9 +143,12 @@ export default function PrivacyPage() {
             ))}
           </ul>
           <p>
-            These reach the gateway and read-only indexer behind this domain, which record
-            standard access data (IP, time, path, user agent). The log retention period is
-            still to be specified in the reviewed notice.
+            Chain requests reach the gateway and read-only indexer behind this domain, which
+            record standard access data (IP, time, path, user agent). If you choose Google
+            sign-in, the Google identity provider and Firebase Authentication also process
+            sign-in and session data under their own privacy terms. SatoshiCore does not
+            request Gmail mailbox access or send wallet contents to those providers. The log
+            retention period is still to be specified in the reviewed notice.
           </p>
         </div>
       </section>

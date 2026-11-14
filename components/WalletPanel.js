@@ -16,6 +16,7 @@ import { decodeSeed } from '../lib/nsatCodec';
 // Shared send gate (mirror of the desktop/prototype reason contract — one
 // source of truth for WHY a send is blocked; see NSAT-WALLET-BUTTON-STATES).
 import { sendPreflight, maxSendable, fmtGroup } from '../lib/nsatSendPreflight';
+import GoogleAccount from './GoogleAccount';
 
 // Full transactional Web Wallet rendered in the ORIGINAL DESKTOP WALLET
 // DESIGN (canonical source: nsat-core desktop/satoshicore-wallet
@@ -33,6 +34,7 @@ import { sendPreflight, maxSendable, fmtGroup } from '../lib/nsatSendPreflight';
 // from the gateway's session-truth responses.
 
 const ACCOUNT_RE = /^G[A-Z2-7]{55}$/;
+const SHOW_GOOGLE_ACCOUNT = process.env.NEXT_PUBLIC_EXTENSION_BUILD !== '1';
 // Phone-style app: three tabs, arranged the way the iPhone build arranges
 // them. Send and Receive are actions on the wallet screen, not tabs — a phone
 // wallet does not spend a third of its tab bar on one form. Shielded is
@@ -1102,6 +1104,7 @@ function ActivityPage({ history, activeName, onRecheck, canRecheck }) {
 function SettingsPage({ s, onShielded }) {
   return (
     <div>
+      {SHOW_GOOGLE_ACCOUNT ? <GoogleAccount /> : null}
       <section className="nw-card">
         <h2 style={{ color: 'var(--text)' }}>Privacy</h2>
         <div className="nw-kv" style={{ marginTop: 10 }}>

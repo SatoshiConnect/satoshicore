@@ -65,6 +65,11 @@ const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 const define = {
   'process.env.NODE_ENV': '"production"',
   'process.env.NEXT_PUBLIC_API_SAME_ORIGIN': '"0"',
+  'process.env.NEXT_PUBLIC_EXTENSION_BUILD': '"1"',
+  'process.env.NEXT_PUBLIC_FIREBASE_API_KEY': '""',
+  'process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN': '""',
+  'process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID': '""',
+  'process.env.NEXT_PUBLIC_FIREBASE_APP_ID': '""',
   'process.env.NEXT_PUBLIC_API_GATEWAY_URL': JSON.stringify(GATEWAY),
   'process.env.NEXT_PUBLIC_INDEXER_URL': JSON.stringify(INDEXER),
   'process.env.NEXT_PUBLIC_NSAT_NETWORK_ID': JSON.stringify(NETWORK_ID),
@@ -89,6 +94,24 @@ await build({
   define,
   logLevel: 'info',
   legalComments: 'none',
+  // The website's optional Google login is not supported in the MV3 popup.
+  // Stub only that web-only component for this build to avoid bundling Firebase
+  // Auth, browser OAuth domains, or Google account UI into the extension.
+  plugins: [{
+    name: 'exclude-web-google-login-from-extension',
+    setup(builder) {
+      builder.onResolve({ filter: /^\.\/GoogleAccount$/ }, (args) => {
+        if (args.importer.endsWith('/components/WalletPanel.js')) {
+          return { path: 'google-account-stub', namespace: 'wallet-extension' };
+        }
+        return null;
+      });
+      builder.onLoad({ filter: /.*/, namespace: 'wallet-extension' }, () => ({
+        contents: 'export default function GoogleAccount() { return null; }',
+        loader: 'jsx',
+      }));
+    },
+  }],
 });
 
 copyFileSync(join(src, 'popup.html'), join(dist, 'popup.html'));

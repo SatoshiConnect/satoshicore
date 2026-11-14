@@ -442,6 +442,13 @@ body:has(.nw-root) .site-main.container {
   border-radius: 10px;
 }
 
+.nw-google-account { margin-bottom: 12px; }
+.nw-google-session { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.nw-google-user { display: flex; flex: 1 1 160px; min-width: 0; flex-direction: column; }
+.nw-google-user > * { overflow-wrap: anywhere; }
+.nw-google-error { color: var(--danger); margin: 10px 0 0; }
+.nw-google-sync { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-soft); }
+
 .nw-unlock-card .nw-send-btn {
   width: 100%;
   padding: 11px 14px;

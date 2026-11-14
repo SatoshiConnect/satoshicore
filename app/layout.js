@@ -32,6 +32,10 @@ const BASE = process.env.NEXT_PUBLIC_BASE_PATH || '';
 //  - frame-ancestors is header-only (ignored in meta delivery) and belongs
 //    to the gateway's HTTP responses, not here.
 const DEV_EVAL = process.env.NODE_ENV === 'development' ? "'unsafe-eval'" : '';
+const FIREBASE_AUTH_DOMAIN = process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || '';
+const FIREBASE_AUTH_FRAME = FIREBASE_AUTH_DOMAIN
+  ? `https://${FIREBASE_AUTH_DOMAIN}`
+  : '';
 
 // https: covers any TLS origin (the production gateway included). Plain-HTTP
 // endpoints are listed explicitly, so a LAN or loopback gateway works in dev
@@ -56,11 +60,12 @@ const PLAIN_HTTP_ORIGINS = [
 
 const SITE_CSP = [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline' ${DEV_EVAL}`,
+  `script-src 'self' 'unsafe-inline' https://apis.google.com ${DEV_EVAL}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data:",
   "font-src 'self'",
   `connect-src 'self' https: ${PLAIN_HTTP_ORIGINS}`.trim(),
+  `frame-src 'self' https://accounts.google.com ${FIREBASE_AUTH_FRAME} https://*.firebaseapp.com`.trim(),
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'none'",

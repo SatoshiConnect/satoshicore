@@ -70,6 +70,8 @@ test('bundle carries the build-time identity, not a runtime-configurable one', (
   assert.ok(js.includes('NSAT Mainnet ; October 2026 ; bc3098829fffc717'),
     'network passphrase missing from bundle');
   assert.ok(js.includes('scw-web-keystore-v1'), 'keystore key missing from bundle');
+  assert.doesNotMatch(js, /Website account|Continue with Google|firebaseapp\.com|identitytoolkit\.googleapis\.com/i,
+    'web-only Google account sign-in must not ship in the extension popup');
   assert.doesNotMatch(js, /\beval\s*\(/, 'eval() is forbidden in the bundle');
   assert.doesNotMatch(js, /new\s+Function\s*\(/, 'new Function() is forbidden in the bundle');
 });

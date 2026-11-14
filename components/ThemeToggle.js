@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { pushThemeForCurrentUser, THEME_KEY } from '../lib/themeSync';
 
 // One switch for the whole site. The palette itself is only tokens, so this
 // flips an attribute — no component knows which theme it is in.
@@ -8,7 +9,16 @@ import { useEffect, useState } from 'react';
 // The first paint is decided by a tiny inline script in app/layout.js (before
 // hydration) so a light-mode visitor never sees a dark flash; this button then
 // reads that decision and writes the next one.
-const KEY = 'nsat-theme';
+function remember(theme) {
+  try {
+    localStorage.setItem(THEME_KEY, theme);
+  } catch {
+    /* private mode / storage blocked: the theme still applies to this page */
+  }
+  // Off unless the signed-in account opted in; a failure here never blocks the
+  // local theme change the click already made.
+  void pushThemeForCurrentUser(theme).catch(() => {});
+}
 
 function SunIcon() {
   return (
@@ -46,11 +56,7 @@ export default function ThemeToggle() {
       className="theme-toggle"
       onClick={() => {
         document.documentElement.dataset.theme = next;
-        try {
-          localStorage.setItem(KEY, next);
-        } catch {
-          /* private mode / storage blocked: the theme still applies to this page */
-        }
+        remember(next);
         setTheme(next);
       }}
       aria-label={label}
