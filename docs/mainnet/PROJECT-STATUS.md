@@ -40,7 +40,7 @@ Commit ล่าสุดของรอบนี้: `7e34e42` (deployed) · �
 | 19 | Release artifact ตรงกับ release.json | **VERIFIED** | `scripts/extension-release.mjs`: ตรวจ zip ↔ release.json ↔ manifest ใน zip; จับ sha ปลอมได้ (exit 1) |
 | 20 | Offline shell (precache list) | **VERIFIED (static)** | เทสต์ใหม่: ทุก entry ของ `SHELL` ต้องมีไฟล์จริงใน `out/` และต้อง relative |
 | 12 | `https://wallet.satoshicore.org/` | **BROKEN / NOT RESOLVING** | 000 — ต้องตัดสินใจว่าจะคงโดเมนนี้หรือย้ายไป `/wallet` |
-| 13 | Website connection (dApp provider) | **MISSING (โดยเจตนา · ประกาศชัดบนเว็บ)** | ไม่มี `window.nsat`, ไม่มี connected sites; `/security/` เขียนตรง ๆ ว่าเว็บเพจขอ signature ไม่ได้ — ต้องมี security review แยกก่อนเปิด |
+| 13 | Website connection (dApp provider) | **DESIGN ONLY → BLOCKED BEFORE IMPLEMENTATION** | Threat model + permission model อยู่ที่ `docs/security/WEBSITE-CONNECTION-DESIGN.md`; ยังไม่มี provider code/permissions ใหม่. Firefox webpage `externally_connectable` messaging ไม่รองรับ; design candidate ต้องตรวจ runtime และ Firefox floor ≥128 ก่อนทำ |
 | 14 | Legal disclosures | **IMPLEMENTED (draft) → BLOCKED (review)** | `/terms/` `/privacy/` `/security/` ขึ้นจริงและติดป้าย `draft · pending legal review`; ยังต้องให้เจ้าของ/ที่ปรึกษากฎหมายไทยตรวจก่อนถือเป็นฉบับจริง |
 | 15 | Deployment รอบใหม่ | **BLOCKED** | CI เตรียมเสร็จแล้ว (`main` / `workflow_dispatch`) แต่ยังไม่รันจริง — ต้องอนุมัติเจ้าของ |
 | 16 | Post-deploy verification | **VERIFIED** | `scripts/verify-deployed-site.mjs`: ผ่าน 8/8 กับ build ท้องถิ่น, ตรวจเจอ build เก่าบน production (6 FAIL, exit 1) |
@@ -116,7 +116,16 @@ verify-deployed-site https://satoshicore.org     8 passed / 0 failed
 browser: cache keys = [nsat-pwa-v3], API entries = 0 (even after an /api fetch)
 ```
 
-## 5. Next action
+## 5. Website-connection design milestone (2026-11-14)
+
+- เอกสาร: `docs/security/WEBSITE-CONNECTION-DESIGN.md` — trust boundaries, STRIDE threats 15 รายการ, grant levels, exact-origin rules, storage/revocation, typed request lifecycle, browser compatibility และ release gates
+- ผลตรวจ source: extension ปัจจุบันเป็น popup-only; manifest มี `storage`/`downloads` + host permissions ของ backend เท่านั้น; ไม่มี content scripts, background message broker, `externally_connectable`, `window.nsat` หรือ connected-sites UI
+- ตัดสินใจ: ไม่คืน private key/signature/envelope ให้หน้าเว็บ; connect แยกจาก `accounts`; ทุก transfer ต้องผ่าน extension-owned approval UI; page/DOM bridge เป็น untrusted; ไม่ใช้ wildcard host permission
+- Firefox gate: Mozilla ระบุ webpage messaging ผ่าน `externally_connectable` ไม่รองรับ; MAIN-world injection ตั้งแต่ Firefox 128 — ไม่อ้าง provider support สำหรับ 121–127
+- สถานะ: **DESIGN ONLY** — ยังไม่ลงโค้ด, ไม่เพิ่ม permission, ไม่มี Mainnet/API/key change. ก่อน implementation ต้อง review design และเลือก local HTTP / grant duration / Firefox floor / account selection
+- Research sources และ URLs บันทึกท้าย design doc; ไม่ใช่ security certification
+
+## 6. Next action
 
 1. โหลด `extension/dist` (Chromium) และ `dist-firefox` เข้าเบราว์เซอร์จริง ทดสอบ create → receive → send ด้วยกระเป๋า synthetic ที่ไม่มียอด (checklist: `docs/EXTENSION-TESTING.md`)
 2. เจ้าของ/ที่ปรึกษากฎหมายตรวจ `/terms/` `/privacy/` แล้วให้แก้ข้อความ + เติม governing law/ผู้ควบคุมข้อมูล
