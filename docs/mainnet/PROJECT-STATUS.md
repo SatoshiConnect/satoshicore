@@ -28,7 +28,7 @@ Commit ล่าสุดของรอบนี้: `e013e06` (ก่อน tr
 | 2 | Shared wallet logic | **VERIFIED** | `lib/nsatClient.js`, `lib/nsatWallet.js`, `lib/nsatCodec.js`, `lib/nsatSendPreflight.js` ถูกใช้ร่วมกันทั้งเว็บและ extension (ไฟล์เดียวกัน ไม่ได้ fork) |
 | 3 | Extension (Chromium MV3) | **BUILD_PRODUCED** | `extension/dist` + zip; artifact suite 10/10; ยังไม่มีคนโหลดเข้า Chrome จริง |
 | 4 | Extension (Firefox) | **BUILD_PRODUCED** | `extension/dist-firefox` + zip; manifest มี `browser_specific_settings.gecko.id = wallet@satoshicore.org`; ยังไม่ทดสอบใน Firefox |
-| 5 | PWA (manifest + SW + offline) | **VERIFIED (live)** | `public/manifest.json` (`.json` เพราะ host ไม่มี MIME ของ `.webmanifest`), `public/sw.js` v4, `public/offline.html`, ไอคอน 192/512/180; `start_url`/`id` = `./` (เปิดกระเป๋าที่ homepage); static-export 11/11 + SW behavioural 3/3; ตรวจบน `https://satoshicore.org` จริง: manifest `application/json`, start_url `./`, SW `nsat-pwa-v4` |
+| 5 | PWA (manifest + SW + offline) | **VERIFIED (live; ยังไม่ทดสอบติดตั้งจริง)** | `public/manifest.json` (`.json` เพราะ host ไม่มี MIME ของ `.webmanifest`), `public/sw.js` v4, `public/offline.html`, ไอคอน 192/512/180; `start_url`/`scope`/`id` = `./` (เปิดกระเป๋าที่ homepage); static-export 12/12 + SW behavioural 3/3; ตรวจบน `https://satoshicore.org` จริง: manifest `application/json`, start_url `./`, SW `nsat-pwa-v4`; **ยังไม่มีหลักฐานติดตั้ง/ใช้งาน offline บนเบราว์เซอร์จริง** (ดูข้อจำกัดท้ายเอกสาร) |
 | 6 | Homepage = ตัว wallet | **DEPLOYED + VERIFIED (live)** | `/` render `WalletPanel` เอง (ไม่มี landing page คั่น) + `/wallet/` เป็น alias; first-time เห็น Create/Import/network status + Install app/extension; returning user เห็น unlock form; unlocked เห็น dashboard เดิม |
 | 7 | `/download` | **IMPLEMENTED** | แสดงขนาด/sha256/permissions/endpoints จริง และสถานะต่อเบราว์เซอร์ (ยังไม่ขึ้น store ใด ๆ) |
 | 8 | Gateway production | **VERIFIED** | `https://gateway.satoshicore.org/health` 200, `/api/v1/chain/info` 200 (ledger สด) |
@@ -50,7 +50,8 @@ Commit ล่าสุดของรอบนี้: `e013e06` (ก่อน tr
 ## 2. งานที่เสร็จในรอบนี้
 
 ### Workstream C — PWA (§5)
-- `public/manifest.json`: `display: standalone`, `start_url: ./wallet/`, `scope: ./` (relative → ใช้ได้ทั้งโดเมนจริงและ subpath), ไอคอน 192/512 (any + maskable) — ใช้ `.json` เพราะ Caddy ไม่มี MIME mapping ของ `.webmanifest` และเสิร์ฟเป็น `text/plain`
+- `public/manifest.json`: `display: standalone`, `start_url: ./`, `scope: ./`, `id: ./` (relative → ใช้ได้ทั้งโดเมนจริงและ subpath), ไอคอน 192/512 (any + maskable) — ใช้ `.json` เพราะ Caddy ไม่มี MIME mapping ของ `.webmanifest` และเสิร์ฟเป็น `text/plain`
+- `components/InstallApp.js`: ปุ่มติดตั้งที่ replay `beforeinstallprompt` บน gesture จริง, แสดงขั้นตอนเมนูของเบราว์เซอร์เมื่อไม่มี event, iOS แสดง Share → Add to Home Screen, ซ่อนเมื่อติดตั้งแล้ว — ไม่มี prompt ปลอม
 - `public/sw.js`: offline shell เท่านั้น — **ไม่แตะ cross-origin** (gateway/indexer) และ **ไม่แตะ non-GET** เพื่อไม่ให้ยอดเงิน/ผล ledger ถูกเสิร์ฟจาก cache
 - `public/offline.html`: บอกตรง ๆ ว่าต้องมีเน็ตเวิร์กสำหรับยอดเงิน/ค่าธรรมเนียม/การยืนยัน
 - `components/SwRegister.js`: ลงทะเบียน SW เฉพาะ production + secure context, base-path-safe
@@ -146,29 +147,45 @@ browser: cache keys = [nsat-pwa-v3], API entries = 0 (even after an /api fetch)
 | ลดความแน่น docs/explorer/download (2026-11-14) | **DEPLOYED** | docs: ตัด section "Updating the site" (คำสั่ง build อยู่ใน repo docs), ย่อ lead และ bullet เหลือประโยคเดียว; explorer/dashboard: lead เหลือบรรทัดเดียว; download: ย่อ lead, รวมบรรทัดเวอร์ชัน/permissions, ตัดบรรทัดสรุปผลเทสต์ภายใน, ย่อคำอธิบาย browser support — คง sha256/คำเตือน "ยังไม่ขึ้น store" ไว้; static 11/11, engine 4/4, live verify 8/8 |
 | ลดความแน่นของหน้า (2026-11-14) | **DEPLOYED** | ตัด lead/คำอธิบายที่ซ้ำ, ซ่อนแถบ section เมื่อยังไม่มีกระเป๋า, ตัดข้อมูลเทคนิค (issuance policy, network passphrase ใน dashboard/footer, latest ledger ที่ซ้ำกับ badge), ยุบเมนู Home+Wallet เป็น Wallet, ย้าย install actions ไปหลังการ์ดสร้าง/นำเข้า, ย่อข้อความ Shielded/Receive/Settings; คงข้อความด้านความปลอดภัย (ไม่มี server-side recovery) และค่าธรรมเนียม/ reserve ไว้; static 11/11, SW 3/3, engine 4/4, live verify 8/8 |
 | Light mode + theme toggle (2026-11-14) | **DEPLOYED** | token ชุดเดียวสลับค่าใต้ `[data-theme='light']` (ไม่ได้แยก component); ปุ่มใน header จำค่าใน `localStorage('nsat-theme')`; inline script ใน `<head>` เซ็ตธีมก่อน paint กันจอกระพริบ; ค่าเริ่มต้นตาม system; wallet.css มี light block ของตัวเองเพราะ popup ไม่โหลด globals.css; ตรวจบน live: คลิกแล้ว theme/stored/aria-label เปลี่ยนถูก และ reload แล้วยังเป็น light |
-| Engine ด้วย synthetic identity (offline) | **VERIFIED** | `tests/wallet-engine.test.mjs` (4/4): seed ถูกเก็บเป็น ciphertext เท่านั้น, รหัสผิดถูกปฏิเสธ, address ที่แสดง = กุญแจที่เซ็น, envelope verify ด้วย Ed25519 ในเครื่อง, determinism, backup→restore ได้กุญแจเดิม, keystore ที่ถูกสลับ pubkey / แก้ ciphertext ถูกปฏิเสธ, history patch ด้วย tx hash; ทั้งไฟล์ไม่เรียก network (fetch ถูกทำให้ throw) |
+| Engine ด้วย synthetic identity (offline) | **VERIFIED** | `tests/wallet-engine.test.mjs` (5/5): seed ถูกเก็บเป็น ciphertext เท่านั้น, รหัสผิดถูกปฏิเสธ, address ที่แสดง = กุญแจที่เซ็น, envelope verify ด้วย Ed25519 ในเครื่อง, determinism, การเซ็นถูกยกเลิกเมื่อกระเป๋าถูกล็อกทั้งก่อนและหลัง async account lookup, backup→restore ได้กุญแจเดิม, keystore ที่ถูกสลับ pubkey / แก้ ciphertext ถูกปฏิเสธ, history patch ด้วย tx hash; ทั้งไฟล์ไม่เรียก network (fetch ถูกทำให้ throw) |
 
 ```
-npm run build (NEXT_PUBLIC_API_SAME_ORIGIN=1)   ✓ Compiled successfully
-tests/static-export.test.mjs                    11 / 11 pass
+# นับใหม่หลัง merge origin/main (commit 4788d3d) — ตัวเลขชุดนี้คือสภาพปัจจุบัน
+npm run build                                   ✓ Compiled successfully, 14 static pages
+tests/balance-refresh.test.mjs                   1 / 1 pass
+tests/static-export.test.mjs                    12 / 12 pass
 tests/service-worker.test.mjs                    3 / 3 pass
-tests/wallet-engine.test.mjs (synthetic)         4 / 4 pass, no network calls
+tests/wallet-engine.test.mjs (synthetic)         5 / 5 pass, no network calls
+tests/firebase-auth.test.mjs                     3 / 3 pass
+tests/theme-sync.test.mjs                        7 / 7 pass
+tests/theme-contrast.test.mjs                   10 / 10 pass
+scripts/check-css-hex.mjs                        ratchet OK (92 literal, 3 files)
+npm test (รวมทั้งหมด)                            41 pass, 0 fail
 npm run test:extension                           10 / 10 pass + release artifacts OK
 verify-deployed-site https://satoshicore.org     8 passed / 0 failed, 2 advisory
-browser (live /)                                 nw-root present, Create/Import, Install app + extension, console clean
+browser (live /)                                 nw-root present, Create/Import, Install app, console clean
 ```
 
 ### Release readiness (2026-11-14)
 
 | ผลิตภัณฑ์ | สถานะ | หลักฐาน / ช่องว่างที่เหลือ |
 |---|---|---|
-| PWA Wallet (`https://satoshicore.org/`) | **RELEASE-READY → DEPLOYED** | `/` = wallet, live verify 8/8, manifest/SW v4, offline shell, synthetic engine suite; ไม่มีงานค้างเชิงฟังก์ชัน |
+| PWA Wallet (`https://satoshicore.org/`) | **RELEASE-READY → DEPLOYED** | `/` = wallet, live verify 8/8, manifest/SW v4, offline shell, synthetic engine suite; ไม่มีงานค้างเชิงฟังก์ชัน — แต่ยังไม่มีหลักฐานการติดตั้ง/offline บนเบราว์เซอร์จริง (ดูข้อจำกัดด้านล่าง) |
 | Extension packages (Chromium MV3 / Firefox MV3) | **BUILD_PRODUCED** (ไม่ใช่ RELEASE-READY) | zip แพ็กจาก source ปัจจุบัน, artifact suite 10/10, `release.json` ตรงกับ zip; ยังไม่มีหลักฐานรันใน Chrome/Edge/Brave/Firefox จริง → ห้ามประกาศว่ารองรับ |
 | Website connection (dApp provider) | **MISSING / BLOCKED** | ยังเป็น design doc เท่านั้น; ต้องมีเจ้าของตัดสินใจเรื่อง grant lifetime, Firefox floor, HTTPS-only policy ก่อนเขียนโค้ด |
 | Legal | **DRAFT** | `/terms/` `/privacy/` ติดป้าย draft รอตรวจ |
 | PR | **OPEN** | https://github.com/SatoshiConnect/satoshicore/pull/11 (branch นี้สะสมงาน wallet ต่อจาก sponsored-account work) |
 
 ข้อจำกัดที่ยังค้าง: ยังไม่มีใครโหลด zip เข้า Chrome/Firefox จริง; account switching ยังไม่ได้ทดสอบด้วยกระเป๋าจริงสองใบ; Chrome ไม่ยิง `beforeinstallprompt` ในโปรไฟล์ที่ยังไม่มี engagement จึงเห็นเป็นขั้นตอนเมนูแทน (ไม่ใช่ปุ่มปลอม)
+
+### ข้อจำกัดของ PWA ที่ยังไม่มีหลักฐาน (ต้องไม่ประกาศว่าผ่าน)
+
+- **ยังไม่เคยติดตั้งจริงในเบราว์เซอร์ใด** — ทุกหลักฐานของ "installable" มาจาก manifest ที่ถูกต้อง + live HTTP content type/MIME + เทสต์ static; ไม่มี Lighthouse/PWA audit และไม่มี install flow อัตโนมัติ
+- **โหมด offline ยังไม่เคยรันบนอุปกรณ์จริง** — navigation fallback (network → cache → `wallet/` → `offline.html` → 503) ผ่านเฉพาะการจำลอง Cache API ใน `tests/service-worker.test.mjs`
+- **iOS/Safari ยังไม่ทดสอบ** — มี `apple-touch-icon` และอ่าน `navigator.standalone` แล้ว แต่ path "Add to Home Screen" ไม่เคยลองบนเครื่องจริง
+- **ไม่มี UI แจ้งว่ามีเวอร์ชันใหม่** — ยอมรับได้เพราะ navigation เป็น network-first (เห็นของใหม่ในรอบถัดไป) แต่ต้องรู้ว่าไม่มี
+- **cache version ผูกกับเทสต์** — `tests/static-export.test.mjs` ยืนยันสตริง `nsat-pwa-v4`; เมื่อ bump `VERSION` ใน `public/sw.js` ต้องแก้ assertion ในเทสต์พร้อมกัน ไม่งั้น CI แดง
+- **offline ไม่ได้แปลว่ากระเป๋าทำงานได้** — ยอดคงเหลือ ค่าธรรมเนียม และผลยืนยันต้องออนไลน์เสมอ และไม่มีอะไรถูกเซ็นตอนไม่มีเน็ต (ตามดีไซน์)
 
 ## 7. Next action
 
