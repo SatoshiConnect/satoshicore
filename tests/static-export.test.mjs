@@ -97,8 +97,9 @@ test('PWA manifest is present, installable and subpath-safe', () => {
 
   assert.equal(manifest.display, 'standalone');
   assert.ok(manifest.name && manifest.short_name, 'name/short_name required for install');
-  assert.equal(manifest.start_url, './wallet/', 'start_url must open the wallet and stay relative');
+  assert.equal(manifest.start_url, './', 'start_url must open the wallet on the homepage and stay relative');
   assert.equal(manifest.scope, './', 'scope must stay relative for subpath hosting');
+  assert.equal(manifest.id, './', 'the installed app identity is the site root');
   assert.ok(!manifest.start_url.startsWith('/'), 'absolute start_url breaks the base path');
 
   const sizes = new Set(manifest.icons.map((i) => i.sizes));
@@ -125,7 +126,7 @@ test('service worker never intercepts same-origin API or dynamic core routes', (
   assert.match(sw, /\/\(\?:api\|v1\)/, 'API and indexer prefixes must be excluded');
   assert.match(sw, /if \(isDynamicApiPath\(url\.pathname\)\) return;/,
     'API paths must bypass respondWith and all Cache API paths');
-  assert.match(sw, /nsat-pwa-v3/, 'cache version must change when offline behavior changes');
+  assert.match(sw, /nsat-pwa-v4/, 'cache version must change when offline behavior changes');
 });
 
 test('offline shell precache list resolves inside the export', () => {
@@ -171,12 +172,18 @@ test('security, terms and privacy pages ship and are linked from the footer', ()
   }
 });
 
-test('homepage is wallet-first and download page exists', () => {
+test('the homepage IS the wallet, not a landing page', () => {
   const home = readFileSync(join(OUT, 'index.html'), 'utf8');
-  assert.match(home, /Open NSAT Wallet/, 'homepage must offer the wallet as the primary action');
-  assert.match(home, /Install Browser Extension/, 'homepage must offer the extension action');
-  assert.match(home, /href="\/wallet\/"/, 'wallet action must link to /wallet/');
+
+  // The wallet shell and its first-time onboarding render at "/" itself.
+  assert.match(home, /nw-root/, 'homepage does not render the wallet shell');
+  assert.match(home, /Create a New Wallet/, 'homepage has no create-wallet action');
+  assert.match(home, /Import Existing Wallet/, 'homepage has no import action');
+  assert.match(home, /href="\/download\/?"/, 'homepage has no browser-extension action');
+
+  // No intermediate marketing/entry page may sit in front of the wallet.
+  assert.doesNotMatch(home, /Open NSAT Wallet/, 'the old landing CTA is still on the homepage');
 
   assert.ok(existsSync(join(OUT, 'download/index.html')), 'download page missing from export');
-  assert.ok(existsSync(join(OUT, 'wallet/index.html')), 'wallet page missing from export');
+  assert.ok(existsSync(join(OUT, 'wallet/index.html')), 'wallet alias route missing from export');
 });

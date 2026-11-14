@@ -81,6 +81,14 @@ export default function RootLayout({ children }) {
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-title" content="NSAT Wallet" />
         <meta name="mobile-web-app-capable" content="yes" />
+        {/* Chrome/Edge/Brave fire `beforeinstallprompt` once, usually before
+            React has hydrated. Capture it here (static string, no data) so the
+            wallet's Install button can replay it on a real user gesture. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: "window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();window.__nsatInstallPrompt=e;window.dispatchEvent(new Event('nsat:installable'));});"
+          }}
+        />
       </head>
       <body>
         <Header />

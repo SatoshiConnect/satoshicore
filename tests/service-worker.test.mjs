@@ -14,6 +14,10 @@ import { runInNewContext } from 'node:vm';
 
 const SW_PATH = join(process.cwd(), 'out', 'sw.js');
 const ORIGIN = 'https://satoshicore.org';
+// Read the cache name from the worker itself, so bumping VERSION never makes
+// this behavioural test assert against a cache the worker no longer uses.
+const VERSION = readFileSync(SW_PATH, 'utf8')
+  .match(/const VERSION = '([^']+)'/)?.[1];
 
 function loadWorker() {
   const source = readFileSync(SW_PATH, 'utf8');
@@ -109,10 +113,11 @@ test('chain/account API paths bypass the worker entirely', () => {
 });
 
 test('static shell paths are served through the worker', async () => {
+  assert.ok(VERSION, 'the worker must declare a cache VERSION');
   const { dispatch, cacheContents } = loadWorker();
 
   // Simulate an installed cache with a shell page in it.
-  cacheContents.set('nsat-pwa-v3', new Map([
+  cacheContents.set(VERSION, new Map([
     [`${ORIGIN}/wallet/`, new Response('shell', { status: 200 })],
   ]));
 
@@ -121,7 +126,7 @@ test('static shell paths are served through the worker', async () => {
   const res = await responded;
   assert.equal(res.status, 200);
 
-  const store = cacheContents.get('nsat-pwa-v3');
+  const store = cacheContents.get(VERSION);
   assert.ok(
     [...store.keys()].includes(`${ORIGIN}/_next/static/chunks/main.js`),
     'a successful static fetch should be cached'

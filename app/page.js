@@ -1,11 +1,33 @@
-import HomeWallet from '../components/HomeWallet';
+import Link from 'next/link';
+import InstallApp from '../components/InstallApp';
+import WalletPanel from '../components/WalletPanel';
+// The homepage IS the wallet (UNIVERSAL WALLET DIRECTIVE §4): there is no
+// landing page in front of it, and no visit to /wallet is required first.
+// /wallet/ stays as an alias so existing links and the installed PWA keep
+// working. Same component, same core, same storage as that route.
+import './wallet/wallet.css';
 
 export const metadata = {
   title: 'NSAT Wallet — SatoshiCore',
   description:
-    'Open the NSAT wallet or install the browser extension. Non-custodial: keys are generated and encrypted on your device, transactions are signed locally.',
+    'The NSAT wallet: create or import a wallet, see the exact balance, send and '
+    + 'receive NSAT. Non-custodial — the seed is generated and encrypted on this '
+    + 'device and every transaction is signed locally.',
 };
 
 export default function HomePage() {
-  return <HomeWallet />;
+  return (
+    <>
+      {/* Secondary to the wallet itself: install this app, or install the
+          browser extension. Both are real capabilities of this build. */}
+      <div className="nw-extras">
+        <InstallApp />
+        <Link className="button secondary" href="/download/">Install browser extension</Link>
+        <span className="nw-extras-note">
+          Keys stay on this device · Mainnet only
+        </span>
+      </div>
+      <WalletPanel />
+    </>
+  );
 }

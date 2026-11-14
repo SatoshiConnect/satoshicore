@@ -27,6 +27,50 @@ body:has(.nw-root) .site-main.container {
   padding: 0;
 }
 
+/* Homepage only (/): install actions that sit above the wallet itself.
+   Secondary by design — the create/import cards are the first thing a
+   first-time user sees, these never compete with them. */
+.nw-extras {
+  max-width: var(--page-max, 1240px);
+  margin: 0 auto;
+  padding: 1.5rem var(--gutter, 1.25rem) 0;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.nw-extras .button {
+  padding: 0.45rem 0.9rem;
+  font-size: 0.85rem;
+  border-radius: 10px;
+}
+
+.nw-extras-note {
+  font-size: 0.8rem;
+  color: var(--text-dim, #7c93ad);
+  margin: 0;
+}
+
+.nw-ios-install {
+  display: inline-block;
+}
+
+.nw-ios-install summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.nw-ios-install summary::-webkit-details-marker {
+  display: none;
+}
+
+.nw-ios-install .nw-extras-note {
+  max-width: 26rem;
+  margin: 0.5rem 0 0;
+  line-height: 1.45;
+}
+
 .nw-root {
   /* Same neon tokens as globals.css, redeclared locally so the shell never
      depends on load order. */

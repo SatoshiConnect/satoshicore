@@ -1,7 +1,7 @@
 # NSAT Universal Wallet — Project Status
 
-อัปเดต: 2026-11-13 · Repo: `SatoshiConnect/satoshicore` (โฟลเดอร์ `satoshicore-web`) · Branch: `feat/sponsored-accounts-wallet`
-Commit ล่าสุดของรอบนี้: `7e34e42` (deployed) · ก่อนหน้า: `14691d6`, `c3769b9`, `d336bde`, `e495252`
+อัปเดต: 2026-11-14 · Repo: `SatoshiConnect/satoshicore` (โฟลเดอร์ `satoshicore-web`) · Branch: `feat/sponsored-accounts-wallet`
+Commit ล่าสุดของรอบนี้: `e013e06` (ก่อน tranche homepage) · ดู §6 สำหรับ tranche 2026-11-14
 
 สถานะที่ใช้: **IMPLEMENTED → VERIFIED → REVIEWED → MERGED → RELEASE-READY → DEPLOYED**
 สถานะการตรวจ: IMPLEMENTED / VERIFIED / BROKEN / MISSING / BLOCKED / NOT INSPECTED
@@ -28,13 +28,13 @@ Commit ล่าสุดของรอบนี้: `7e34e42` (deployed) · �
 | 2 | Shared wallet logic | **VERIFIED** | `lib/nsatClient.js`, `lib/nsatWallet.js`, `lib/nsatCodec.js`, `lib/nsatSendPreflight.js` ถูกใช้ร่วมกันทั้งเว็บและ extension (ไฟล์เดียวกัน ไม่ได้ fork) |
 | 3 | Extension (Chromium MV3) | **BUILD_PRODUCED** | `extension/dist` + zip; artifact suite 10/10; ยังไม่มีคนโหลดเข้า Chrome จริง |
 | 4 | Extension (Firefox) | **BUILD_PRODUCED** | `extension/dist-firefox` + zip; manifest มี `browser_specific_settings.gecko.id = wallet@satoshicore.org`; ยังไม่ทดสอบใน Firefox |
-| 5 | PWA (manifest + SW + offline) | **VERIFIED (live)** | `public/manifest.json` (`.json` เพราะ host ไม่มี MIME ของ `.webmanifest`), `public/sw.js` v2, `public/offline.html`, ไอคอน 192/512/180; static-export 9/9; ตรวจบน `https://satoshicore.org` จริง: manifest `application/json`, SW `activated`, cache มีเฉพาะ `nsat-pwa-v2` |
-| 6 | Homepage wallet-first | **IMPLEMENTED** | `/` = Open NSAT Wallet + Install Browser Extension + Network/Explorer/Docs |
+| 5 | PWA (manifest + SW + offline) | **VERIFIED (live)** | `public/manifest.json` (`.json` เพราะ host ไม่มี MIME ของ `.webmanifest`), `public/sw.js` v4, `public/offline.html`, ไอคอน 192/512/180; `start_url`/`id` = `./` (เปิดกระเป๋าที่ homepage); static-export 11/11 + SW behavioural 3/3; ตรวจบน `https://satoshicore.org` จริง: manifest `application/json`, start_url `./`, SW `nsat-pwa-v4` |
+| 6 | Homepage = ตัว wallet | **DEPLOYED + VERIFIED (live)** | `/` render `WalletPanel` เอง (ไม่มี landing page คั่น) + `/wallet/` เป็น alias; first-time เห็น Create/Import/network status + Install app/extension; returning user เห็น unlock form; unlocked เห็น dashboard เดิม |
 | 7 | `/download` | **IMPLEMENTED** | แสดงขนาด/sha256/permissions/endpoints จริง และสถานะต่อเบราว์เซอร์ (ยังไม่ขึ้น store ใด ๆ) |
 | 8 | Gateway production | **VERIFIED** | `https://gateway.satoshicore.org/health` 200, `/api/v1/chain/info` 200 (ledger สด) |
 | 9 | Indexer production | **VERIFIED** | `https://satoshicore.org/v1/health` 200, `/v1/accounts/<G>/transactions` 200 |
 | 10 | `https://www.satoshicore.org/` | **BROKEN** | DNS ไม่ resolve (curl 000) — ยังไม่มี www |
-| 11 | `https://satoshicore.org/` | **DEPLOYED (2026-11-13)** | build ปัจจุบันขึ้นจริง: homepage wallet-first, `/download/` 200, manifest/SW/offline 200, `verify-deployed-site` 8/8; same-origin `/api/v1/chain/info` + `/v1/health` 200; wallet แสดง `Mainnet verified · ledger 328,791` |
+| 11 | `https://satoshicore.org/` | **DEPLOYED (2026-11-14)** | build ปัจจุบันขึ้นจริง: `/` คือ wallet (Create/Import, `Mainnet verified · ledger 336,067`, meta `No wallet yet · NSAT · connected`), `/download/` 200 และ sha256 ตรงกับ zip ที่แพ็กใหม่, manifest/SW/offline 200, `verify-deployed-site` 8/8 (0 failed) |
 | 17 | Hosting จริงของ satoshicore.org | **VERIFIED: Caddy ที่ 87.124.102.86** | `server: Caddy`, Let's Encrypt, HTTP/3, HSTS — **ไม่ใช่ GitHub Pages** (ดู `docs/DOMAINS.md`) |
 | 18 | Publish pipeline ตาม host จริง | **IMPLEMENTED (ยังไม่รัน)** | `publish-static.yml`: build → test → tar.gz + sha256 → artifact; upload เข้า `releases/<sha>/` เฉพาะเมื่อมี secrets + `publish=true`; ยังไม่ activate |
 | 19 | Release artifact ตรงกับ release.json | **VERIFIED** | `scripts/extension-release.mjs`: ตรวจ zip ↔ release.json ↔ manifest ใน zip; จับ sha ปลอมได้ (exit 1) |
@@ -125,7 +125,31 @@ browser: cache keys = [nsat-pwa-v3], API entries = 0 (even after an /api fetch)
 - สถานะ: **DESIGN ONLY** — ยังไม่ลงโค้ด, ไม่เพิ่ม permission, ไม่มี Mainnet/API/key change. ก่อน implementation ต้อง review design และเลือก local HTTP / grant duration / Firefox floor / account selection
 - Research sources และ URLs บันทึกท้าย design doc; ไม่ใช่ security certification
 
-## 6. Next action
+## 6. Tranche 2026-11-14 — homepage เป็น wallet เอง (Product A §4)
+
+| รายการ | สถานะ | หลักฐาน |
+|---|---|---|
+| `app/page.js` = `WalletPanel` | **DEPLOYED** | import `components/WalletPanel` + `app/wallet/wallet.css`; `components/HomeWallet.js` ถูกลบ (ไม่มี marketing landing page แล้ว) |
+| `/wallet/` | **DEPLOYED (alias)** | route เดิมยัง 200 และใช้ component เดียวกัน — ลิงก์เก่า/แอปที่ติดตั้งไว้ไม่พัง |
+| Install app (PWA) | **IMPLEMENTED** | `components/InstallApp.js`: จับ `beforeinstallprompt` (ดักไว้ใน `app/layout.js` ก่อน hydration) แล้ว replay บน gestures ของผู้ใช้; ไม่มี event → แสดงขั้นตอนเมนูจริงของเบราว์เซอร์; iOS Safari แสดง Share → Add to Home Screen; ติดตั้งแล้วไม่แสดง; ไม่มี fake prompt |
+| Install browser extension | **DEPLOYED** | `/` มีปุ่มรอง → `/download/` |
+| Account switching | **IMPLEMENTED (ยังไม่ทดสอบกับกระเป๋าจริง 2 ใบ)** | ตัวเลือก account ในแถบ wallet (เมื่อมี >1 กระเป๋า) + ปุ่ม Switch ใน Settings; สลับแล้ว seed เดิมถูกล้าง ต้องใส่รหัสของกระเป๋าเป้าหมายใหม่ |
+| manifest / SW | **DEPLOYED** | `start_url` + `id` = `./`, `scope` = `./`, cache `nsat-pwa-v4` |
+| Extension artifacts | **REPACKAGED** | zip ใหม่ทั้ง Chromium (80,660 B, `4ac897f9aaad…`) และ Firefox (80,697 B, `989d04142537…`) เพราะ popup ใช้ `WalletPanel` เดียวกัน; `release.json` เขียนจาก zip จริง; artifact suite 10/10 |
+| เทสต์ที่แก้ | **VERIFIED** | `static-export.test.mjs` เปลี่ยนจาก "homepage ต้องมี Open NSAT Wallet" เป็น "homepage คือ wallet shell + Create/Import + ไม่มี landing CTA"; `service-worker.test.mjs` อ่าน cache VERSION จาก worker เอง; `verify-deployed-site.mjs` ตรวจ homepage แบบ wallet + `start_url === './'` |
+
+```
+npm run build (NEXT_PUBLIC_API_SAME_ORIGIN=1)   ✓ Compiled successfully
+tests/static-export.test.mjs                    11 / 11 pass
+tests/service-worker.test.mjs                    3 / 3 pass
+npm run test:extension                           10 / 10 pass + release artifacts OK
+verify-deployed-site https://satoshicore.org     8 passed / 0 failed, 2 advisory
+browser (live /)                                 nw-root present, Create/Import, Install app + extension, console clean
+```
+
+ข้อจำกัดที่ยังค้าง: ยังไม่มีใครโหลด zip เข้า Chrome/Firefox จริง; account switching ยังไม่ได้ทดสอบด้วยกระเป๋าจริงสองใบ; Chrome ไม่ยิง `beforeinstallprompt` ในโปรไฟล์ที่ยังไม่มี engagement จึงเห็นเป็นขั้นตอนเมนูแทน (ไม่ใช่ปุ่มปลอม)
+
+## 7. Next action
 
 1. โหลด `extension/dist` (Chromium) และ `dist-firefox` เข้าเบราว์เซอร์จริง ทดสอบ create → receive → send ด้วยกระเป๋า synthetic ที่ไม่มียอด (checklist: `docs/EXTENSION-TESTING.md`)
 2. เจ้าของ/ที่ปรึกษากฎหมายตรวจ `/terms/` `/privacy/` แล้วให้แก้ข้อความ + เติม governing law/ผู้ควบคุมข้อมูล

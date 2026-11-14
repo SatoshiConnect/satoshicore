@@ -14,7 +14,7 @@
  * works offline".
  */
 
-const VERSION = 'nsat-pwa-v3';
+const VERSION = 'nsat-pwa-v4';
 
 // Relative to the registration scope, so the same file works from the domain
 // root and from a GitHub Pages project subpath.

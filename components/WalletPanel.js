@@ -300,6 +300,17 @@ export default function WalletPanel() {
     notify('Wallet locked — signing key cleared from memory.', 'ok');
   }
 
+  // Account switching never reuses the previous key: it drops the active seed
+  // and asks for THIS wallet's password, exactly like a fresh unlock. Nothing
+  // is signed until that password is entered again.
+  function switchTo(name) {
+    if (active) setActive(null);
+    setUnlockName(name);
+    setUnlockPass('');
+    setPage('overview');
+    notify(`Selected “${name}” — unlock it with its password to sign.`, 'ok');
+  }
+
   function doBackup() {
     const blob = keystoreExport();
     const url = URL.createObjectURL(new Blob([blob], { type: 'application/json' }));
@@ -464,7 +475,7 @@ export default function WalletPanel() {
             eyebrow="NSAT · wallet"
             title={PAGE_TITLE[page]}
             lead={PAGE_LEAD[page]}
-            meta={`${active ? active.name : 'Locked'} · NSAT · ${connLine}`}
+            meta={`${active ? active.name : hasWallets ? 'Locked' : 'No wallet yet'} · NSAT · ${connLine}`}
             actions={<NetworkBadge net={net ? { ...net, ledger: liveLedger ?? net.ledger } : net} />}
           />
 
@@ -495,6 +506,16 @@ export default function WalletPanel() {
                   <button className="nw-send-btn" type="submit"
                     disabled={busy || !unlockName}>Unlock</button>
                 </form>
+              )}
+              {/* Account switcher: only when there is more than one stored
+               * wallet, and always by re-entering that wallet's password. */}
+              {active && wallets.length > 1 && (
+                <div className="nw-unlock">
+                  <select value={active.name} aria-label="Switch wallet account"
+                    onChange={(e) => { if (e.target.value !== active.name) switchTo(e.target.value); }}>
+                    {wallets.map(w => <option key={w.name} value={w.name}>{w.name}</option>)}
+                  </select>
+                </div>
               )}
               {active && (
                 <button type="button" className="nw-ghost-btn" onClick={doLock}
@@ -533,7 +554,7 @@ export default function WalletPanel() {
           )}
 
           {page === 'settings' && (
-            <SettingsPage s={{ active, doLock, doBackup, doRestore, wallets }} />
+            <SettingsPage s={{ active, doLock, doBackup, doRestore, wallets, onSwitch: switchTo }} />
           )}
       </main>
 
@@ -945,9 +966,15 @@ function SettingsPage({ s }) {
                   <div>{w.name}</div>
                   <div className="nw-small nw-dim nw-mono">{shortAddr(w.pubkey)}</div>
                 </div>
-                <div className="nw-small nw-dim">
-                  {s.active?.name === w.name ? 'active' : ''}
-                </div>
+                {s.active?.name === w.name
+                  ? <span className="nw-badge ok">active</span>
+                  : (
+                    <button type="button" className="nw-chip-btn"
+                      onClick={() => s.onSwitch(w.name)}
+                      title="Lock the current wallet and unlock this one">
+                      Switch
+                    </button>
+                  )}
               </li>
             ))}
           </ul>}

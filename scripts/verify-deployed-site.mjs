@@ -97,13 +97,15 @@ async function main() {
   console.log(`Verifying ${base.href}\n`);
 
   // --- The site itself -----------------------------------------------------
-  await check('Homepage is the wallet build, not the old landing page', async () => {
+  await check('Homepage is the wallet itself, not a landing page', async () => {
     const { status, type, body } = await get('/');
     assert(status === 200, `GET / returned HTTP ${status}`);
     assert(isHtml(type), `GET / served ${type || 'no content-type'} instead of HTML`);
-    assert(body.includes('Open NSAT Wallet'), 'homepage has no "Open NSAT Wallet" action');
-    assert(body.includes('Install Browser Extension'), 'homepage has no extension action');
-    assert(/href="[^"]*\/wallet\/"/.test(body), 'homepage does not link to /wallet/');
+    assert(body.includes('nw-root'), 'homepage does not render the wallet shell');
+    assert(body.includes('Create a New Wallet'), 'homepage has no create-wallet action');
+    assert(body.includes('Import Existing Wallet'), 'homepage has no import action');
+    assert(/href="[^"]*\/download\/?"/.test(body), 'homepage has no extension download action');
+    assert(!body.includes('Open NSAT Wallet'), 'the old landing CTA is still being served');
     return 'wallet-first homepage served';
   });
 
@@ -130,6 +132,7 @@ async function main() {
     assert(manifest.display === 'standalone', `display is ${manifest.display}, expected standalone`);
     assert(manifest.name && manifest.short_name, 'manifest needs name and short_name');
     assert(manifest.start_url && !manifest.start_url.startsWith('/'), `start_url "${manifest.start_url}" is absolute and breaks the base path`);
+    assert(manifest.start_url === './', `start_url is "${manifest.start_url}", expected the wallet homepage`);
     const sizes = new Set((manifest.icons || []).map((i) => i.sizes));
     assert(sizes.has('192x192') && sizes.has('512x512'), 'manifest needs 192x192 and 512x512 icons');
     return `${manifest.icons.length} icons, start_url ${manifest.start_url}`;
