@@ -22,7 +22,7 @@ export default function HomePage() {
       {/* Secondary: after the wallet actions, not in front of them. */}
       <div className="nw-extras">
         <InstallApp />
-        <Link className="button secondary" href="/download/">Install browser extension</Link>
+        <Link className="button secondary" href="/download/">How to install</Link>
       </div>
     </>
   );

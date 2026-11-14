@@ -107,7 +107,7 @@ export default function InstallApp() {
       <p className="nw-extras-note">
         Open the browser menu and choose “Install…” (Chrome, Edge and Brave on
         desktop and Android) or “Add to Home Screen” (Safari on iPhone and
-        iPad). Firefox does not install web apps — use the browser extension
+        iPad). Firefox does not install web apps; use the site in the browser
         there.
       </p>
     </details>

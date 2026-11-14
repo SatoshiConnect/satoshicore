@@ -30,12 +30,15 @@ body:has(.nw-root) .site-main.container {
 /* Homepage only (/): install actions that sit above the wallet itself.
    Secondary by design — the create/import cards are the first thing a
    first-time user sees, these never compete with them. */
+/* Sits under the phone column, not at the page edge, so the two controls read
+ * as part of the wallet rather than as stray site buttons. */
 .nw-extras {
-  max-width: var(--page-max, 1240px);
+  max-width: 430px;
   margin: 0 auto;
-  padding: 0 var(--gutter, 1.25rem) 2.5rem;
+  padding: 1rem var(--gutter, 1.25rem) 2.5rem;
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 0.6rem;
   flex-wrap: wrap;
 }
@@ -172,93 +175,278 @@ body:has(.nw-root) .site-main.container {
  * (like the explorer toolbar) instead of a side rail, so it is not a fourth
  * layout on the site.
  */
-.nw-content {
-  width: 100%;
-  max-width: var(--page-max, 1240px);
-  margin: 0 auto;
+/* --------------------------- Phone shell ----------------------------
+ * The wallet is the product, not a page about the product: it reads like a
+ * wallet app on a phone. One column, an app bar, a status line and a bottom
+ * tab bar. On a desktop it sits as a device-sized panel; under 560px it is
+ * simply the screen. */
+.nw-root {
   padding: 1.75rem var(--gutter, 1.25rem) 3rem;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
 }
 
-.nw-tabs {
+.nw-phone {
+  width: 100%;
+  max-width: 430px;
+  display: flex;
+  flex-direction: column;
+  min-height: min(720px, calc(100vh - 190px));
+  background: var(--bg);
+  border: 1px solid var(--border-card);
+  border-radius: 26px;
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+  position: relative;
+}
+
+.nw-appbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 16px 10px;
+  background: var(--bg);
+}
+
+.nw-appbar-id {
   display: flex;
   align-items: center;
   gap: 10px;
-  flex-wrap: wrap;
-  margin: 0 0 14px;
-  padding: 8px 10px;
-  border: 1px solid var(--border-soft);
-  border-radius: 12px;
-  background: var(--surface);
-}
-
-.nw-tab-list {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex: 1 1 auto;
   min-width: 0;
-  flex-wrap: wrap;
 }
 
-.nw-tab {
-  appearance: none;
-  border: 1px solid transparent;
-  background: none;
-  color: var(--text-dim);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  padding: 6px 10px;
-  border-radius: 6px;
-  cursor: pointer;
-  white-space: nowrap;
+.nw-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-dim);
 }
 
-.nw-tab:hover {
-  color: var(--text);
-  background: var(--hover);
-}
+.nw-dot.ok { background: var(--ok); }
+.nw-dot.wait { background: var(--warn); }
+.nw-dot.err { background: var(--danger); }
 
-.nw-tab.is-active {
-  color: var(--text);
+/* The app bar carries the page's only h1; keep it app-sized, not SEO-sized. */
+.nw-appbar .nw-appbar-title {
+  font-size: 17px;
   font-weight: 600;
-  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
-  background: var(--accent-tint);
+  line-height: 1.2;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 210px;
 }
 
-.nw-tab-tools {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-left: auto;
+.nw-appbar-meta {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.nw-unlock {
+.nw-appbar-side {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
+  flex-shrink: 0;
 }
 
-.nw-unlock select,
-.nw-unlock input {
-  width: auto;
-  min-width: 120px;
-  padding: 6px 9px;
+.nw-icon-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid var(--border-card);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.nw-icon-btn:hover { background: var(--hover); }
+
+.nw-statusline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 16px 10px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.nw-statusline .nw-badge {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
+.nw-statusline-note {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.nw-content {
+  width: 100%;
+  margin: 0;
+  padding: 14px 16px 18px;
+  flex: 1 1 auto;
+}
+
+.nw-section-head {
+  margin: 0 0 12px;
+}
+
+.nw-section-title {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0;
+  color: var(--text);
+}
+
+.nw-page-lead {
+  margin: 4px 0 0;
   font-size: 13px;
-  border-radius: 8px;
+  color: var(--text-dim);
 }
 
-.nw-unlock .nw-send-btn {
-  padding: 7px 14px;
+/* --------------------------- Bottom tabs ---------------------------- */
+.nw-bottomnav {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 2px;
+  padding: 8px 8px 10px;
+  border-top: 1px solid var(--border-soft);
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(12px);
+  position: sticky;
+  bottom: 0;
+}
+
+.nw-navitem {
+  appearance: none;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 6px 2px;
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.nw-navitem:hover { background: var(--hover); }
+
+.nw-navitem.is-active {
+  color: var(--text);
+  background: var(--accent-tint);
+}
+
+.nw-navicon {
+  font-size: 15px;
+  line-height: 1;
+}
+
+.nw-navlabel {
+  font-size: 10px;
+  letter-spacing: 0.01em;
+}
+
+/* First-run switch: Create or Import, one choice at a time. */
+.nw-segmented {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  margin: 0 0 12px;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+}
+
+.nw-seg {
+  appearance: none;
+  border: none;
+  background: none;
+  color: var(--text-dim);
   font-size: 13px;
-  border-radius: 8px;
+  font-weight: 600;
+  padding: 8px 10px;
+  border-radius: 999px;
+  cursor: pointer;
 }
 
-/* The page title now comes from the shared .page-head component. */
+.nw-seg:hover { background: var(--hover); }
+
+.nw-seg.is-active {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+/* Locked: the unlock form is the only thing on screen that matters. */
+.nw-unlock-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius);
+  background: var(--card-grad);
+  margin: 0 0 14px;
+}
+
+.nw-unlock-card select,
+.nw-unlock-card input {
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  font-size: 14px;
+  border-radius: 10px;
+}
+
+.nw-unlock-card .nw-send-btn {
+  width: 100%;
+  padding: 11px 14px;
+  border-radius: 12px;
+}
+
+.nw-account-switch {
+  margin: 0 0 12px;
+}
+
+.nw-account-switch select {
+  width: 100%;
+  padding: 9px 12px;
+}
+
+/* A phone column stacks what a desktop could put side by side. */
+.nw-phone .nw-grid-2 { grid-template-columns: 1fr; }
+.nw-phone .nw-row { flex-direction: column; align-items: stretch; gap: 6px; }
+.nw-phone .nw-row > label { width: auto; }
+.nw-phone .nw-btn-row > .nw-send-btn,
+.nw-phone .nw-btn-row > .nw-ghost-btn { flex: 1 1 140px; }
+
+@media (max-width: 560px) {
+  .nw-root { padding: 0; }
+  .nw-phone {
+    max-width: none;
+    min-height: 100vh;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
+}
 
 /* ------------------------------ Cards ------------------------------ */
 .nw-card {
@@ -271,13 +459,22 @@ body:has(.nw-root) .site-main.container {
 }
 .nw-card + .nw-card { margin-top: 12px; }
 
+/* Balance hero: the one number the app exists to show. */
 .nw-balance-card {
-  background: var(--card);
-  padding: 26px 24px;
+  background:
+    radial-gradient(120% 140% at 100% 0%, var(--accent-tint), transparent 62%),
+    var(--card-grad);
+  padding: 18px 18px 16px;
+  border-radius: 20px;
 }
 .nw-balance-label {
-  color: var(--text-dim); font-size: 13px; font-weight: 500;
+  color: var(--text-dim); font-size: 11px; font-weight: 600;
+  letter-spacing: 0.08em; text-transform: uppercase;
   display: flex; gap: 10px; align-items: center;
+}
+.nw-balance-foot {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; margin-top: 10px; flex-wrap: wrap;
 }
 .nw-balance-amount {
   font-size: 40px; font-weight: 600; letter-spacing: -0.03em;
@@ -293,9 +490,9 @@ body:has(.nw-root) .site-main.container {
 .nw-balance-right { text-align: right; }
 
 .nw-address-chip {
-  display: inline-flex; align-items: center; gap: 8px;
-  background: var(--surface); border: 1px solid var(--border-soft); padding: 6px 10px;
-  border-radius: var(--radius-sm);
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  background: var(--surface); border: 1px solid var(--border-soft); padding: 8px 12px;
+  border-radius: 12px; margin-top: 12px;
   font-family: var(--mono, ui-monospace), SFMono-Regular, Menlo, monospace;
   font-size: 12px; color: var(--text-dim);
 }
@@ -304,26 +501,30 @@ body:has(.nw-root) .site-main.container {
   padding: 4px 10px; font-size: 12px; border-radius: 999px;
 }
 
+/* Three round actions under the balance, the way a phone wallet arranges
+ * them: Send filled, the other two tinted. */
 .nw-quick-actions {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 12px;
-  margin-top: 16px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-top: 12px;
 }
 .nw-action-card {
-  background: var(--card); border: 1px solid var(--border-card);
-  border-radius: var(--radius); padding: 16px;
-  display: flex; gap: 14px; align-items: center; cursor: pointer;
-  transition: background .15s ease;
-  text-align: left; width: 100%;
-  color: var(--text);
+  background: none; border: none;
+  border-radius: 16px; padding: 8px 4px;
+  display: flex; flex-direction: column; gap: 7px; align-items: center;
+  cursor: pointer; text-align: center; width: 100%;
+  color: var(--text); font-size: 12px;
 }
 .nw-action-card:hover { background: var(--hover); }
 .nw-action-icon {
-  width: 40px; height: 40px; border-radius: 12px;
-  display: grid; place-items: center; font-size: 17px; font-weight: 600;
+  width: 52px; height: 52px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 19px; font-weight: 600;
   flex-shrink: 0;
   background: var(--accent-tint); color: var(--link);
+}
+.nw-action-card:first-child .nw-action-icon {
+  background: var(--accent); color: var(--on-accent);
 }
 
 .nw-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }

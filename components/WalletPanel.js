@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import PageHeader from './PageHeader';
 import {
   isGatewayConfigured, isIndexerConfigured, EXPECTED_NETWORK_ID,
   verifyNetworkIdentity, getChainInfo, getAccount,
@@ -34,7 +33,13 @@ import { sendPreflight, maxSendable, fmtGroup } from '../lib/nsatSendPreflight';
 // from the gateway's session-truth responses.
 
 const ACCOUNT_RE = /^G[A-Z2-7]{55}$/;
-const PAGES = ['overview', 'send', 'receive', 'shielded', 'activity', 'settings'];
+// Phone-style tab bar: the five destinations a wallet app puts at the bottom.
+// Shielded has no tab — it is desktop-only, so Settings links to the
+// explanation instead of advertising a feature the browser cannot run.
+const NAV_PAGES = ['overview', 'send', 'receive', 'activity', 'settings'];
+const NAV_LABEL = {
+  overview: 'Wallet', send: 'Send', receive: 'Receive', activity: 'Activity', settings: 'Settings',
+};
 const PAGE_GLYPH = {
   overview: '◈', send: '↗', receive: '↙', shielded: '◆',
   activity: '≡', settings: '⚙',
@@ -464,6 +469,36 @@ export default function WalletPanel() {
 
   return (
     <div className="nw-root">
+      <div className="nw-phone">
+        {/* App bar: who is open, whether signing is possible, and the lock.
+         * It carries the page's only <h1>, so the phone shell stays
+         * semantic without a marketing-style page header. */}
+        <header className="nw-appbar">
+          <div className="nw-appbar-id">
+            <span className={'nw-dot ' + (netOk ? 'ok' : net == null ? 'wait' : 'err')} aria-hidden />
+            <div style={{ minWidth: 0 }}>
+              <h1 className="nw-appbar-title">{active ? active.name : 'NSAT Wallet'}</h1>
+              <p className="nw-appbar-meta">
+                {active ? shortAddr(active.pubkey, 6) : hasWallets ? 'Locked' : 'No wallet yet'}
+                {' · '}{connLine}
+              </p>
+            </div>
+          </div>
+          <div className="nw-appbar-side">
+            {active && (
+              <button type="button" className="nw-icon-btn" onClick={doLock}
+                title="Lock the active wallet (signing stops)" aria-label="Lock wallet">🔒</button>
+            )}
+          </div>
+        </header>
+
+        <div className="nw-statusline">
+          <NetworkBadge net={net ? { ...net, ledger: liveLedger ?? net.ledger } : net} />
+          <span className="nw-statusline-note">
+            {fee != null ? `fee ${fee} NSAT` : 'fee …'}
+          </span>
+        </div>
+
       <main className="nw-content">
           {!configured && (
             <p className="nw-dim nw-small" style={{ marginTop: 0 }}>
@@ -471,58 +506,40 @@ export default function WalletPanel() {
             </p>
           )}
 
-          <PageHeader
-            title={active ? PAGE_TITLE[page] : hasWallets ? 'Unlock' : 'Wallet'}
-            lead={PAGE_LEAD[page]}
-            meta={active ? `${active.name} · ${connLine}` : null}
-            actions={<NetworkBadge net={net ? { ...net, ledger: liveLedger ?? net.ledger } : net} />}
-          />
-
-          {/* Section switcher only once there is something to switch between.
-           * A first-time visitor gets the two actions, nothing else. */}
-          {(active || hasWallets) && (
-          <div className="nw-tabs">
-            <nav className="nw-tab-list" aria-label="Wallet sections">
-              {PAGES.map((p) => (
-                <button key={p} type="button"
-                  className={'nw-tab' + (page === p ? ' is-active' : '')}
-                  onClick={() => setPage(p)}
-                  aria-current={page === p ? 'page' : undefined}>
-                  <span aria-hidden>{PAGE_GLYPH[p]}</span> {PAGE_TITLE[p]}
-                </button>
-              ))}
-            </nav>
-            <div className="nw-tab-tools">
-              {!active && hasWallets && (
-                <form className="nw-unlock" onSubmit={doUnlock}>
-                  <select value={unlockName} aria-label="Wallet to unlock"
-                    onChange={(e) => setUnlockName(e.target.value)}>
-                    <option value="">— wallet —</option>
-                    {wallets.map(w => <option key={w.name} value={w.name}>{w.name}</option>)}
-                  </select>
-                  <input type="password" placeholder="Password" value={unlockPass}
-                    onChange={(e) => setUnlockPass(e.target.value)}
-                    aria-label="Wallet password" />
-                  <button className="nw-send-btn" type="submit"
-                    disabled={busy || !unlockName}>Unlock</button>
-                </form>
-              )}
-              {/* Account switcher: only when there is more than one stored
-               * wallet, and always by re-entering that wallet's password. */}
-              {active && wallets.length > 1 && (
-                <div className="nw-unlock">
-                  <select value={active.name} aria-label="Switch wallet account"
-                    onChange={(e) => { if (e.target.value !== active.name) switchTo(e.target.value); }}>
-                    {wallets.map(w => <option key={w.name} value={w.name}>{w.name}</option>)}
-                  </select>
-                </div>
-              )}
-              {active && (
-                <button type="button" className="nw-ghost-btn" onClick={doLock}
-                  title="Lock the active wallet (signing stops)">🔒 Lock wallet</button>
-              )}
+          {page !== 'overview' && (
+            <div className="nw-section-head">
+              <h2 className="nw-section-title">{PAGE_TITLE[page]}</h2>
+              {PAGE_LEAD[page] ? <p className="nw-page-lead">{PAGE_LEAD[page]}</p> : null}
             </div>
-          </div>
+          )}
+
+          {/* Locked state: unlocking is the only thing that matters, so it is
+           * a card in the flow instead of a control in a toolbar. */}
+          {!active && hasWallets && (
+            <form className="nw-unlock nw-unlock-card" onSubmit={doUnlock}>
+              <label className="nw-label" htmlFor="nw-unlock-name">Unlock a wallet</label>
+              <select id="nw-unlock-name" value={unlockName}
+                onChange={(e) => setUnlockName(e.target.value)}>
+                <option value="">— choose a wallet —</option>
+                {wallets.map(w => <option key={w.name} value={w.name}>{w.name}</option>)}
+              </select>
+              <input type="password" placeholder="Password" value={unlockPass}
+                onChange={(e) => setUnlockPass(e.target.value)}
+                aria-label="Wallet password" />
+              <button className="nw-send-btn" type="submit"
+                disabled={busy || !unlockName}>Unlock</button>
+            </form>
+          )}
+
+          {/* Account switcher: only when there is more than one stored wallet,
+           * and always by re-entering that wallet's password. */}
+          {active && wallets.length > 1 && (
+            <div className="nw-account-switch">
+              <select value={active.name} aria-label="Switch wallet account"
+                onChange={(e) => { if (e.target.value !== active.name) switchTo(e.target.value); }}>
+                {wallets.map(w => <option key={w.name} value={w.name}>{w.name}</option>)}
+              </select>
+            </div>
           )}
 
           {page === 'overview' && (
@@ -555,9 +572,26 @@ export default function WalletPanel() {
           )}
 
           {page === 'settings' && (
-            <SettingsPage s={{ active, doLock, doBackup, doRestore, wallets, onSwitch: switchTo }} />
+            <SettingsPage
+              s={{ active, doLock, doBackup, doRestore, wallets, onSwitch: switchTo }}
+              onShielded={() => setPage('shielded')} />
           )}
       </main>
+
+      {(active || hasWallets) && (
+        <nav className="nw-bottomnav" aria-label="Wallet sections">
+          {NAV_PAGES.map((p) => (
+            <button key={p} type="button"
+              className={'nw-navitem' + (page === p ? ' is-active' : '')}
+              onClick={() => setPage(p)}
+              aria-current={page === p ? 'page' : undefined}>
+              <span className="nw-navicon" aria-hidden>{PAGE_GLYPH[p]}</span>
+              <span className="nw-navlabel">{NAV_LABEL[p]}</span>
+            </button>
+          ))}
+        </nav>
+      )}
+      </div>
 
       {review && (
         <div className="nw-modal-back" role="dialog" aria-modal="true"
@@ -612,10 +646,25 @@ export default function WalletPanel() {
 
 /* --------------------------------- Overview ------------------------------ */
 function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSend, onReceive, onManage }) {
+  // First run is one decision, not two competing forms: a phone wallet offers
+  // Create or Import as a segmented control, then shows the chosen form.
+  const [mode, setMode] = useState('create');
   if (!active) {
     return (
-      <div className="nw-grid-2">
-        <section className="nw-card">
+      <div>
+        <div className="nw-segmented" role="tablist" aria-label="Wallet setup">
+          <button type="button" role="tab" aria-selected={mode === 'create'}
+            className={'nw-seg' + (mode === 'create' ? ' is-active' : '')}
+            onClick={() => setMode('create')}>Create</button>
+          <button type="button" role="tab" aria-selected={mode === 'import'}
+            className={'nw-seg' + (mode === 'import' ? ' is-active' : '')}
+            onClick={() => setMode('import')}>Import</button>
+        </div>
+
+        {/* Both forms stay in the markup — the segmented control only chooses
+         * which one is shown, so a static export still carries both actions
+         * and Import is one tap away instead of a page away. */}
+        <section className="nw-card" hidden={mode !== 'create'}>
           <h2 style={{ color: 'var(--text)' }}>Create a New Wallet</h2>
           <p className="nw-small nw-dim">Generated and encrypted in this browser.</p>
           <form onSubmit={bus.doCreate} className="nw-txf" style={{ marginTop: 10 }}>
@@ -633,7 +682,7 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
             </div>
           </form>
         </section>
-        <section className="nw-card">
+        <section className="nw-card" hidden={mode !== 'import'}>
           <h2 style={{ color: 'var(--text)' }}>Import Existing Wallet</h2>
           <p className="nw-small nw-dim">Encrypted immediately; never shown again.</p>
           <form onSubmit={bus.doImport} className="nw-txf" style={{ marginTop: 10 }}>
@@ -662,25 +711,24 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
   return (
     <div>
       <section className="nw-card nw-balance-card">
-        <div className="nw-balance-row">
-          <div>
-            <div className="nw-balance-label">Confirmed NSAT balance</div>
-            <div className="nw-balance-amount">
-              {balance == null ? '…' : formatExactBalance(balance)}
-              <span className="nw-balance-unit">NSAT</span>
-            </div>
-
-          </div>
-          <div style={{ textAlign: 'right' }}>
-            <div className="nw-address-chip">
-              <span>{shortAddr(active.pubkey)}</span>
-              <button className="nw-chip-btn"
-                onClick={async () => {
-                  await navigator.clipboard.writeText(active.pubkey);
-                  notify('📋 Copied: Address');
-                }}>Copy</button>
-            </div>
-          </div>
+        <div className="nw-balance-label">Confirmed balance</div>
+        <div className="nw-balance-amount">
+          {balance == null ? '…' : formatExactBalance(balance)}
+          <span className="nw-balance-unit">NSAT</span>
+        </div>
+        <div className="nw-address-chip">
+          <span>{shortAddr(active.pubkey, 10)}</span>
+          <button className="nw-chip-btn"
+            onClick={async () => {
+              await navigator.clipboard.writeText(active.pubkey);
+              notify('📋 Copied: Address');
+            }}>Copy</button>
+        </div>
+        <div className="nw-balance-foot">
+          <span className={'nw-badge ' + (fundedBadge === true ? 'ok' : 'warn')}>
+            {fundedBadge === true ? 'funded' : fundedBadge === false ? 'not funded yet' : 'funding unknown'}
+          </span>
+          <span className="nw-small nw-dim">fee {net.fee ?? '…'} NSAT</span>
         </div>
       </section>
 
@@ -699,24 +747,23 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
         </button>
       </div>
 
-      <div className="nw-grid-2" style={{ marginTop: 14 }}>
-        <section className="nw-card">
-          <h2 style={{ color: 'var(--text)' }}>Wallet</h2>
-          <div className="nw-kv" style={{ marginTop: 10 }}><span className="nw-k">Address</span>
-            <span className="nw-v nw-mono">{shortAddr(active.pubkey, 14)}</span></div>
-          <div className="nw-kv"><span className="nw-k">Funded on network</span>
-            <span className="nw-v"><span className={'nw-badge ' + (fundedBadge === true ? 'ok' : 'warn')}>
-              {fundedBadge === true ? 'Yes' : fundedBadge === false ? 'No / not funded' : 'unknown'}</span></span></div>
-
-        </section>
-        <section className="nw-card">
-          <h2 style={{ color: 'var(--text)' }}>Network</h2>
-          <div className="nw-kv" style={{ marginTop: 10 }}><span className="nw-k">Status</span>
-            <span className="nw-v">{net.netOk ? 'Connected' : 'Offline'}</span></div>
-          <div className="nw-kv"><span className="nw-k">Base fee (NSAT)</span>
-            <span className="nw-v">{net.fee ?? '…'} <small className="nw-dim">live</small></span></div>
-        </section>
-      </div>
+      {/* Address and funding state already sit in the balance hero, so this
+       * card only carries what a phone wallet puts under it: the chain state. */}
+      <section className="nw-card">
+        <h2 style={{ color: 'var(--text)' }}>Network</h2>
+        <div className="nw-kv" style={{ marginTop: 10 }}>
+          <span className="nw-k">Status</span>
+          <span className="nw-v">{net.netOk ? 'Connected' : 'Offline'}</span>
+        </div>
+        <div className="nw-kv">
+          <span className="nw-k">Ledger</span>
+          <span className="nw-v">{net.ledger != null ? Number(net.ledger).toLocaleString() : '…'}</span>
+        </div>
+        <div className="nw-kv">
+          <span className="nw-k">Base fee</span>
+          <span className="nw-v">{net.fee ?? '…'} NSAT <small className="nw-dim">live</small></span>
+        </div>
+      </section>
     </div>
   );
 }
@@ -911,7 +958,7 @@ function ActivityPage({ history, activeName, onRecheck, canRecheck }) {
 }
 
 /* ------------------------------- Settings -------------------------------- */
-function SettingsPage({ s }) {
+function SettingsPage({ s, onShielded }) {
   return (
     <div>
       <section className="nw-card">
@@ -962,6 +1009,16 @@ function SettingsPage({ s }) {
               onChange={s.doRestore} />
           </label>
         </div>
+      </section>
+      <section className="nw-card">
+        <h2 style={{ color: 'var(--text)' }}>Shielded transfers</h2>
+        <p className="nw-small nw-dim" style={{ margin: '8px 0 12px' }}>
+          Desktop only — the browser has no verified Orchard prover, so this wallet will not
+          pretend to offer a private transfer.
+        </p>
+        <button type="button" className="nw-chip-btn" onClick={onShielded}>
+          Why shielded is desktop-only
+        </button>
       </section>
       <section className="nw-card">
         <h2 style={{ color: 'var(--text)' }}>Security model</h2>

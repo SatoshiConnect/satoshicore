@@ -10,7 +10,7 @@ export const metadata = {
 const STORED = [
   {
     what: 'Encrypted keystore',
-    where: 'this browser or the extension storage area',
+    where: 'this browser',
     detail:
       'Ciphertext only (AES-GCM-256, PBKDF2-HMAC-SHA256 600,000 iterations). The seed is never stored in plaintext and never leaves the device.'
   },

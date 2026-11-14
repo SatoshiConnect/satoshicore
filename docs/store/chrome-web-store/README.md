@@ -1,5 +1,13 @@
 # Chrome Web Store submission pack — NSAT Wallet v24.0.0
 
+> **SHELVED (2026-11-14).** The owner decided against publishing the browser
+> extension, because store publication needs a paid developer account and an
+> ongoing listing. The product surface is the installable web app only: the
+> extension is no longer offered or served from the site, and
+> `/extension/privacy/` was removed. This pack is kept because the text is still
+> accurate for the packaged build and would be needed if that decision changes;
+> it must not be used to describe the site as it ships today.
+
 Everything a reviewer asks for, written against the code that ships in
 `extension/nsat-wallet-v24.0.0-production.zip` (80,478 bytes,
 sha256 `945d58a2bb80…`). Nothing here claims a store listing exists: the

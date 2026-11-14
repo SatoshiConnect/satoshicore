@@ -15,7 +15,7 @@ const CONTROLS = [
   },
   {
     title: 'Signed locally, after review',
-    body: 'Ed25519 signing happens in the browser or extension; the gateway only relays an already-signed envelope. Nothing signs until you confirm recipient, amount, fee and total debit.'
+    body: 'Ed25519 signing happens in the browser; the gateway only relays an already-signed envelope. Nothing signs until you confirm recipient, amount, fee and total debit.'
   },
   {
     title: 'Exact network identity or no signature',
@@ -30,8 +30,8 @@ const CONTROLS = [
     body: 'A transfer is confirmed only when the index returns that exact transaction hash with its ledger result — not from a sequence or balance change.'
   },
   {
-    title: 'Two separate vaults',
-    body: 'Web app and extension keep independent encrypted stores; neither reads the other, and the extension never gives keys to a page.'
+    title: 'One vault, no third copy',
+    body: 'The installed app and the website run the same code over one encrypted store in this browser. There is no second vault, no sync service and no copy anywhere else.'
   },
   {
     title: 'Locking and idle timeout',

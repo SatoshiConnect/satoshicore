@@ -15,8 +15,6 @@
 //
 // No dependencies: Node 20+ has global fetch.
 
-import { readFileSync } from 'node:fs';
-
 const SITE_TIMEOUT_MS = 15_000;
 
 const args = process.argv.slice(2).filter((a) => a !== '--');
@@ -114,38 +112,16 @@ async function main() {
   await check('Wallet page renders', page('/wallet/'));
   await check('Docs page renders', page('/docs/'));
 
-  await check('Download page states the real artifact', async () => {
+  // The install path is the web app itself. The page used to promise a
+  // browser extension with a sha256; that path is gone, so the check now
+  // guards the promise the site actually makes.
+  await check('Install page offers the web app, not an extension', async () => {
     const { status, type, body } = await get('/download/');
     assert(status === 200, `/download/ returned HTTP ${status}`);
     assert(isHtml(type), `/download/ served ${type || 'no content-type'} instead of HTML`);
-    assert(/[a-f0-9]{64}/.test(body), 'download page has no sha256 digest');
-    assert(/not published/i.test(body), 'download page does not say the artifact is unpublished');
-    return 'sha256 + unpublished status present';
-  });
-
-  // The page used to print the filename without serving the file, so the
-  // obvious click (and /extension/<file>.zip) was a 404.
-  await check('Extension downloads are actually served', async () => {
-    const release = JSON.parse(
-      readFileSync(new URL('../extension/release.json', import.meta.url), 'utf8'),
-    );
-    const artifacts = [
-      [release.file, release.bytes],
-      [release.firefoxFile, release.firefoxBytes],
-    ];
-    for (const [name, bytes] of artifacts) {
-      const res = await fetch(url(`/extension/${name}`), {
-        signal: AbortSignal.timeout(SITE_TIMEOUT_MS),
-      });
-      assert(res.status === 200, `/extension/${name} returned HTTP ${res.status}`);
-      const served = Number(res.headers.get('content-length'));
-      assert(
-        !Number.isNaN(served) && served === bytes,
-        `/extension/${name} is ${res.headers.get('content-length')} bytes, release.json says ${bytes}`,
-      );
-      void res.body?.cancel();
-    }
-    return `${artifacts.length} artifacts downloadable`;
+    assert(/Add to Home Screen/i.test(body), 'install page has no Add to Home Screen step');
+    assert(!/\.zip/i.test(body), 'install page still offers a .zip download');
+    return 'PWA install steps present, no extension download';
   });
 
   // --- PWA: manifest, service worker, shell --------------------------------
