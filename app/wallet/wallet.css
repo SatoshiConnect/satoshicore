@@ -476,8 +476,8 @@ label.nw-chip-btn:focus-within { outline: 2px solid var(--accent); outline-offse
   --accent-pressed: #2c46b8;
   --accent-tint: rgba(59, 91, 219, 0.1);
   --on-accent: #ffffff;
-  --ok: #0b8f6c;
-  --ok-tint: rgba(11, 143, 108, 0.1);
+  --ok: #0a7f60;
+  --ok-tint: rgba(10, 127, 96, 0.1);
   --warn: #a45b06;
   --warn-tint: rgba(164, 91, 6, 0.1);
   --danger: #cf2f45;

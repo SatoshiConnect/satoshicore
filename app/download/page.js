@@ -14,9 +14,11 @@ const STATUS_LABEL = {
 };
 
 function statusTone(status) {
-  if (status === 'BUILD_PRODUCED') return { color: 'var(--ok, #22c55e)' };
-  if (status === 'NOT_SUPPORTED') return { color: 'var(--err, #f87171)' };
-  return { color: 'var(--warn, #f0b90b)' };
+  // Use the design tokens; there is no --err token, and a fallback hex here
+  // silently broke light-mode contrast.
+  if (status === 'BUILD_PRODUCED') return { color: 'var(--ok)' };
+  if (status === 'NOT_SUPPORTED') return { color: 'var(--danger)' };
+  return { color: 'var(--warn)' };
 }
 
 export default function DownloadPage() {

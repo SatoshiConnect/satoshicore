@@ -10,44 +10,43 @@ export const metadata = {
 const STORED = [
   {
     what: 'Encrypted keystore',
-    where: 'this browser (localStorage) or the extension storage area',
+    where: 'this browser or the extension storage area',
     detail:
-      'Only ciphertext: AES-GCM-256, key derived with PBKDF2-HMAC-SHA256 (600,000 iterations) from your password. The seed is never stored in plaintext and never leaves the device.'
+      'Ciphertext only (AES-GCM-256, PBKDF2-HMAC-SHA256 600,000 iterations). The seed is never stored in plaintext and never leaves the device.'
   },
   {
     what: 'Wallet name and public address',
-    where: 'same store as the keystore',
-    detail: 'Needed to list your wallets and to display the address before unlock. A public address is not a secret.'
+    where: 'same store',
+    detail: 'Needed to list wallets and show the address before unlock. A public address is not a secret.'
   },
   {
     what: 'Local transaction history',
-    where: 'same store, per wallet name',
-    detail:
-      'Entries this app created: recipient, amount, fee, transaction hash, and the ledger result once it is read. Not a complete chain history, and not sent anywhere.'
+    where: 'same store, per wallet',
+    detail: 'Recipient, amount, fee, hash and the ledger result once read. Not a full chain history, and never sent anywhere.'
   },
   {
-    what: 'Preferences (idle-lock window, active section)',
-    where: 'in memory for the session',
-    detail: 'Cleared when the page closes.'
+    what: 'Theme and session preferences',
+    where: 'localStorage / in memory',
+    detail: 'Theme persists; session state clears when the page closes.'
   }
 ];
 
 const TRANSMITTED = [
   {
-    what: 'GET /api/v1/chain/info, /api/v1/network/status, /api/v1/explorer/snapshot',
-    why: 'Read the ledger height, the network identity the wallet checks before signing, and the base fee. No wallet data is included.'
+    what: 'GET chain info, network status, explorer snapshot',
+    why: 'Ledger height, network identity and base fee. No wallet data included.'
   },
   {
-    what: 'GET /api/v1/account?acc=<your public address>',
-    why: 'Read your balance and sequence number. The address is public by design; the gateway does not receive your password, seed or keys.'
+    what: 'GET account?acc=<public address>',
+    why: 'Balance and sequence number. The gateway never receives password, seed or keys.'
   },
   {
-    what: 'POST /api/v1/tx with an already-signed envelope',
-    why: 'Relay a transaction you approved. The envelope is signed on your device; the gateway has no key and cannot alter or re-sign it.'
+    what: 'POST tx (already-signed envelope)',
+    why: 'Relays a transaction you approved; the gateway has no key and cannot alter or re-sign it.'
   },
   {
-    what: 'GET /v1/accounts/<address>/transactions, /v1/confirmations/<hash>',
-    why: 'Read indexed history and the ledger verdict for a specific transaction hash.'
+    what: 'GET transactions / confirmations by hash',
+    why: 'Indexed history and the ledger verdict for one transaction.'
   }
 ];
 
@@ -57,7 +56,7 @@ export default function PrivacyPage() {
       <PageHeader
         eyebrow="NSAT · legal"
         title="Privacy"
-        lead="What the wallet keeps on your device, what it asks the network for, and what it never collects."
+        lead="What stays on your device, what the network sees, and what is never collected."
         actions={
           <>
             <Link href="/terms/" className="button secondary">Terms</Link>
@@ -73,10 +72,9 @@ export default function PrivacyPage() {
         </div>
         <div className="panel-body">
           <p>
-            <strong>Draft.</strong> The statements below describe the code as it runs today.
-            The data-controller identity, retention periods and the exact wording required
-            by Thailand&apos;s Personal Data Protection Act must be completed by the owner
-            with counsel before this page is presented as a final notice.
+            <strong>Draft.</strong> These statements describe the code as it runs today. The
+            data-controller identity, retention periods and PDPA wording must be completed by
+            the owner with counsel before this is a final notice.
           </p>
         </div>
       </section>
@@ -88,11 +86,11 @@ export default function PrivacyPage() {
         </div>
         <div className="panel-body">
           <ul className="status-list">
-            <li>No account, email, phone number or identity document is requested.</li>
-            <li>No analytics, advertising, fingerprinting or third-party scripts are loaded.</li>
-            <li>No cookies are set by the site.</li>
-            <li>No seed, password or private key is ever transmitted, logged or stored in plaintext.</li>
-            <li>Nothing is sold or shared with third parties, because nothing is collected.</li>
+            <li>No account, email, phone number or identity document.</li>
+            <li>No analytics, advertising, fingerprinting or third-party scripts.</li>
+            <li>No cookies.</li>
+            <li>No seed, password or private key transmitted, logged or stored in plaintext.</li>
+            <li>Nothing sold or shared, because nothing is collected.</li>
           </ul>
         </div>
       </section>
@@ -111,8 +109,8 @@ export default function PrivacyPage() {
             ))}
           </ul>
           <p>
-            Clearing site data or uninstalling the extension deletes this store. Without an
-            exported encrypted backup, that also deletes the only copy of the key.
+            Clearing site data deletes this store — and without an exported backup, the only
+            copy of the key.
           </p>
         </div>
       </section>
@@ -131,10 +129,9 @@ export default function PrivacyPage() {
             ))}
           </ul>
           <p>
-            These requests reach the Web Wallet API Gateway and the read-only indexer that
-            sit behind this domain. Like any web server they record standard access data
-            (IP address, time, requested path, user agent); the retention period for those
-            logs is one of the items to be specified in the reviewed notice.
+            These reach the gateway and read-only indexer behind this domain, which record
+            standard access data (IP, time, path, user agent). The log retention period is
+            still to be specified in the reviewed notice.
           </p>
         </div>
       </section>
@@ -145,13 +142,12 @@ export default function PrivacyPage() {
         </div>
         <div className="panel-body">
           <ul className="status-list">
-            <li>Lock the wallet at any time; the signing key is dropped from memory.</li>
-            <li>Export the encrypted keystore and keep it offline; delete browser data afterwards.</li>
-            <li>Use a separate wallet per purpose instead of reusing one address everywhere.</li>
+            <li>Lock at any time; the signing key is dropped from memory.</li>
+            <li>Export the encrypted keystore and keep it offline.</li>
+            <li>Use a separate wallet per purpose.</li>
             <li>
-              Because chain data is public, a transfer to or from your address is visible to
-              anyone reading the ledger. The wallet cannot make an on-chain payment private;
-              shielded transfers require the desktop wallet.
+              Chain data is public: a transfer to or from your address is visible on the
+              ledger. Only the desktop wallet can shield a transfer.
             </li>
           </ul>
         </div>

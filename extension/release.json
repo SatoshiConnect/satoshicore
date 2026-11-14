@@ -1,8 +1,8 @@
 {
   "version": "24.0.0",
   "file": "nsat-wallet-v24.0.0-production.zip",
-  "bytes": 80404,
-  "sha256": "3c98879b4ab3b816bc45e2d2ce386432178eb915e0b3ddd3330c23a9db2673a4",
+  "bytes": 80402,
+  "sha256": "7927de52f5ca9d4d4fbf212b3766fd5353f3c281c7d982fe2f9f58fa16ec3791",
   "builtAt": "2026-11-14",
   "manifestVersion": 3,
   "permissions": [
@@ -60,6 +60,6 @@
       "note": "Requires an Xcode/Safari extension package and distribution review"
     }
   ],
-  "firefoxBytes": 80441,
-  "firefoxSha256": "f49fc52515be031f6b7fee5a1840a6da03b8a6f0622c5990c84232f4d88e8ca4"
+  "firefoxBytes": 80439,
+  "firefoxSha256": "feb2e81b4dea98195b6bfd1544e87ece1696ff00902e5899c15745b003861e61"
 }

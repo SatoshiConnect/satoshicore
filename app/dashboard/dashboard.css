@@ -19,7 +19,7 @@ body:has(.nsx) .site-main {
  * own brand bar, which is why the site felt like a separate website. Its bar is
  * now a toolbar (sections + filter + live state) under the shared navigation. */
 body:has(.nsx) .site-header {
-  border-bottom-color: rgba(56, 189, 248, 0.22);
+  border-bottom-color: var(--border);
 }
 
 body:has(.nsx) .site-footer {
@@ -27,14 +27,48 @@ body:has(.nsx) .site-footer {
 }
 
 .nsx {
-  --fg: #e6f3ff;
-  --dim: #7c93ad;
-  --line: rgba(56, 189, 248, 0.2);
+  /* The live console is a dark instrument panel by design: its charts and
+   * state colours were built for a dark surface. It therefore declares its own
+   * dark tokens and stays dark in BOTH themes, instead of inheriting a light
+   * page and rendering unreadable text. The rest of the site follows the theme;
+   * the global header above it does too. */
+  --bg: #0a0c11;
+  --bg-deep: #07080c;
+  --bg-top: #0b0d14;
+  --bg-glow-a: rgba(76, 111, 255, 0.14);
+  --bg-glow-b: rgba(46, 211, 160, 0.07);
+  --surface: #12151c;
+  --card: #14171f;
+  --card-grad: linear-gradient(180deg, #171a23, #13161d);
+  --fg: #edf1f7;
+  --dim: #8b94a7;
+  --muted: #8b94a7;
+  --line: rgba(255, 255, 255, 0.12);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --fill: rgba(255, 255, 255, 0.06);
+  --accent: #4c6fff;
+  --accent-pressed: #6b87ff;
+  --accent-tint: rgba(76, 111, 255, 0.16);
+  --on-accent: #ffffff;
+  --ok: #2ed3a0;
+  --ok-tint: rgba(46, 211, 160, 0.12);
+  --warn: #f5a524;
+  --warn-tint: rgba(245, 165, 36, 0.12);
+  --danger: #f0616d;
+  --danger-tint: rgba(240, 97, 109, 0.12);
   --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
 
   position: relative;
   width: 100%;
   overflow-x: clip;
+  /* background-color as well as the gradients: forced-colors mode and any
+   * contrast checker then see the real surface, not a transparent block. */
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(900px 480px at 12% -12%, var(--bg-glow-a), transparent 60%),
+    radial-gradient(760px 420px at 92% -8%, var(--bg-glow-b), transparent 60%),
+    linear-gradient(180deg, var(--bg-top) 0%, var(--bg) 46%, var(--bg-deep) 100%);
   color: var(--fg);
   font-size: 13px;
 }
@@ -75,7 +109,7 @@ body:has(.nsx) .site-footer {
   gap: 0.7rem;
   padding: 0.4rem clamp(0.6rem, 1.4vw, 1.1rem);
   border-bottom: 1px solid rgba(56, 189, 248, 0.2);
-  background: linear-gradient(180deg, rgba(8, 16, 32, 0.96), rgba(5, 10, 20, 0.9));
+  background: var(--card-grad);
   backdrop-filter: blur(18px);
   /* The bar's gutter follows the shared content cap, not the window edge. */
   padding-left: max(var(--gutter, 1.25rem), calc((100% - var(--page-max, 1240px)) / 2 + var(--gutter, 1.25rem)));
@@ -102,8 +136,8 @@ body:has(.nsx) .site-footer {
   display: grid;
   place-items: center;
   border-radius: 9px;
-  color: #67e8f9;
-  background: linear-gradient(180deg, rgba(56, 189, 248, 0.3), rgba(56, 189, 248, 0.06));
+  color: var(--accent);
+  background: var(--accent-tint);
   border: 1px solid rgba(103, 232, 249, 0.6);
   box-shadow: 0 0 16px rgba(56, 189, 248, 0.45), inset 0 0 10px rgba(56, 189, 248, 0.3);
 }
@@ -128,7 +162,7 @@ body:has(.nsx) .site-footer {
   font-weight: 500;
   letter-spacing: 0.3em;
   text-transform: uppercase;
-  color: #7dd3fc;
+  color: var(--accent);
   margin-top: 0.18rem;
 }
 
@@ -145,7 +179,7 @@ body:has(.nsx) .site-footer {
   appearance: none;
   border: 1px solid transparent;
   background: none;
-  color: #8aa2bb;
+  color: var(--muted);
   font: inherit;
   font-family: var(--mono);
   font-size: 0.625rem;
@@ -158,14 +192,14 @@ body:has(.nsx) .site-footer {
 }
 
 .nsx-menu button:hover {
-  color: #e6f3ff;
-  background: rgba(56, 189, 248, 0.1);
+  color: var(--fg);
+  background: var(--fill);
 }
 
 .nsx-menu button.is-active {
-  color: #dff3ff;
+  color: var(--fg);
   border-color: rgba(103, 232, 249, 0.65);
-  background: linear-gradient(180deg, rgba(56, 189, 248, 0.3), rgba(56, 189, 248, 0.1));
+  background: var(--accent-tint);
   box-shadow: 0 0 14px rgba(56, 189, 248, 0.4);
 }
 
@@ -180,8 +214,8 @@ body:has(.nsx) .site-footer {
   padding: 0.24rem 0.5rem;
   border-radius: 7px;
   border: 1px solid rgba(56, 189, 248, 0.26);
-  background: rgba(6, 14, 28, 0.92);
-  color: #6f8aa6;
+  background: var(--surface);
+  color: var(--muted);
 }
 
 .nsx-search svg {
@@ -203,7 +237,7 @@ body:has(.nsx) .site-footer {
 }
 
 .nsx-search input::placeholder {
-  color: #5b7793;
+  color: var(--muted);
 }
 
 .nsx-search:focus-within {
@@ -227,11 +261,11 @@ body:has(.nsx) .site-footer {
   font-size: 0.5625rem;
   letter-spacing: 0.07em;
   text-transform: uppercase;
-  color: #9fb6cc;
+  color: var(--muted);
   padding: 0.2rem 0.44rem;
   border-radius: 999px;
   border: 1px solid rgba(120, 150, 180, 0.26);
-  background: rgba(12, 22, 40, 0.8);
+  background: var(--surface);
   white-space: nowrap;
 }
 
@@ -239,46 +273,46 @@ body:has(.nsx) .site-footer {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: #4ade80;
+  background: var(--ok);
   box-shadow: 0 0 7px #4ade80;
 }
 
 .nsx-pill i.is-amber {
-  background: #fbbf24;
+  background: var(--warn);
   box-shadow: 0 0 7px #fbbf24;
 }
 
 .nsx-pill.is-green {
-  color: #86efac;
+  color: var(--ok);
   border-color: rgba(74, 222, 128, 0.4);
-  background: rgba(74, 222, 128, 0.1);
+  background: var(--ok-tint);
 }
 
 .nsx-pill.is-dim {
-  color: #7c93ad;
+  color: var(--muted);
   border-style: dashed;
 }
 
 .nsx-pill.is-live {
-  color: #86efac;
+  color: var(--ok);
   border-color: rgba(74, 222, 128, 0.45);
-  background: rgba(74, 222, 128, 0.1);
+  background: var(--ok-tint);
 }
 
 .nsx-pill.is-stale {
-  color: #fcd34d;
+  color: var(--warn);
   border-color: rgba(251, 191, 36, 0.45);
-  background: rgba(251, 191, 36, 0.1);
+  background: var(--warn-tint);
 }
 
 .nsx-pill.is-offline {
-  color: #fca5a5;
+  color: var(--danger);
   border-color: rgba(248, 113, 113, 0.45);
-  background: rgba(248, 113, 113, 0.1);
+  background: var(--danger-tint);
 }
 
 .nsx-pill.is-link {
-  color: #7dd3fc;
+  color: var(--accent);
   text-decoration: none;
 }
 
@@ -294,19 +328,19 @@ body:has(.nsx) .site-footer {
 }
 
 .nsx-banner.is-amber {
-  color: #fcd34d;
-  background: rgba(251, 191, 36, 0.1);
+  color: var(--warn);
+  background: var(--warn-tint);
   border-bottom-color: rgba(251, 191, 36, 0.35);
 }
 
 .nsx-banner.is-red {
-  color: #fca5a5;
-  background: rgba(248, 113, 113, 0.1);
+  color: var(--danger);
+  background: var(--danger-tint);
   border-bottom-color: rgba(248, 113, 113, 0.35);
 }
 
 .nsx-pill.is-link:hover {
-  color: #e6f3ff;
+  color: var(--fg);
   text-decoration: none;
   border-color: rgba(103, 232, 249, 0.6);
   box-shadow: 0 0 12px rgba(56, 189, 248, 0.32);
@@ -350,7 +384,7 @@ body:has(.nsx) .site-footer {
   font-size: 0.5rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: #7f97ae;
+  color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -370,7 +404,7 @@ body:has(.nsx) .site-footer {
 }
 
 .nsx-kpi-value.is-muted {
-  color: #8aa2bb;
+  color: var(--muted);
   text-shadow: none;
 }
 
@@ -401,7 +435,7 @@ body:has(.nsx) .site-footer {
   font-family: var(--mono);
   font-size: 0.5rem;
   letter-spacing: 0.03em;
-  color: #6d859c;
+  color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -469,12 +503,12 @@ body:has(.nsx) .site-footer {
   font-size: 0.5625rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: #7dd3fc;
+  color: var(--accent);
   text-shadow: 0 0 10px rgba(56, 189, 248, 0.6);
 }
 
 .nsx-hall-col--right .nsx-hall-title {
-  color: #fca5a5;
+  color: var(--danger);
   text-shadow: 0 0 10px rgba(248, 113, 113, 0.6);
 }
 
@@ -482,7 +516,7 @@ body:has(.nsx) .site-footer {
   font-family: var(--mono);
   font-size: 0.5rem;
   letter-spacing: 0.04em;
-  color: #6f8aa6;
+  color: var(--muted);
 }
 
 /* 3D cascade of ledger chips receding toward the gate */
@@ -549,7 +583,7 @@ body:has(.nsx) .site-footer {
 .nsx-chip-time {
   font-family: var(--mono);
   font-size: 0.5rem;
-  color: #8aa2bb;
+  color: var(--muted);
 }
 
 .nsx-chip-meta {
@@ -626,7 +660,7 @@ body:has(.nsx) .site-footer {
   font-size: 0.5rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: #86efac;
+  color: var(--ok);
   text-shadow: 0 0 9px rgba(74, 222, 128, 0.8);
 }
 
@@ -716,7 +750,7 @@ body:has(.nsx) .site-footer {
   font-size: 0.4375rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: #7f97ae;
+  color: var(--muted);
 }
 
 .nsx-lifecycle-bar {
@@ -740,7 +774,7 @@ body:has(.nsx) .site-footer {
   font-family: var(--mono);
   font-size: 0.4375rem;
   letter-spacing: 0.05em;
-  color: #7f97ae;
+  color: var(--muted);
 }
 
 .nsx-lifecycle-legend span {
@@ -760,16 +794,16 @@ body:has(.nsx) .site-footer {
 
 /* Dots only — never paint a bare .is-* span, those are also used as text
  * colours in the chart footers. */
-i.is-blue { background: #38bdf8; box-shadow: 0 0 7px #38bdf8; }
-i.is-green { background: #4ade80; box-shadow: 0 0 7px #4ade80; }
+i.is-blue { background: var(--accent); box-shadow: 0 0 7px var(--accent); }
+i.is-green { background: var(--ok); box-shadow: 0 0 7px #4ade80; }
 i.is-teal { background: #2dd4bf; box-shadow: 0 0 7px #2dd4bf; }
-i.is-amber { background: #fbbf24; box-shadow: 0 0 7px #fbbf24; }
+i.is-amber { background: var(--warn); box-shadow: 0 0 7px #fbbf24; }
 i.is-red { background: #f87171; box-shadow: 0 0 7px #f87171; }
 i.is-violet { background: #a855f7; box-shadow: 0 0 7px #a855f7; }
 i.is-dim { background: #64748b; }
 
-.nsx-chart-foot .is-blue { color: #7dd3fc; }
-.nsx-chart-foot .is-green { color: #86efac; }
+.nsx-chart-foot .is-blue { color: var(--accent); }
+.nsx-chart-foot .is-green { color: var(--ok); }
 .nsx-chart-foot .is-violet { color: #d8b4fe; }
 .nsx-chart-foot .is-dim { color: #64748b; }
 
@@ -833,7 +867,7 @@ i.is-dim { background: #64748b; }
   font-family: var(--mono);
   font-size: 0.5rem;
   letter-spacing: 0.05em;
-  color: #7f97ae;
+  color: var(--muted);
   white-space: nowrap;
 }
 
@@ -841,7 +875,7 @@ i.is-dim { background: #64748b; }
   width: 4px;
   height: 4px;
   border-radius: 50%;
-  background: #4ade80;
+  background: var(--ok);
   box-shadow: 0 0 7px #4ade80;
 }
 
@@ -873,7 +907,7 @@ i.is-dim { background: #64748b; }
   font-size: 0.5rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #6f8aa6;
+  color: var(--muted);
 }
 
 .nsx-chart-empty span {
@@ -888,7 +922,7 @@ i.is-dim { background: #64748b; }
   font-family: var(--mono);
   font-size: 0.5rem;
   letter-spacing: 0.04em;
-  color: #7f97ae;
+  color: var(--muted);
 }
 
 /* -------------------------------- Tables -------------------------------- */
@@ -922,7 +956,7 @@ i.is-dim { background: #64748b; }
   font-size: 0.4375rem;
   letter-spacing: 0.09em;
   text-transform: uppercase;
-  color: #6f8aa6;
+  color: var(--muted);
   padding: 0.12rem 0.3rem;
   border-bottom: 1px solid rgba(56, 189, 248, 0.15);
   white-space: nowrap;
@@ -941,7 +975,7 @@ i.is-dim { background: #64748b; }
 }
 
 .nsx-table .is-num {
-  color: #e6f3ff;
+  color: var(--fg);
 }
 
 .nsx-addr {
@@ -958,7 +992,7 @@ i.is-dim { background: #64748b; }
 
 .nsx-empty {
   white-space: normal;
-  color: #7f97ae;
+  color: var(--muted);
   padding: 0.5rem 0.3rem;
 }
 
@@ -1024,7 +1058,7 @@ i.is-dim { background: #64748b; }
 
 .nsx-tabs button.is-active {
   color: #1a1206;
-  background: #fbbf24;
+  background: var(--warn);
   box-shadow: 0 0 8px rgba(251, 191, 36, 0.55);
 }
 
@@ -1066,7 +1100,7 @@ i.is-dim { background: #64748b; }
 
 .nsx-tools span {
   font-size: 0.5rem;
-  color: #7f97ae;
+  color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1090,7 +1124,7 @@ i.is-dim { background: #64748b; }
 }
 
 .nsx-foot-brand {
-  color: #7dd3fc;
+  color: var(--accent);
   text-shadow: 0 0 10px rgba(56, 189, 248, 0.4);
 }
 
@@ -1105,7 +1139,7 @@ i.is-dim { background: #64748b; }
 }
 
 .nsx-foot-note a {
-  color: #9fb6cc;
+  color: var(--muted);
 }
 
 /* ------------------------------- Tones ---------------------------------- */

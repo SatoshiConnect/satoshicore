@@ -7,26 +7,10 @@ export const metadata = {
 };
 
 const SERVICES = [
-  {
-    name: 'Static site (satoshicore.org)',
-    detail: 'exported HTML served by Caddy from this machine',
-    ok: true
-  },
-  {
-    name: 'Web Wallet API Gateway',
-    detail: 'separate service — probe live above',
-    ok: null
-  },
-  {
-    name: 'Blockchain Indexer',
-    detail: 'separate read-only service over the node history archive',
-    ok: null
-  },
-  {
-    name: 'Administrative APIs',
-    detail: 'never publicly exposed through this site or the gateway',
-    ok: null
-  }
+  { name: 'Static site', detail: 'HTML served by Caddy', ok: true },
+  { name: 'API Gateway', detail: 'probe above', ok: null },
+  { name: 'Indexer', detail: 'read-only history', ok: null },
+  { name: 'Admin APIs', detail: 'never public', ok: null }
 ];
 
 export default function StatusPage() {
@@ -35,7 +19,7 @@ export default function StatusPage() {
       <PageHeader
         eyebrow="NSAT · operations"
         title="Service status"
-        lead="The web platform is fully static. Chain data is read through the Web Wallet API Gateway from the nsat-core node; when the gateway is configured and reachable, the live reading appears below. Anything a service does not answer is shown as unknown, never guessed."
+        lead="Live chain reading, plus what sits behind this site."
         actions={
           <>
             <Link href="/dashboard" className="button">Live explorer</Link>
