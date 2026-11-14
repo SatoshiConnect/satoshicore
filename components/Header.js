@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import ThemeToggle from './ThemeToggle';
 
 // One navigation for the whole site. "Explorer" is the live dashboard, and
 // "Search" is the account/transaction lookup that used to be called Explorer
@@ -45,17 +46,20 @@ export default function Header() {
           </span>
           SatoshiCore <span className="brand-sub">NSAT</span>
         </Link>
-        <nav className="main-nav" aria-label="Main navigation">
-          {NAV.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              aria-current={isActive(item.href) ? 'page' : undefined}
-            >
-              {item.label}
-            </Link>
-          ))}
-        </nav>
+        <div className="header-tools">
+          <nav className="main-nav" aria-label="Main navigation">
+            {NAV.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                aria-current={isActive(item.href) ? 'page' : undefined}
+              >
+                {item.label}
+              </Link>
+            ))}
+          </nav>
+          <ThemeToggle />
+        </div>
       </div>
     </header>
   );

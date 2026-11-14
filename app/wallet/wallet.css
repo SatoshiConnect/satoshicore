@@ -48,7 +48,8 @@ body:has(.nw-root) .site-main.container {
 
 .nw-extras-note {
   font-size: 0.8rem;
-  color: var(--text-dim, #7c93ad);
+  /* Outside .nw-root, so this reads the site tokens directly. */
+  color: var(--muted, #8b94a7);
   margin: 0;
 }
 
@@ -91,6 +92,10 @@ body:has(.nw-root) .site-main.container {
   --warn-tint: rgba(245, 165, 36, 0.12);
   --danger: #f0616d;
   --danger-tint: rgba(240, 97, 109, 0.12);
+  --card-grad: linear-gradient(180deg, #171a23, #13161d);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 28px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+
   --radius: 16px;
   --radius-sm: 12px;
   --border-card: rgba(255, 255, 255, 0.08);
@@ -214,8 +219,9 @@ body:has(.nw-root) .site-main.container {
 }
 
 .nw-tab.is-active {
-  color: #eef2ff;
-  border-color: rgba(76, 111, 255, 0.45);
+  color: var(--text);
+  font-weight: 600;
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
   background: var(--accent-tint);
 }
 
@@ -253,13 +259,12 @@ body:has(.nw-root) .site-main.container {
 
 /* ------------------------------ Cards ------------------------------ */
 .nw-card {
-  background: linear-gradient(180deg, #171a23, #13161d);
+  background: var(--card-grad);
   border-radius: var(--radius);
   padding: 20px;
   border: 1px solid var(--border-card);
   /* Same panel depth as .panel/.card elsewhere on the site. */
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 28px rgba(0, 0, 0, 0.28),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  box-shadow: var(--shadow-card);
 }
 .nw-card + .nw-card { margin-top: 12px; }
 
@@ -407,7 +412,7 @@ body:has(.nw-root) .site-main.container {
 }
 .nw-modal {
   width: min(520px, 92vw);
-  background: linear-gradient(180deg, #1a1e28, #14171f);
+  background: var(--card-grad);
   border: 1px solid var(--border-strong, rgba(255, 255, 255, 0.16)); border-radius: var(--radius);
   padding: 24px;
   box-shadow: 0 32px 80px rgba(0, 0, 0, 0.55);
@@ -456,3 +461,34 @@ label.nw-chip-btn {
   align-items: center;
 }
 label.nw-chip-btn:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ----------------------------- Light theme -------------------------------
+ * The wallet is also bundled into the extension popup, which loads this file
+ * WITHOUT globals.css — so the palette has to live here too. Same token names,
+ * light values, applied only when the site sets the theme attribute. */
+[data-theme='light'] .nw-root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --card: #ffffff;
+  --text: #10141a;
+  --text-dim: #566072;
+  --accent: #3b5bdb;
+  --accent-pressed: #2c46b8;
+  --accent-tint: rgba(59, 91, 219, 0.1);
+  --on-accent: #ffffff;
+  --ok: #0b8f6c;
+  --ok-tint: rgba(11, 143, 108, 0.1);
+  --warn: #a45b06;
+  --warn-tint: rgba(164, 91, 6, 0.1);
+  --danger: #cf2f45;
+  --danger-tint: rgba(207, 47, 69, 0.1);
+  --border-card: rgba(16, 20, 26, 0.1);
+  --border-soft: rgba(16, 20, 26, 0.08);
+  --border-input: rgba(16, 20, 26, 0.2);
+  --hover: rgba(16, 20, 26, 0.05);
+  --hover-active: rgba(16, 20, 26, 0.09);
+  --row-border: rgba(16, 20, 26, 0.08);
+  --card-grad: linear-gradient(180deg, #ffffff, #fafbfd);
+  --shadow-card: 0 1px 2px rgba(16, 20, 26, 0.06), 0 10px 24px rgba(16, 20, 26, 0.06);
+  color-scheme: light;
+}

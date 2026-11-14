@@ -71,6 +71,14 @@ export default function RootLayout({ children }) {
     <html lang="en">
       <head>
         <meta httpEquiv="Content-Security-Policy" content={SITE_CSP} />
+        {/* Theme before first paint. Without this, a visitor whose saved choice
+            is light would see the dark page until the toggle hydrated. Static
+            string only — CSP allows it because script-src includes inline. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: "(function(){try{var s=localStorage.getItem('nsat-theme');var m=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches;document.documentElement.dataset.theme=(s==='light'||s==='dark')?s:(m?'light':'dark');}catch(e){}})();"
+          }}
+        />
         {/* PWA: installable, standalone, offline shell (public/sw.js). */}
         {/* .json, not .webmanifest: the static host has no manifest+json MIME
             mapping, so a .webmanifest file was served as text/plain. */}

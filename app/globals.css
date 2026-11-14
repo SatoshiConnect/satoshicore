@@ -49,6 +49,12 @@
   --danger: #f0616d;
   --danger-tint: rgba(240, 97, 109, 0.12);
 
+  /* Surfaces built from tokens, so a theme only swaps values. */
+  --card-grad: linear-gradient(180deg, #171a23, #13161d);
+  --bg-top: #0b0d14;
+  --bg-glow-a: rgba(76, 111, 255, 0.14);
+  --bg-glow-b: rgba(46, 211, 160, 0.07);
+
   --radius-sm: 10px;
   --radius: 14px;
   --radius-lg: 18px;
@@ -67,6 +73,43 @@
   --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
 }
 
+/* Light theme: the SAME tokens, different values. Nothing below re-declares
+ * a component; every rule keeps reading --bg/--fg/--accent/etc. */
+[data-theme='light'] {
+  color-scheme: light;
+
+  --bg: #f6f7f9;
+  --bg-deep: #eceef2;
+  --surface: #ffffff;
+  --card: #ffffff;
+  --fg: #10141a;
+  --muted: #566072;
+  --border: rgba(16, 20, 26, 0.1);
+  --border-strong: rgba(16, 20, 26, 0.2);
+  --fill: rgba(16, 20, 26, 0.05);
+
+  /* A touch deeper than the dark-mode indigo so text/actions stay AA on white. */
+  --accent: #3b5bdb;
+  --accent-pressed: #2c46b8;
+  --accent-tint: rgba(59, 91, 219, 0.1);
+  --on-accent: #ffffff;
+
+  --ok: #0b8f6c;
+  --ok-tint: rgba(11, 143, 108, 0.1);
+  --warn: #a45b06;
+  --warn-tint: rgba(164, 91, 6, 0.1);
+  --danger: #cf2f45;
+  --danger-tint: rgba(207, 47, 69, 0.1);
+
+  --card-grad: linear-gradient(180deg, #ffffff, #fafbfd);
+  --bg-top: #fbfcfe;
+  --bg-glow-a: rgba(59, 91, 219, 0.09);
+  --bg-glow-b: rgba(11, 143, 108, 0.05);
+
+  /* Floor depth: shadows read differently on light surfaces. */
+  --shadow-card: 0 1px 2px rgba(16, 20, 26, 0.06), 0 10px 24px rgba(16, 20, 26, 0.06);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -83,9 +126,9 @@ body {
   flex-direction: column;
   min-height: 100vh;
   background:
-    radial-gradient(900px 480px at 12% -12%, rgba(76, 111, 255, 0.14), transparent 60%),
-    radial-gradient(760px 420px at 92% -8%, rgba(46, 211, 160, 0.07), transparent 60%),
-    linear-gradient(180deg, #0b0d14 0%, var(--bg) 46%, var(--bg-deep) 100%);
+    radial-gradient(900px 480px at 12% -12%, var(--bg-glow-a), transparent 60%),
+    radial-gradient(760px 420px at 92% -8%, var(--bg-glow-b), transparent 60%),
+    linear-gradient(180deg, var(--bg-top) 0%, var(--bg) 46%, var(--bg-deep) 100%);
   background-attachment: fixed;
   background-color: var(--bg);
   color: var(--fg);
@@ -261,13 +304,48 @@ hr {
 }
 
 .main-nav a[aria-current='page'] {
-  color: #eef2ff;
-  background: rgba(76, 111, 255, 0.16);
-  border: 1px solid rgba(76, 111, 255, 0.42);
+  color: var(--fg);
+  font-weight: 600;
+  background: var(--accent-tint);
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, transparent);
 }
 
 .main-nav a {
   border: 1px solid transparent;
+}
+
+/* Theme switch: one button, two states, preference remembered. */
+.header-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--fill);
+  color: var(--fg);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.theme-toggle:hover {
+  background: var(--accent-tint);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.theme-toggle svg {
+  width: 17px;
+  height: 17px;
+  display: block;
 }
 
 /* -------------------------------- Hero ------------------------------- */
@@ -406,9 +484,9 @@ hr {
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  background: linear-gradient(180deg, #171a23, #13161d);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 28px rgba(0, 0, 0, 0.28),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  background: var(--card-grad);
+  box-shadow: var(--shadow-card, 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 28px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04));
 }
 
 .panel + .panel {
@@ -458,6 +536,31 @@ hr {
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 }
 
+/* Narrow screens: the switch stays next to the brand, and the nav takes its
+ * own full row instead of pushing the switch onto a third line. */
+@media (max-width: 720px) {
+  .header-tools {
+    display: contents;
+  }
+
+  .header-inner {
+    row-gap: 0.5rem;
+  }
+
+  .brand {
+    order: 1;
+  }
+
+  .theme-toggle {
+    order: 2;
+  }
+
+  .main-nav {
+    order: 3;
+    flex: 1 1 100%;
+  }
+}
+
 /* Narrow screens: let the panel title own a full line instead of squeezing
  * against its meta label. */
 @media (max-width: 560px) {
@@ -481,12 +584,12 @@ hr {
 }
 
 .card {
-  background: linear-gradient(180deg, #171a23, #13161d);
+  background: var(--card-grad);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 1.25rem;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 28px rgba(0, 0, 0, 0.28),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  box-shadow: var(--shadow-card, 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 28px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04));
 }
 
 .card h3 {
@@ -506,7 +609,7 @@ hr {
 
 .site-footer {
   border-top: 1px solid var(--border);
-  background: rgba(7, 8, 12, 0.92);
+  background: color-mix(in srgb, var(--bg-deep) 92%, transparent);
   color: var(--muted);
   font-size: 0.75rem;
   padding: 1.5rem 0;
