@@ -40,8 +40,8 @@ Commit ล่าสุดของรอบนี้: `e4952520f7fc0cf8a96371c65
 | 19 | Release artifact ตรงกับ release.json | **VERIFIED** | `scripts/extension-release.mjs`: ตรวจ zip ↔ release.json ↔ manifest ใน zip; จับ sha ปลอมได้ (exit 1) |
 | 20 | Offline shell (precache list) | **VERIFIED (static)** | เทสต์ใหม่: ทุก entry ของ `SHELL` ต้องมีไฟล์จริงใน `out/` และต้อง relative |
 | 12 | `https://wallet.satoshicore.org/` | **BROKEN / NOT RESOLVING** | 000 — ต้องตัดสินใจว่าจะคงโดเมนนี้หรือย้ายไป `/wallet` |
-| 13 | Website connection (dApp provider) | **MISSING (โดยเจตนา)** | ยังไม่มี `window.nsat` provider / connected sites — อยู่นอก Release 1; ต้องมี security review แยก |
-| 14 | Legal / compliance review | **BLOCKED** | ต้องให้เจ้าของ/ที่ปรึกษากฎหมายตรวจ (Thai digital asset / PDPA) ก่อนขึ้น public messaging |
+| 13 | Website connection (dApp provider) | **MISSING (โดยเจตนา · ประกาศชัดบนเว็บ)** | ไม่มี `window.nsat`, ไม่มี connected sites; `/security/` เขียนตรง ๆ ว่าเว็บเพจขอ signature ไม่ได้ — ต้องมี security review แยกก่อนเปิด |
+| 14 | Legal disclosures | **IMPLEMENTED (draft) → BLOCKED (review)** | `/terms/` `/privacy/` `/security/` ขึ้นจริงและติดป้าย `draft · pending legal review`; ยังต้องให้เจ้าของ/ที่ปรึกษากฎหมายไทยตรวจก่อนถือเป็นฉบับจริง |
 | 15 | Deployment รอบใหม่ | **BLOCKED** | CI เตรียมเสร็จแล้ว (`main` / `workflow_dispatch`) แต่ยังไม่รันจริง — ต้องอนุมัติเจ้าของ |
 | 16 | Post-deploy verification | **VERIFIED** | `scripts/verify-deployed-site.mjs`: ผ่าน 8/8 กับ build ท้องถิ่น, ตรวจเจอ build เก่าบน production (6 FAIL, exit 1) |
 
@@ -86,15 +86,40 @@ npm run test:extension (2 targets)     tests 10 / pass 10 / fail 0
 | Safari (macOS) | NOT SUPPORTED | ต้องมี Xcode project + การกระจายแยก |
 | Offline shell end-to-end | NOT TESTED | ตัดเน็ตแล้วเปิด `/wallet/` เพื่อยืนยัน behavior |
 | www / DNS / TLS | BLOCKED | ตั้ง CNAME `www` + redirect ไป apex หรือตัดสินใจไม่ใช้ www |
-| Deploy build ใหม่ | BLOCKED | ต้องอนุมัติ (Pages/CI) — ยังไม่มีการ deploy |
+| Deploy build ใหม่ | **DONE (2026-11-13)** | deploy ผ่าน Caddy root จริง 2 รอบ (manifest fix + security/legal/SW v3) พร้อม backup ทุกรอบ |
 | `extension/release.json` | AUTOMATED | `npm run release:extension` เขียน bytes/sha256 จาก zip จริง; `npm run test:extension` ตรวจซ้ำให้ |
-| Legal disclosures | BLOCKED | ร่างข้อความ + ให้เจ้าของ/ที่ปรึกษาตรวจ |
+| Legal disclosures | DRAFT SHIPPED | เนื้อหาตรงกับพฤติกรรมจริงของโค้ด; ต้องให้เจ้าของ/ที่ปรึกษาตรวจก่อนเปลี่ยนป้ายเป็นฉบับจริง |
+| Service worker cache ของ chain state | **FIXED + VERIFIED** | พบว่า same-origin `/api/v1/chain/info` ถูกเก็บใน Cache API (1 entry); แก้เป็น bypass `/api`, `/v1`, `/health`, `/info`, `/account`, `/tx`, `/peers`, `/quorum`, `/metrics` แล้ว bump `nsat-pwa-v3`; ตรวจบน production: 0 API entries แม้หลังยิง fetch |
 
 ---
 
-## 4. Next action
+## 4. รอบ directive ปัจจุบัน (2026-11-13) — workstreams
 
-1. เจ้าของอนุมัติ deploy → merge เข้า `main` (หรือ Actions → Run workflow ด้วย `custom_domain=true`, `custom_domain_name=satoshicore.org`) แล้ว job `verify` จะยืนยันด้วยหลักฐานจาก URL จริง
-2. โหลด `extension/dist` (Chromium) และ `dist-firefox` เข้าเบราว์เซอร์จริง ทดสอบ create → receive → send ด้วยกระเป๋า synthetic ที่ไม่มียอด
-3. ตัดสินใจเรื่อง `www` + `wallet.satoshicore.org` (redirect หรือคงไว้)
-4. เริ่ม security review ของ website-connection (dApp provider) ก่อนเปิดเป็นฟีเจอร์
+| Workstream | สถานะ | หลักฐาน |
+|---|---|---|
+| A — Audit | **VERIFIED** | ตรวจ repo ทั้ง 4 (HEAD ต่อ repo), branch จริง, hosting (Caddy ไม่ใช่ Pages), routes ที่มี/ไม่มี |
+| B — Shared Wallet Core | **VERIFIED (ไม่ต้องแก้)** | `lib/nsatWallet.js` + `lib/nsatClient.js` + `lib/nsatCodec.js` ใช้ร่วมเว็บ/extension; keystore injectable, BigInt ตลอด, identity gate แบบ exact-match, sanity check ว่า pubkey ที่เซ็นตรงกับ address ที่แสดงตอน unlock |
+| C — PWA | **DEPLOYED** | manifest.json, SW v3 ที่ไม่ cache chain state, offline.html, idle auto-lock 15 นาที |
+| D — Extension | **BUILD_PRODUCED (ยังไม่ทดสอบโดยคน)** | Chromium + Firefox zip, artifact 10/10; website-connection ยังไม่ทำ (ประกาศชัด) |
+| E — Security/Compliance | **IMPLEMENTED (draft) + 1 fix** | หน้า `/security/` `/terms/` `/privacy/`; SW cache bug แก้แล้ว; threat-model/audit เดิมใน `docs/security/` |
+| F — Website | **DEPLOYED** | wallet-first homepage + secondary Security/Terms/Privacy; footer มีลิงก์ครบ |
+| G — Release verification | **PARTIAL** | static 11/11, SW behavioural 3/3, extension 10/10, security scan 54 ไฟล์สะอาด, live verify 8/8 |
+
+### หลักฐานรอบนี้
+```
+npm run build (NEXT_PUBLIC_API_SAME_ORIGIN=1)   ✓ Compiled successfully
+tests/static-export.test.mjs                    11 / 11 pass
+tests/service-worker.test.mjs (vm + fake caches) 3 / 3 pass
+nextension suite + release artifacts             10 / 10 pass, OK
+security-scan                                    54 files, no findings
+verify-deployed-site https://satoshicore.org     8 passed / 0 failed
+browser: cache keys = [nsat-pwa-v3], API entries = 0 (even after an /api fetch)
+```
+
+## 5. Next action
+
+1. โหลด `extension/dist` (Chromium) และ `dist-firefox` เข้าเบราว์เซอร์จริง ทดสอบ create → receive → send ด้วยกระเป๋า synthetic ที่ไม่มียอด (checklist: `docs/EXTENSION-TESTING.md`)
+2. เจ้าของ/ที่ปรึกษากฎหมายตรวจ `/terms/` `/privacy/` แล้วให้แก้ข้อความ + เติม governing law/ผู้ควบคุมข้อมูล
+3. ตัดสินใจเรื่อง `www` + `wallet.satoshicore.org` (redirect หรือคงไว้) — ยังไม่มี DNS record ทั้งคู่
+4. เริ่ม security review ของ website-connection (dApp provider) ก่อนเปิดเป็นฟีเจอร์; ระหว่างนี้หน้า `/security/` ประกาศว่าไม่มี provider
+5. ทดสอบ offline shell แบบตัดเน็ตจริง (ระบุไว้ใน risks — ยังไม่ได้ทำ)

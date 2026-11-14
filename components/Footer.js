@@ -14,7 +14,8 @@ export default function Footer() {
         <p className="footer-links">
           <Link href="/dashboard">Explorer</Link> · <Link href="/explorer">Search</Link> ·{' '}
           <Link href="/wallet">Wallet</Link> · <Link href="/docs">Docs</Link> ·{' '}
-          <Link href="/status">Status</Link>
+          <Link href="/status">Status</Link> · <Link href="/security">Security</Link> ·{' '}
+          <Link href="/terms">Terms</Link> · <Link href="/privacy">Privacy</Link>
         </p>
         <p className="mono muted">{NSAT.network}</p>
       </div>

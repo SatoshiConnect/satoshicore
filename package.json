@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "test": "node tests/static-export.test.mjs",
+    "test": "node tests/static-export.test.mjs && node --test tests/service-worker.test.mjs",
+    "test:sw": "node --test tests/service-worker.test.mjs",
     "verify:deployed": "node scripts/verify-deployed-site.mjs",
     "test:extension": "npm run build:extension && npm run build:extension:firefox && node --test tests/extension.test.mjs && node scripts/extension-release.mjs",
     "release:extension": "node scripts/extension-release.mjs --write",

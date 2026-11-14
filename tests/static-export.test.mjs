@@ -119,6 +119,15 @@ test('offline shell service worker ships and never caches other origins', () => 
   assert.doesNotMatch(sw, /gateway\.satoshicore\.org|satoshicore\.org\/v1/, 'worker must not name a money endpoint');
 });
 
+test('service worker never intercepts same-origin API or dynamic core routes', () => {
+  const sw = readFileSync(join(OUT, 'sw.js'), 'utf8');
+  assert.match(sw, /isDynamicApiPath/);
+  assert.match(sw, /\/\(\?:api\|v1\)/, 'API and indexer prefixes must be excluded');
+  assert.match(sw, /if \(isDynamicApiPath\(url\.pathname\)\) return;/,
+    'API paths must bypass respondWith and all Cache API paths');
+  assert.match(sw, /nsat-pwa-v3/, 'cache version must change when offline behavior changes');
+});
+
 test('offline shell precache list resolves inside the export', () => {
   const sw = readFileSync(join(OUT, 'sw.js'), 'utf8');
   const list = sw.match(/const SHELL = \[([\s\S]*?)\];/)?.[1];
@@ -137,6 +146,29 @@ test('offline shell precache list resolves inside the export', () => {
   }
   assert.ok(paths.includes('wallet/'), 'the wallet itself must be part of the offline shell');
   assert.ok(paths.includes('offline.html'), 'offline.html must be part of the offline shell');
+});
+
+test('security, terms and privacy pages ship and are linked from the footer', () => {
+  for (const page of ['security', 'terms', 'privacy']) {
+    assert.ok(existsSync(join(OUT, page, 'index.html')), `missing /${page}/ page`);
+    const html = readFileSync(join(OUT, page, 'index.html'), 'utf8');
+    assert.ok(html.includes(`href="/${page}/"`) || html.includes(`href="/${page}"`), `no nav link to /${page}/`);
+  }
+
+  // The legal pages are drafts and must say so — an unmarked "Terms" page is a
+  // legal claim the project cannot make yet.
+  for (const page of ['terms', 'privacy']) {
+    assert.match(
+      readFileSync(join(OUT, page, 'index.html'), 'utf8'),
+      /draft/i,
+      `/${page}/ must be marked as a draft`
+    );
+  }
+
+  const footer = readFileSync(join(OUT, 'index.html'), 'utf8');
+  for (const href of ['/security/', '/terms/', '/privacy/']) {
+    assert.ok(footer.includes(`href="${href}"`), `footer missing ${href}`);
+  }
 });
 
 test('homepage is wallet-first and download page exists', () => {

@@ -14,7 +14,7 @@
  * works offline".
  */
 
-const VERSION = 'nsat-pwa-v2';
+const VERSION = 'nsat-pwa-v3';
 
 // Relative to the registration scope, so the same file works from the domain
 // root and from a GitHub Pages project subpath.
@@ -27,6 +27,14 @@ const SHELL = [
   'icons/icon-192.png',
   'icons/icon-512.png',
 ];
+
+// Production serves the gateway and indexer through this same origin. Never
+// intercept/copy their read endpoints into Cache API just because the browser
+// sees the Caddy host as same-origin. Also skip legacy core routes that Caddy
+// proxies directly; these may contain changing chain/account state.
+const isDynamicApiPath = (pathname) =>
+  /^\/(?:api|v1)(?:\/|$)/.test(pathname)
+  || /^\/(?:health|info|account|tx|peers|quorum|metrics)(?:\/|$)/.test(pathname);
 
 const scoped = (path) => new URL(path, self.registration.scope).toString();
 
@@ -67,6 +75,9 @@ self.addEventListener('fetch', (event) => {
   // from a cache. A stale money value is worse than an honest error.
   if (url.origin !== self.location.origin) return;
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
+  // Same-origin API endpoints must remain network-only too (Caddy proxies them
+  // to the live Mainnet gateway/indexer under this very origin).
+  if (isDynamicApiPath(url.pathname)) return;
 
   if (request.mode === 'navigate') {
     event.respondWith((async () => {

@@ -46,6 +46,16 @@ export default function HomeWallet() {
           <Link href="/docs/">Read the docs →</Link>
         </article>
       </div>
+
+      {/* Secondary (directive §7): security and the legal drafts are one click
+          away without competing with the two wallet actions above. */}
+      <p className="mono" style={{ marginTop: '1.5rem', color: 'var(--muted)', fontSize: '.85rem' }}>
+        <Link href="/security/">Security model</Link>
+        {' · '}
+        <Link href="/terms/">Terms</Link>
+        {' · '}
+        <Link href="/privacy/">Privacy</Link>
+      </p>
     </section>
   );
 }
