@@ -138,7 +138,7 @@ test('keystore create → persist → rehydrate → unlock works end-to-end off 
   await first.hydrate();
   setWalletStorage(first);
 
-  const { pubkeyG } = await keystoreCreate('ext-a', 'pw-ext-a');
+  const { pubkeyG } = await keystoreCreate('ext-a', 'pw-ext-a-123456');
   assert.match(pubkeyG, /^G[A-Z2-7]{55}$/);
   // Ciphertext (not the seed) is what reached the storage area.
   assert.ok(area.data.has('scw-web-keystore-v1'), 'keystore blob never persisted');
@@ -152,7 +152,7 @@ test('keystore create → persist → rehydrate → unlock works end-to-end off 
   setWalletStorage(second);
   assert.deepEqual(keystoreList(), [{ name: 'ext-a', pubkey: pubkeyG }],
     'rehydrated popup must see the persisted wallet');
-  const seed = await keystoreUnlock('ext-a', 'pw-ext-a');
+  const seed = await keystoreUnlock('ext-a', 'pw-ext-a-123456');
   assert.ok(seed instanceof Uint8Array && seed.length === 32);
   await assert.rejects(() => keystoreUnlock('ext-a', 'wrong'), /wrong password/);
 });

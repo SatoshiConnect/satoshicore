@@ -57,7 +57,9 @@ if ((LOOPBACK.test(GATEWAY) || LOOPBACK.test(INDEXER)) && process.env.NSAT_EXT_A
 // refuses to sign when the node's reported identity differs (fail-closed).
 const NETWORK_ID = process.env.NSAT_EXT_NETWORK_ID
   || 'NSAT Mainnet ; October 2026 ; bc3098829fffc717';
-const IDLE_LOCK_MS = process.env.NSAT_EXT_IDLE_LOCK_MS || String(15 * 60_000);
+// Match the web wallet's default so the popup does not keep signing power
+// longer than the page does; the panel itself clamps 1–60 min.
+const IDLE_LOCK_MS = process.env.NSAT_EXT_IDLE_LOCK_MS || String(5 * 60_000);
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 
 const define = {

@@ -1,6 +1,6 @@
 # WALLET SECURITY AUDIT — lib/nsatWallet.js + WalletPanel (web wallet)
 
-Commit basis: `f8004b1…` + hardening diff. Prior audits retained where still valid; this file is the current source of truth.
+Commit basis: `f8e02cc` + hardening diff (2026-11-14). Prior audits retained where still valid; this file is the current source of truth.
 
 ## PASS — verified controls (with test evidence)
 
@@ -26,12 +26,14 @@ Commit basis: `f8004b1…` + hardening diff. Prior audits retained where still v
 | Limit | Why | Path |
 |---|---|---|
 | localStorage kill-for-password is NOT hardware security | Keystore is only as strong as the passphrase and the browser profile's integrity | Documented to users in the unlock panel; no claim of hardware-wallet security anywhere in the UI |
-| Seed lifetime in memory | JS cannot guarantee zeroization of old Uint8Array copies once GC'd; we scrub actively-used copies (`scrub()`) but duplicates exist inside the runtime | Irreducible JS limitation — documented, not claimed |
+| Seed lifetime in memory | JS cannot guarantee zeroization of every copy the runtime made (WebCrypto internals, string-encoded seed shown once); active buffers and expanded Ed25519 secret keys are overwritten, duplicates may still exist | Irreducible JS limitation — documented, not claimed |
 | Browser runtime compromise (malicious extension, exploit) defeats everything | Threat model T9/T13: assume the browser is trusted only at use time | Mitigation is a minimized surface (no remote scripts in the wallet bundle), not a false guarantee |
 | XSS on the Pages-hosted site | No `dangerouslySetInnerHTML` found by audit + secret scan; site-level CSP is NOT set at this host (GitHub Pages standard headers only) | Site CSP is UNVERIFIED — avoid claiming defense there |
-| Inactivity lock timeout | Wallet currently locks only on explicit user action / page reload | Future hardening: idle auto-lock timer (lowest-cost next step, no protocol impact) |
+| Seed zeroization on lock | `zeroSeed()` overwrites the active buffer and any in-flight signing copy on lock, account switch, unmount, pagehide and 10-min-idle background; `ed25519Keypair`/`ed25519Sign` wipe the expanded 64-byte secret key after use | code audit + `zeroSeed wipes signing-key bytes ✔`; UI lock path not yet exercised in a browser |
+| Inactivity / background lock | 5-minute idle auto-lock (operator may tune 1–60 min, cannot disable), immediate lock on tab hide/pagehide, and pending unlock/create/import results are discarded if the app left the foreground | code audit; browser-level visibility behavior unverified |
 | Clipboard sniffing of addresses | Copy-address uses `navigator.clipboard`; OS-level clipboard readers are outside our control | Documented residual |
 | Desktop/Tauri partner audit parity | The desktop wallet's custodial model was reviewed in prior sessions (macOS-Status doc), but this session's web hardening did not re-run desktop suites | Re-run on next desktop session |
 
 ## Regression coverage for every new control
-`node --test tests/keystore.test.mjs` → 6/6 ✔ (subtitle: key custody & integrity).
+`node --test tests/keystore.test.mjs` → 10/10 ✔ (subtitle: key custody & integrity).
+`node --test tests/wallet-engine.test.mjs` → 5/5 ✔ (offline signing; lock-cancelled signing refuses before and after async account lookup).

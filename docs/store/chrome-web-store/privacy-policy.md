@@ -41,9 +41,9 @@ page can read it, and it is removed when you uninstall the extension.
 | Interface preferences | Theme and similar display settings. |
 
 While the wallet is unlocked, the decrypted seed exists in the popup's memory so
-it can sign. Closing the popup destroys that context; an idle auto-lock (15
-minutes) locks it earlier. The extension sets no cookies and writes nothing to
-web pages.
+it can sign. Closing the popup destroys that context; an idle auto-lock (5
+minutes) locks it earlier and overwrites the key bytes. The extension sets no
+cookies and writes nothing to web pages.
 
 ## 4. What leaves your device
 

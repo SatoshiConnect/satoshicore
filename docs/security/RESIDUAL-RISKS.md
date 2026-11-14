@@ -20,9 +20,9 @@ Nothing here should be read as "accepted" — each item carries its owner/next s
 | R4 | Hardward-wallet/air-gapped signing for Treasury not implemented | HIGH (custody) | Open | Owner custody program (TREASURY-ISOLATION-PLAN items 4–5) |
 | R5 | Shielded protocol external cryptographic audit not yet performed | HIGH | PENDING_EXTERNAL | Independent qualified reviewer; gate for public Shielded user funds |
 | R6 | Post-quantum migration: Ed25519/Halo2 signatures are not PQC | MEDIUM (long-term) | Open — deliberate; NO swap without a protocol design + compatibility testing + coordinated upgrade, per directive | Documented as cryptographic-agility requirement in THREAT-MODEL T14 |
-| R7 | Inactivity auto-lock for the web wallet not yet implemented | LOW | Open | Future hardening item (idle timer); no protocol impact |
+| R7 | Inactivity auto-lock for the web wallet not yet implemented | LOW | **FIXED (2026-11-14)** | 5-minute idle lock (1–60 min configurable, not disableable) + immediate lock on background/pagehide; UI behavior still needs a browser pass |
 | R8 | E2E suite skip-by-default without disposable devnet env | LOW | By design (no Mainnet txs from the CI/E2E path) | Keep; document in release manifest as deliberately skipped |
-| R9 | `next build` production artifact stale vs latest wallet lib edits (unit/static suites green; rebuild+redeploy pending) | LOW | Open | Rerun Gate 4 (`next build` + static-export suite) at next deploy window |
+| R9 | Production artifact stale vs latest wallet lib edits (unit/static suites green; rebuild+redeploy pending) | LOW | Rebuild done (2026-11-14, `npm test` + `next build` green); deploy pending owner approval | Deploy the rebuilt export in an approved window, then run `npm run verify:deployed` |
 | R10 | Browser runtime compromise (malicious extension/exploit) is OUT of scope of every control here | Acknowledged | Standing assumption | Threat model: minimize seed lifetime; no effective software guarantee possible |
 
 ## Explicit non-claims

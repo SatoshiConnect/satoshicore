@@ -100,7 +100,7 @@ A browser extension is not a hardware wallet. Malware on your computer or a comp
 No account, credentials or funds are needed.
 
 1. Install the extension and click the toolbar icon.
-2. Choose "Create wallet", set any password of 8+ characters, and confirm.
+2. Choose "Create wallet", set a password of at least 12 characters, and confirm.
 3. The popup now shows the wallet: address, balance (0), fee read from the ledger, and the Send form.
 4. Optional: lock and unlock with the same password to see the keystore round-trip.
 

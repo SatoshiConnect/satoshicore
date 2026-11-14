@@ -99,7 +99,7 @@ npm run test:extension (2 targets)     tests 10 / pass 10 / fail 0
 |---|---|---|
 | A — Audit | **VERIFIED** | ตรวจ repo ทั้ง 4 (HEAD ต่อ repo), branch จริง, hosting (Caddy ไม่ใช่ Pages), routes ที่มี/ไม่มี |
 | B — Shared Wallet Core | **VERIFIED (ไม่ต้องแก้)** | `lib/nsatWallet.js` + `lib/nsatClient.js` + `lib/nsatCodec.js` ใช้ร่วมเว็บ/extension; keystore injectable, BigInt ตลอด, identity gate แบบ exact-match, sanity check ว่า pubkey ที่เซ็นตรงกับ address ที่แสดงตอน unlock |
-| C — PWA | **DEPLOYED** | manifest.json, SW v3 ที่ไม่ cache chain state, offline.html, idle auto-lock 15 นาที |
+| C — PWA | **DEPLOYED** | manifest.json, SW v3 ที่ไม่ cache chain state, offline.html, idle auto-lock 5 นาที + ล็อกเมื่อแอปอยู่ใน background |
 | D — Extension | **BUILD_PRODUCED (ยังไม่ทดสอบโดยคน)** | Chromium + Firefox zip, artifact 10/10; website-connection ยังไม่ทำ (ประกาศชัด) |
 | E — Security/Compliance | **IMPLEMENTED (draft) + 1 fix** | หน้า `/security/` `/terms/` `/privacy/`; SW cache bug แก้แล้ว; threat-model/audit เดิมใน `docs/security/` |
 | F — Website | **DEPLOYED** | wallet-first homepage + secondary Security/Terms/Privacy; footer มีลิงก์ครบ |

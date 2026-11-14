@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   isGatewayConfigured, isIndexerConfigured, EXPECTED_NETWORK_ID,
   verifyNetworkIdentity, getChainInfo, getAccount,
@@ -9,7 +9,7 @@ import {
 } from '../lib/nsatClient';
 import {
   keystoreCreate, keystoreImport, keystoreUnlock, keystoreList,
-  keystoreExport, keystoreRestore,
+  keystoreExport, keystoreRestore, zeroSeed, MIN_PASSWORD_LENGTH,
   buildSignedTx, historyLoad, historyPush, historyPatch,
 } from '../lib/nsatWallet';
 import { decodeSeed } from '../lib/nsatCodec';
@@ -33,17 +33,20 @@ import { sendPreflight, maxSendable, fmtGroup } from '../lib/nsatSendPreflight';
 // from the gateway's session-truth responses.
 
 const ACCOUNT_RE = /^G[A-Z2-7]{55}$/;
-// Phone-style tab bar: the five destinations a wallet app puts at the bottom.
-// Shielded has no tab — it is desktop-only, so Settings links to the
-// explanation instead of advertising a feature the browser cannot run.
-const NAV_PAGES = ['overview', 'send', 'receive', 'activity', 'settings'];
+// Phone-style app: three tabs, arranged the way the iPhone build arranges
+// them. Send and Receive are actions on the wallet screen, not tabs — a phone
+// wallet does not spend a third of its tab bar on one form. Shielded is
+// desktop-only, so Settings links to the explanation instead of advertising a
+// feature the browser cannot run.
+const NAV_PAGES = ['overview', 'activity', 'settings'];
 const NAV_LABEL = {
-  overview: 'Wallet', send: 'Send', receive: 'Receive', activity: 'Activity', settings: 'Settings',
+  overview: 'Wallet', activity: 'Activity', settings: 'Settings',
 };
 const PAGE_GLYPH = {
-  overview: '◈', send: '↗', receive: '↙', shielded: '◆',
-  activity: '≡', settings: '⚙',
+  overview: '◆', activity: '⚡', settings: '⚙',
 };
+// Pages reached from an action; the app bar shows Back instead of Receive.
+const SUB_PAGES = ['send', 'receive', 'shielded'];
 const PAGE_TITLE = {
   overview: 'Overview', send: 'Send NSAT', receive: 'Receive NSAT',
   shielded: 'Shielded NSAT', activity: 'Activity', settings: 'Settings',
@@ -106,30 +109,89 @@ export default function WalletPanel() {
     window.setTimeout(() => setToast(null), 6000);
   };
 
+  // Locking must destroy the seed bytes, not just drop the state reference:
+  // an unreferenced Uint8Array is still readable until the GC runs. Reading the
+  // session through a ref keeps the wipe correct even when an event handler
+  // (background/pagehide) holds a stale closure.
+  const activeRef = useRef(null);
+  const lockEpoch = useRef(0);
+  const pendingSeedsRef = useRef(new Set());
+  const lockWallet = useCallback((message) => {
+    lockEpoch.current += 1;
+    const current = activeRef.current;
+    if (current?.seed32) zeroSeed(current.seed32);
+    for (const seed32 of pendingSeedsRef.current) zeroSeed(seed32);
+    pendingSeedsRef.current.clear();
+    activeRef.current = null;
+    setActive(null);
+    setUnlockPass('');
+    setNewPass('');
+    setImportSeed('');
+    if (message) setToast({ text: message, kind: 'ok' });
+  }, []);
+  const activateWallet = useCallback((session) => {
+    const previous = activeRef.current;
+    if (previous?.seed32 && previous.seed32 !== session.seed32) zeroSeed(previous.seed32);
+    activeRef.current = session;
+    setActive(session);
+  }, []);
+
+  // An in-app route change unmounts this panel without a pagehide event, so
+  // wipe the session buffer on unmount as well: a client-side navigation must
+  // not leave signing-key bytes behind in a detached component.
+  useEffect(() => () => {
+    lockEpoch.current += 1;
+    if (activeRef.current?.seed32) zeroSeed(activeRef.current.seed32);
+    for (const seed32 of pendingSeedsRef.current) zeroSeed(seed32);
+    pendingSeedsRef.current.clear();
+    activeRef.current = null;
+  }, []);
+
+  // Lock immediately when the app leaves the foreground, and invalidate any
+  // pending WebCrypto operation so an unlock cannot resurrect the session.
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        lockWallet('Wallet locked — signing key cleared when the app went to the background.');
+      }
+    };
+    const onPageHide = () => lockWallet();
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', onPageHide);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', onPageHide);
+    };
+  }, [lockWallet]);
+
   // Idle auto-lock: signing power must not outlive inattention. Any user
   // activity resets the timer; after the idle window the wallet locks via
-  // the same path as the explicit lock button (setActive(null)), dropping
-  // the seed from memory. Default 15 min; NEXT_PUBLIC_IDLE_LOCK_MS overrides
-  // (a value ≤ 0 disables — never recommended on shared machines).
-  const idleLockMs = Number(process.env.NEXT_PUBLIC_IDLE_LOCK_MS) || 15 * 60_000;
+  // lockWallet(), which wipes the seed. Default 5 min. The operator can tune
+  // NEXT_PUBLIC_IDLE_LOCK_MS between 1 and 60 minutes, but cannot disable the
+  // lock: values outside that range clamp instead of switching it off.
+  const idleLockMs = Math.min(
+    Math.max(Number(process.env.NEXT_PUBLIC_IDLE_LOCK_MS) || 5 * 60_000, 60_000),
+    60 * 60_000,
+  );
   useEffect(() => {
-    if (!active || idleLockMs <= 0) return undefined;
+    if (!active) return undefined;
     let lastActive = Date.now();
     const bump = () => { lastActive = Date.now(); };
     const events = ['pointerdown', 'keydown', 'mousemove', 'wheel', 'touchstart'];
     events.forEach((ev) => window.addEventListener(ev, bump, { passive: true }));
     const timer = window.setInterval(() => {
       if (Date.now() - lastActive >= idleLockMs) {
-        // same behavior as the Lock button
-        setActive(null);
-        setToast({ text: 'Wallet locked after inactivity — signing key cleared.', kind: 'ok' });
+        lockWallet('Wallet locked after inactivity — signing key cleared.');
       }
     }, 10_000);
     return () => {
       events.forEach((ev) => window.removeEventListener(ev, bump));
       window.clearInterval(timer);
     };
-  }, [active?.name, idleLockMs]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [active, idleLockMs, lockWallet]);
+
+  
+
 
   const configured = isGatewayConfigured();
 
@@ -260,59 +322,90 @@ export default function WalletPanel() {
   // ---------------- wallet actions (logic unchanged from the audited build) ----
   async function doCreate(e) {
     e.preventDefault();
+    const operationEpoch = lockEpoch.current;
     setBusy(true);
     try {
       const r = await keystoreCreate(newName.trim(), newPass);
+      const seed32 = decodeSeed(r.seedS);
+      r.seedS = '';
+      if (operationEpoch !== lockEpoch.current) {
+        zeroSeed(seed32);
+        return;
+      }
       setWallets(keystoreList());
       // The freshly created seed stays in this closure's memory only —
       // the same trust level as an explicit Unlock.
-      setActive({ name: r.name, pubkey: r.pubkeyG, seed32: decodeSeed(r.seedS) });
-      setNewName(''); setNewPass('');
+      activateWallet({ name: r.name, pubkey: r.pubkeyG, seed32 });
+      setNewName(''); setNewPass(''); setImportSeed('');
       notify(`Wallet "${r.name}" created. Export the encrypted backup NOW (Settings) and store it privately — it is the only copy.`, 'ok');
     } catch (err) { notify(String(err.message || err), 'err'); }
-    setBusy(false);
+    finally {
+      setNewPass('');
+      setImportSeed('');
+      setBusy(false);
+    }
   }
 
   async function doImport(e) {
     e.preventDefault();
+    const operationEpoch = lockEpoch.current;
     setBusy(true);
     try {
       const r = await keystoreImport(newName.trim(), importSeed.trim(), newPass);
+      const seed32 = decodeSeed(r.seedS);
+      r.seedS = '';
+      if (operationEpoch !== lockEpoch.current) {
+        zeroSeed(seed32);
+        return;
+      }
       setWallets(keystoreList());
-      setActive({ name: r.name, pubkey: r.pubkeyG, seed32: decodeSeed(r.seedS) });
+      activateWallet({ name: r.name, pubkey: r.pubkeyG, seed32 });
       setNewName(''); setNewPass(''); setImportSeed('');
       notify(`Wallet "${r.name}" imported.`, 'ok');
     } catch (err) { notify(String(err.message || err), 'err'); }
-    setBusy(false);
+    finally {
+      setNewPass('');
+      setImportSeed('');
+      setBusy(false);
+    }
   }
 
   async function doUnlock(e) {
     e.preventDefault();
     if (!unlockName) return;
+    const operationEpoch = lockEpoch.current;
+    const name = unlockName;
+    let password = unlockPass;
+    setUnlockPass('');
     setBusy(true);
     try {
-      const seed32 = await keystoreUnlock(unlockName, unlockPass);
+      const seed32 = await keystoreUnlock(name, password);
+      if (operationEpoch !== lockEpoch.current) {
+        zeroSeed(seed32);
+        return;
+      }
       const list = keystoreList();
-      const entry = list.find(w => w.name === unlockName);
-      setActive({ name: unlockName, pubkey: entry?.pubkey, seed32 });
-      setUnlockName(''); setUnlockPass('');
-      notify(`Wallet "${unlockName}" unlocked.`, 'ok');
+      const entry = list.find(w => w.name === name);
+      activateWallet({ name, pubkey: entry?.pubkey, seed32 });
+      setUnlockName('');
+      notify(`Wallet "${name}" unlocked.`, 'ok');
     } catch (err) { notify(String(err.message || err), 'err'); }
-    setBusy(false);
+    finally {
+      password = '';
+      setBusy(false);
+    }
   }
 
   function doLock() {
-    setActive(null);
-    notify('Wallet locked — signing key cleared from memory.', 'ok');
+    lockWallet('Wallet locked — signing key cleared from memory.');
   }
 
   // Account switching never reuses the previous key: it drops the active seed
   // and asks for THIS wallet's password, exactly like a fresh unlock. Nothing
   // is signed until that password is entered again.
   function switchTo(name) {
-    if (active) setActive(null);
+    if (activeRef.current) lockWallet();
     setUnlockName(name);
-    setUnlockPass('');
     setPage('overview');
     notify(`Selected “${name}” — unlock it with its password to sign.`, 'ok');
   }
@@ -341,7 +434,9 @@ export default function WalletPanel() {
     const f = e.target.files?.[0];
     if (!f) return;
     try {
-      keystoreRestore(await f.text());
+      const backup = await f.text();
+      lockWallet();
+      keystoreRestore(backup);
       refreshWallets();
       notify('Keystore restored. Unlock a wallet to sign.', 'ok');
     } catch (err) { notify(`restore failed: ${err.message}`, 'err'); }
@@ -357,10 +452,28 @@ export default function WalletPanel() {
       notify('Network identity changed since verification — refusing to sign.', 'err');
       return false;
     }
+    const session = activeRef.current;
+    if (!session?.seed32 || session.name !== active.name) {
+      notify('Wallet locked. Unlock again before signing.', 'err');
+      return false;
+    }
     setBusy(true);
+    const operationEpoch = lockEpoch.current;
+    const canContinue = () => operationEpoch === lockEpoch.current
+      && activeRef.current === session;
+    // Sign from a tracked private copy. Lock zeroizes session and pending copy,
+    // and the signing engine checks canContinue after every async boundary.
+    const seed32 = session.seed32.slice();
+    pendingSeedsRef.current.add(seed32);
+    const requireActiveSession = () => {
+      if (!canContinue()) throw new Error('Wallet locked — transaction signing cancelled.');
+    };
     try {
+      requireActiveSession();
       const baseFee = await estimateFee();
+      requireActiveSession();
       const info = await getChainInfo();
+      requireActiveSession();
       const reserve = Number(info?.info?.ledger?.baseReserve || 0);
       const amtClean = amount.replace(/[,_ ]/g, '');
       if (createDest && reserve > 0 && /^\d+$/.test(amtClean)
@@ -370,15 +483,19 @@ export default function WalletPanel() {
         return false;
       }
       const signed = await buildSignedTx({
-        seed32: active.seed32,
+        seed32,
         netPassphrase: EXPECTED_NETWORK_ID,   // the VERIFIED identity, exact
         seqFetch: async () => getAccount(active.pubkey),
         destG: dest.trim(),
         amount: amount.trim(),
         fee: baseFee,
         create: createDest,
+        shouldCancel: () => !canContinue(),
       });
+      requireActiveSession();
+      requireActiveSession();
       const r = await submitSignedTransaction(signed.envelopeBase64);
+      // Locking after submission cannot revoke a signed envelope already sent.
       // Core /tx statuses (verified in nsat-core TransactionQueue.cpp):
       //   PENDING | DUPLICATE | ERROR | TRY_AGAIN_LATER | FILTERED
       if (r.status === 'ERROR') {
@@ -444,7 +561,11 @@ export default function WalletPanel() {
       void verifyNetwork();
       return true;
     } catch (err) { notify(String(err.message || err), 'err'); return false; }
-    finally { setBusy(false); }
+    finally {
+      zeroSeed(seed32);
+      pendingSeedsRef.current.delete(seed32);
+      setBusy(false);
+    }
   }
 
   function openReview() {
@@ -463,41 +584,41 @@ export default function WalletPanel() {
   const hasWallets = wallets.length > 0;
 
   const ledger = net?.ledger ?? null;
-  const connLine = !configured ? 'offline — gateway not configured'
-    : net == null ? 'connecting…'
-    : netOk ? 'connected' : 'offline';
 
   return (
     <div className="nw-root">
       <div className="nw-phone">
-        {/* App bar: who is open, whether signing is possible, and the lock.
-         * It carries the page's only <h1>, so the phone shell stays
-         * semantic without a marketing-style page header. */}
+        {/* App bar, iPhone-build order: the address on the left, the account
+         * in a pill in the middle, search (or lock) on the right. A sub-page
+         * swaps the address button for Back, so the tab bar keeps its job. */}
         <header className="nw-appbar">
-          <div className="nw-appbar-id">
+          {SUB_PAGES.includes(page) ? (
+            <button type="button" className="nw-round-btn" onClick={() => setPage('overview')}
+              aria-label="Back to wallet" title="Back to wallet">←</button>
+          ) : (
+            <button type="button" className="nw-round-btn" onClick={() => setPage('receive')}
+              aria-label="Show my address" title="Receive — show your address">▦</button>
+          )}
+          <button type="button" className="nw-account-pill" onClick={() => setPage('settings')}
+            title={`${netOk ? 'Connected' : net == null ? 'Connecting…' : 'Offline'} — wallet settings`}>
+            <span className="nw-tokenlogo" aria-hidden>◈</span>
+            <span className="nw-account-name">
+              {active ? active.name : hasWallets ? 'Locked' : 'NSAT Wallet'}
+            </span>
             <span className={'nw-dot ' + (netOk ? 'ok' : net == null ? 'wait' : 'err')} aria-hidden />
-            <div style={{ minWidth: 0 }}>
-              <h1 className="nw-appbar-title">{active ? active.name : 'NSAT Wallet'}</h1>
-              <p className="nw-appbar-meta">
-                {active ? shortAddr(active.pubkey, 6) : hasWallets ? 'Locked' : 'No wallet yet'}
-                {' · '}{connLine}
-              </p>
-            </div>
-          </div>
-          <div className="nw-appbar-side">
-            {active && (
-              <button type="button" className="nw-icon-btn" onClick={doLock}
-                title="Lock the active wallet (signing stops)" aria-label="Lock wallet">🔒</button>
-            )}
-          </div>
+            <span className="nw-account-chevron" aria-hidden>⌄</span>
+          </button>
+          {active ? (
+            <button type="button" className="nw-round-btn" onClick={doLock}
+              aria-label="Lock wallet" title="Lock the active wallet (signing stops)">🔒</button>
+          ) : (
+            <a className="nw-round-btn" href="/explorer/" aria-label="Search the chain"
+              title="Search accounts and transactions">⌕</a>
+          )}
         </header>
-
-        <div className="nw-statusline">
-          <NetworkBadge net={net ? { ...net, ledger: liveLedger ?? net.ledger } : net} />
-          <span className="nw-statusline-note">
-            {fee != null ? `fee ${fee} NSAT` : 'fee …'}
-          </span>
-        </div>
+        {/* The phone shell carries the page's only <h1>, kept out of the visual
+         * layout because the app bar states the same thing in app-sized type. */}
+        <h1 className="nw-visually-hidden">{active ? `${active.name} — NSAT Wallet` : 'NSAT Wallet'}</h1>
 
       <main className="nw-content">
           {!configured && (
@@ -524,22 +645,11 @@ export default function WalletPanel() {
                 {wallets.map(w => <option key={w.name} value={w.name}>{w.name}</option>)}
               </select>
               <input type="password" placeholder="Password" value={unlockPass}
-                onChange={(e) => setUnlockPass(e.target.value)}
+                onChange={(e) => setUnlockPass(e.target.value)} autoComplete="current-password"
                 aria-label="Wallet password" />
               <button className="nw-send-btn" type="submit"
                 disabled={busy || !unlockName}>Unlock</button>
             </form>
-          )}
-
-          {/* Account switcher: only when there is more than one stored wallet,
-           * and always by re-entering that wallet's password. */}
-          {active && wallets.length > 1 && (
-            <div className="nw-account-switch">
-              <select value={active.name} aria-label="Switch wallet account"
-                onChange={(e) => { if (e.target.value !== active.name) switchTo(e.target.value); }}>
-                {wallets.map(w => <option key={w.name} value={w.name}>{w.name}</option>)}
-              </select>
-            </div>
           )}
 
           {page === 'overview' && (
@@ -549,6 +659,7 @@ export default function WalletPanel() {
               net={{ net, netOk, ledger: liveLedger ?? ledger, fee, minted: policyMinted(liveLedger ?? ledger) }}
               notify={notify}
               onSend={() => setPage('send')} onReceive={() => setPage('receive')}
+              onActivity={() => setPage('activity')}
               onManage={() => setPage('settings')} />
           )}
 
@@ -578,8 +689,10 @@ export default function WalletPanel() {
           )}
       </main>
 
-      {(active || hasWallets) && (
-        <nav className="nw-bottomnav" aria-label="Wallet sections">
+      {/* The tab bar is the app's only navigation, so it is always present —
+       * even before a wallet exists (Activity is empty, Settings still holds
+       * the link out to the rest of the site). */}
+      <nav className="nw-bottomnav" aria-label="Wallet sections">
           {NAV_PAGES.map((p) => (
             <button key={p} type="button"
               className={'nw-navitem' + (page === p ? ' is-active' : '')}
@@ -589,8 +702,7 @@ export default function WalletPanel() {
               <span className="nw-navlabel">{NAV_LABEL[p]}</span>
             </button>
           ))}
-        </nav>
-      )}
+      </nav>
       </div>
 
       {review && (
@@ -645,7 +757,7 @@ export default function WalletPanel() {
 }
 
 /* --------------------------------- Overview ------------------------------ */
-function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSend, onReceive, onManage }) {
+function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSend, onReceive, onActivity, onManage }) {
   // First run is one decision, not two competing forms: a phone wallet offers
   // Create or Import as a segmented control, then shows the chosen form.
   const [mode, setMode] = useState('create');
@@ -682,15 +794,16 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
          * and Import is one tap away instead of a page away. */}
         <section className="nw-card" hidden={mode !== 'create'}>
           <h2 style={{ color: 'var(--text)' }}>Create a New Wallet</h2>
-          <p className="nw-small nw-dim">Generated and encrypted in this browser.</p>
+          <p className="nw-small nw-dim">Generated and encrypted in this browser. Use a unique passphrase of at least {MIN_PASSWORD_LENGTH} characters.</p>
           <form onSubmit={bus.doCreate} className="nw-txf" style={{ marginTop: 10 }}>
             <label className="nw-label" htmlFor="nw-new-name">Wallet name</label>
             <input id="nw-new-name" value={bus.newName}
               onChange={(e) => bus.setNewName(e.target.value)}
               placeholder="Personal wallet" required />
-            <label className="nw-label" htmlFor="nw-new-pass">Password (≥ 8 chars, needed to sign)</label>
+            <label className="nw-label" htmlFor="nw-new-pass">Password (≥ {MIN_PASSWORD_LENGTH} chars, needed to sign)</label>
             <input id="nw-new-pass" type="password" value={bus.newPass}
-              onChange={(e) => bus.setNewPass(e.target.value)} minLength={8} required />
+              onChange={(e) => bus.setNewPass(e.target.value)}
+              minLength={MIN_PASSWORD_LENGTH} autoComplete="new-password" required />
             <div className="nw-small nw-dim">There is no server-side recovery.</div>
             <div className="nw-btn-row" style={{ margin: '4px 0 0' }}>
               <button type="submit" className="nw-send-btn" disabled={bus.busy}>
@@ -706,11 +819,12 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
             <input id="nw-imp-name" value={bus.newName}
               onChange={(e) => bus.setNewName(e.target.value)} required />
             <label className="nw-label" htmlFor="nw-imp-seed">Secret seed (S…)</label>
-            <input id="nw-imp-seed" type="password" spellCheck={false}
+            <input id="nw-imp-seed" type="password" spellCheck={false} autoComplete="off"
               value={bus.importSeed} onChange={(e) => bus.setImportSeed(e.target.value)} required />
-            <label className="nw-label" htmlFor="nw-imp-pass">Password</label>
+            <label className="nw-label" htmlFor="nw-imp-pass">Password (≥ {MIN_PASSWORD_LENGTH} chars)</label>
             <input id="nw-imp-pass" type="password" value={bus.newPass}
-              onChange={(e) => bus.setNewPass(e.target.value)} minLength={8} required />
+              onChange={(e) => bus.setNewPass(e.target.value)}
+              minLength={MIN_PASSWORD_LENGTH} autoComplete="new-password" required />
             <div className="nw-btn-row" style={{ margin: '4px 0 0' }}>
               <button type="submit" className="nw-send-btn" disabled={bus.busy}>
                 Import</button>
@@ -725,62 +839,72 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
   // `funded` comes from the gateway answer (404 → false). A known balance of 0
   // is not the same thing as a funded account, so never derive it from balance.
   const fundedBadge = funded;
+  const exact = balance == null ? '…' : formatExactBalance(balance);
   return (
-    <div>
-      <section className="nw-card nw-balance-card">
-        <div className="nw-balance-label">Confirmed balance</div>
-        <div className="nw-balance-amount">
-          {balance == null ? '…' : formatExactBalance(balance)}
-          <span className="nw-balance-unit">NSAT</span>
+    <div className="nw-home">
+      {/* The one number the app exists to show, centred the way the phone
+       * build centres it: no card, no label competing with it. */}
+      <section className="nw-hero">
+        <div className="nw-hero-amount">
+          {exact}
+          <span className="nw-hero-unit">NSAT</span>
         </div>
-        <div className="nw-address-chip">
-          <span>{shortAddr(active.pubkey, 10)}</span>
-          <button className="nw-chip-btn"
-            onClick={async () => {
-              await navigator.clipboard.writeText(active.pubkey);
-              notify('📋 Copied: Address');
-            }}>Copy</button>
-        </div>
-        <div className="nw-balance-foot">
+        <div className="nw-hero-foot">
           <span className={'nw-badge ' + (fundedBadge === true ? 'ok' : 'warn')}>
             {fundedBadge === true ? 'funded' : fundedBadge === false ? 'not funded yet' : 'funding unknown'}
           </span>
-          <span className="nw-small nw-dim">fee {net.fee ?? '…'} NSAT</span>
+          <button type="button" className="nw-chip-btn nw-mono"
+            title="Copy your public address"
+            onClick={async () => {
+              await navigator.clipboard.writeText(active.pubkey);
+              notify('📋 Copied: Address');
+            }}>
+            {shortAddr(active.pubkey, 8)}
+          </button>
         </div>
       </section>
 
+      {/* Send · Receive · Backup — the round actions the phone build puts under
+       * the balance. There is no Buy button: nothing behind it can sell NSAT. */}
       <div className="nw-quick-actions">
-        <button className="nw-action-card" onClick={onSend}>
-          <div className="nw-action-icon">↗</div>
-          <div style={{ fontWeight: 700 }}>Send</div>
+        <button type="button" className="nw-action-card" onClick={onSend}>
+          <span className="nw-action-icon" aria-hidden>↗</span>
+          <span className="nw-action-label">Send</span>
         </button>
-        <button className="nw-action-card" onClick={onReceive}>
-          <div className="nw-action-icon">↙</div>
-          <div style={{ fontWeight: 700 }}>Receive</div>
+        <button type="button" className="nw-action-card" onClick={onReceive}>
+          <span className="nw-action-icon" aria-hidden>▦</span>
+          <span className="nw-action-label">Receive</span>
         </button>
-        <button className="nw-action-card" onClick={onManage}>
-          <div className="nw-action-icon">#</div>
-          <div style={{ fontWeight: 700 }}>Backup</div>
+        <button type="button" className="nw-action-card" onClick={onManage}>
+          <span className="nw-action-icon" aria-hidden>⇩</span>
+          <span className="nw-action-label">Backup</span>
         </button>
       </div>
 
-      {/* Address and funding state already sit in the balance hero, so this
-       * card only carries what a phone wallet puts under it: the chain state. */}
-      <section className="nw-card">
-        <h2 style={{ color: 'var(--text)' }}>Network</h2>
-        <div className="nw-kv" style={{ marginTop: 10 }}>
-          <span className="nw-k">Status</span>
-          <span className="nw-v">{net.netOk ? 'Connected' : 'Offline'}</span>
-        </div>
-        <div className="nw-kv">
-          <span className="nw-k">Ledger</span>
-          <span className="nw-v">{net.ledger != null ? Number(net.ledger).toLocaleString() : '…'}</span>
-        </div>
-        <div className="nw-kv">
-          <span className="nw-k">Base fee</span>
-          <span className="nw-v">{net.fee ?? '…'} NSAT <small className="nw-dim">live</small></span>
-        </div>
-      </section>
+      {/* One asset, listed the way a wallet lists tokens: name and exact
+       * balance, with the live chain state directly under it. */}
+      <div className="nw-assets">
+        <button type="button" className="nw-asset" onClick={onActivity}>
+          <span className="nw-asset-logo" aria-hidden>◈</span>
+          <span className="nw-asset-main">
+            <span className="nw-asset-name">NSAT</span>
+            <span className="nw-asset-sub">SatoshiCore mainnet</span>
+          </span>
+          <span className="nw-asset-value">{exact}</span>
+          <span className="nw-asset-chevron" aria-hidden>›</span>
+        </button>
+        <button type="button" className="nw-asset" onClick={onManage}>
+          <span className="nw-asset-logo" aria-hidden>≣</span>
+          <span className="nw-asset-main">
+            <span className="nw-asset-name">Network &amp; fee</span>
+            <span className="nw-asset-sub">
+              <NetworkBadge net={net.net ? { ...net.net, ledger: net.ledger } : null} />
+              {' · '}{net.fee != null ? `fee ${net.fee} NSAT` : 'fee …'}
+            </span>
+          </span>
+          <span className="nw-asset-chevron" aria-hidden>›</span>
+        </button>
+      </div>
     </div>
   );
 }
@@ -1036,6 +1160,17 @@ function SettingsPage({ s, onShielded }) {
         <button type="button" className="nw-chip-btn" onClick={onShielded}>
           Why shielded is desktop-only
         </button>
+      </section>
+      {/* On a phone the wallet is the whole screen (no site header), so the
+       * rest of SatoshiCore is reachable from here instead of from a nav bar. */}
+      <section className="nw-card">
+        <h2 style={{ color: 'var(--text)' }}>SatoshiCore</h2>
+        <div className="nw-linklist">
+          <a className="nw-linkrow" href="/explorer/">Search the chain<span aria-hidden>›</span></a>
+          <a className="nw-linkrow" href="/dashboard/">Explorer<span aria-hidden>›</span></a>
+          <a className="nw-linkrow" href="/docs/">Docs<span aria-hidden>›</span></a>
+          <a className="nw-linkrow" href="/status/">Network status<span aria-hidden>›</span></a>
+        </div>
       </section>
       <section className="nw-card">
         <h2 style={{ color: 'var(--text)' }}>Security model</h2>

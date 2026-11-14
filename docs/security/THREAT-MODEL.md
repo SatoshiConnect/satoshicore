@@ -33,7 +33,7 @@ verification method; anything not yet verified is marked **UNVERIFIED**.
 | # | Threat | Class | Control | Verification |
 |---|---|---|---|---|
 | T1 | Devnet masquerading as Mainnet (wallet signs over fake network) | Spoofing | Byte-exact network identity, fail closed, 9 unit cases | `services/api-gateway/tests/sdk-identity.test.mjs` — 9/9 ✔ |
-| T2 | Tampered keystore pairs a phisher's display address with the victim's signing key | Tampering/Phishing | Unlock-time integrity check: displayed pubkey must equal derived signing key; restore-time per-entry schema validation | `tests/keystore.test.mjs` — 6/6 ✔ |
+| T2 | Tampered keystore pairs a phisher's display address with the victim's signing key | Tampering/Phishing | Unlock-time integrity check: displayed pubkey must equal derived signing key; restore-time per-entry schema validation | `tests/keystore.test.mjs` — 10/10 ✔ |
 | T3 | Gateway becomes a signing oracle | Elevation | Gateway has no key-handling code path; validateEnvelope accepts base64 XDR only | code inspection of `server.js`, src audit |
 | T4 | Admin RPC reachable through gateway | Elevation | Explicit route allowlist (5 routes), everything else 404 | curl probes: `/bans`, `/api/v1/droppeer` → 404 ✔ |
 | T5 | Core RPC publicly reachable | Information disclosure | Core HTTP bound to loopback; external probe to host IP → connection refused | curl `http://<host>:11626` → 000 refused ✔ |

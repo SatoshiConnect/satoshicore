@@ -108,6 +108,34 @@ test('signed envelope verifies locally, is deterministic, and binds the tx hash'
   });
 });
 
+test('transaction signing cancels before and after asynchronous account lookup when locked', async () => {
+  await withNoNetwork(async () => {
+    const storage = memoryStorage();
+    setWalletStorage(storage);
+    const created = await keystoreCreate(NAME, PASS);
+    const seed = await keystoreUnlock(NAME, PASS);
+    const dest = encodeG(ed25519Keypair(new Uint8Array(32).fill(11)).pub32);
+
+    await assert.rejects(() => buildSignedTx({
+      seed32: seed, netPassphrase: NET, destG: dest, amount: '1', fee: 10,
+      seq: 7, shouldCancel: () => true,
+    }), /signing cancelled/);
+
+    let cancelled = false;
+    await assert.rejects(() => buildSignedTx({
+      seed32: seed, netPassphrase: NET, destG: dest, amount: '1', fee: 10,
+      seqFetch: async () => {
+        cancelled = true;
+        return { status: 'ok', seqnum: 6 };
+      },
+      shouldCancel: () => cancelled,
+    }), /signing cancelled/);
+
+    assert.equal(encodeG(ed25519Keypair(seed).pub32), created.pubkeyG,
+      'cancellation must not mutate the caller-owned session seed');
+  });
+});
+
 test('backup restores the same key; a tampered keystore is refused', async () => {
   await withNoNetwork(async () => {
     const storage = memoryStorage();
