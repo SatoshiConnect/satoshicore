@@ -90,8 +90,12 @@ sets the `DEPLOY_*` secrets and asks for it. Activating a release stays manual.
   `custom_domain=false`): built with `NEXT_PUBLIC_BASE_PATH=/satoshicore`.
   This build must never be published to the custom domain.
 - `custom_domain_name` (dispatch input, default `satoshicore.org`) is written
-  to `out/CNAME`, so a root deploy never silently ships the
-  `wallet.satoshicore.org` value that `CNAME.reference` holds.
+  to `out/CNAME` on every production deploy — `main` pushes included — so a
+  root deploy never silently ships the `wallet.satoshicore.org` value that
+  `CNAME.reference` holds.
+- A production deploy also asserts the artifact is root-relative
+  (`src="/_next/...` and no `/satoshicore/_next/`), so a preview build cannot
+  be published to the custom domain by accident.
 
 > Note: pushes to `feature/**` build with an empty base path so the artifact
 > can be inspected locally; they are never deployed.
@@ -155,10 +159,10 @@ here is automated.**
    - Apex `A` records → GitHub Pages IPs:
      `185.199.108.153`, `185.199.109.153`, `185.199.110.153`, `185.199.111.153`
    - `www` `CNAME` → `SatoshiConnect.github.io`.
-2. After the first custom-domain build/deploy, verify the domain in
-   Repository → Settings → Pages → Custom domain: `satoshicore.org`,
-   and enable **Enforce HTTPS** once the certificate is issued.
-3. The deployed artifact contains the `CNAME` file (`satoshicore.org`).
+2. Verify the domain in Repository → Settings → Pages → Custom domain:
+   `wallet.satoshicore.org`; enable **Enforce HTTPS** only after GitHub issues
+   a certificate and a normal TLS client validates it.
+3. The deployed artifact contains the `CNAME` file (`wallet.satoshicore.org`).
 
 ## Offline / experimental state
 
@@ -191,7 +195,6 @@ Open `http://localhost:8080` and verify `/`, `/wallet/`, `/docs/`,
 ## What is intentionally NOT in scope here
 
 - No DNS changes (owner).
-- No activation of the Pages deploy job (owner).
-- No publication of a production Web Wallet (owner).
+- No production DNS or firewall changes.
 - No admin API exposure — administrative endpoints live only inside the
   backend services' private networks; the static site never references them.

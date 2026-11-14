@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "test": "node tests/static-export.test.mjs && node --test tests/service-worker.test.mjs && node --test tests/wallet-engine.test.mjs && node --test tests/firebase-auth.test.mjs && node --test tests/theme-sync.test.mjs && node --test tests/theme-contrast.test.mjs && node scripts/check-css-hex.mjs",
+    "test": "node --test tests/balance-refresh.test.mjs && node tests/static-export.test.mjs && node --test tests/service-worker.test.mjs && node --test tests/wallet-engine.test.mjs && node --test tests/firebase-auth.test.mjs && node --test tests/theme-sync.test.mjs && node --test tests/theme-contrast.test.mjs && node scripts/check-css-hex.mjs",
     "test:auth": "node --test tests/firebase-auth.test.mjs",
     "test:theme-sync": "node --test tests/theme-sync.test.mjs",
     "test:theme": "node --test tests/theme-contrast.test.mjs",

@@ -16,6 +16,7 @@ import { decodeSeed } from '../lib/nsatCodec';
 // Shared send gate (mirror of the desktop/prototype reason contract — one
 // source of truth for WHY a send is blocked; see NSAT-WALLET-BUTTON-STATES).
 import { sendPreflight, maxSendable, fmtGroup } from '../lib/nsatSendPreflight';
+import { startBalanceRefresh } from '../lib/walletBalanceRefresh.mjs';
 import GoogleAccount from './GoogleAccount';
 
 // Full transactional Web Wallet rendered in the ORIGINAL DESKTOP WALLET
@@ -264,24 +265,25 @@ export default function WalletPanel() {
   //
   // The index emits an event for every row it COMMITS (after the ledger result
   // is link-confirmed), so a balance refresh is triggered by verified ledger
-  // application instead of a fixed 10-second timer. If the stream is
-  // unavailable — no indexer configured, proxy buffering, EventSource missing —
-  // this falls back to bounded polling and keeps the wallet usable. EventSource
-  // reconnects on its own and replays from `Last-Event-ID`, so a dropped
-  // connection does not lose the transfer that caused the refresh.
+  // application instead of a fixed timer. If the stream is unavailable — no
+  // indexer configured, proxy buffering, EventSource missing — the shared
+  // startBalanceRefresh() poller keeps the wallet usable (its contract lives in
+  // lib/walletBalanceRefresh.mjs and tests/balance-refresh.test.mjs).
+  // EventSource reconnects on its own and replays from `Last-Event-ID`, so a
+  // dropped connection does not lose the transfer that caused the refresh.
   useEffect(() => {
     const pubkey = active?.pubkey;
     if (!pubkey) return undefined;
     let closed = false;
     let stream = null;
-    let poll = null;
+    let stopPolling = null;
     const startPolling = () => {
-      if (poll || closed) return;
-      poll = window.setInterval(() => { void refreshBalance(pubkey); }, 10_000);
+      if (stopPolling || closed) return;
+      stopPolling = startBalanceRefresh(pubkey, refreshBalance, window);
     };
     if (!isIndexerConfigured() || typeof window === 'undefined' || !window.EventSource) {
       startPolling();
-      return () => { closed = true; if (poll) window.clearInterval(poll); };
+      return () => { closed = true; stopPolling?.(); };
     }
     try {
       stream = new window.EventSource(accountEventsUrl(pubkey, 0));
@@ -297,7 +299,7 @@ export default function WalletPanel() {
     return () => {
       closed = true;
       if (stream) stream.close();
-      if (poll) window.clearInterval(poll);
+      stopPolling?.();
     };
   }, [active?.pubkey, refreshBalance]);
 

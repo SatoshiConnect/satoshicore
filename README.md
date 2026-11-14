@@ -27,7 +27,9 @@ node --test tests/keystore.test.mjs       # key-custody regression suite
 
 - `main` — production source.
 - `feature/web-platform-v1` — current wallet/platform workstream (merged into
-  main periodically; deployment to GitHub Pages stays behind owner approval).
+  main periodically; Pages publishes `main` using the custom-domain root path.
+  Manual deployments from other refs require `workflow_dispatch` with
+  `custom_domain=true`.
 
 ## Backend services (separate, not in this repo)
 
