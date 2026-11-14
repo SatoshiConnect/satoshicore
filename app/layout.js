@@ -1,12 +1,27 @@
 import './globals.css';
 import Header from '../components/Header';
 import Footer from '../components/Footer';
+import SwRegister from '../components/SwRegister';
 
 export const metadata = {
-  title: 'SatoshiCore — Web Platform',
+  title: 'SatoshiCore — NSAT wallet & explorer',
   description:
-    'SatoshiCore Web Platform v24.0. Static web platform for the SatoshiCore ecosystem.'
+    'NSAT, the coin of the SatoshiCore chain — a working, non-commercial study '
+    + 'project with 0 decimals and 10 NSAT per operation. Web wallet, block '
+    + 'explorer and live network status.'
 };
+
+// One dark surface (#0a0c11) on every route, so the browser chrome matches
+// the page instead of tinting a light bar above a dark wallet.
+export const viewport = {
+  themeColor: '#0a0c11',
+  // An installed PWA should fill the screen like the native apps do.
+  viewportFit: 'cover'
+};
+
+// The manifest and icons are static files in public/, so their URLs follow the
+// base path of the deployment (domain root or a GitHub Pages project subpath).
+const BASE = process.env.NEXT_PUBLIC_BASE_PATH || '';
 
 // Site-wide Content-Security-Policy (<meta http-equiv> is honored only when
 // it is a DIRECT child of <head>; GitHub Pages cannot add response headers,
@@ -17,13 +32,40 @@ export const metadata = {
 //  - frame-ancestors is header-only (ignored in meta delivery) and belongs
 //    to the gateway's HTTP responses, not here.
 const DEV_EVAL = process.env.NODE_ENV === 'development' ? "'unsafe-eval'" : '';
+const FIREBASE_AUTH_DOMAIN = process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || '';
+const FIREBASE_AUTH_FRAME = FIREBASE_AUTH_DOMAIN
+  ? `https://${FIREBASE_AUTH_DOMAIN}`
+  : '';
+
+// https: covers any TLS origin (the production gateway included). Plain-HTTP
+// endpoints are listed explicitly, so a LAN or loopback gateway works in dev
+// without widening the policy to every http origin.
+function originOf(value) {
+  try {
+    return new URL(value || '').origin;
+  } catch {
+    return null;
+  }
+}
+const PLAIN_HTTP_ORIGINS = [
+  originOf(process.env.NEXT_PUBLIC_API_GATEWAY_URL),
+  originOf(process.env.NEXT_PUBLIC_INDEXER_URL),
+  'http://127.0.0.1:8787',
+  'http://127.0.0.1:8789',
+  'http://localhost:8787',
+  'http://localhost:8789'
+]
+  .filter((origin) => origin && origin.startsWith('http://'))
+  .join(' ');
+
 const SITE_CSP = [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline' ${DEV_EVAL}`,
+  `script-src 'self' 'unsafe-inline' https://apis.google.com ${DEV_EVAL}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data:",
   "font-src 'self'",
-  "connect-src 'self' https: http://127.0.0.1:8790 http://localhost:8790 http://127.0.0.1:8787",
+  `connect-src 'self' https: ${PLAIN_HTTP_ORIGINS}`.trim(),
+  `frame-src 'self' https://accounts.google.com ${FIREBASE_AUTH_FRAME} https://*.firebaseapp.com`.trim(),
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'none'",
@@ -34,11 +76,36 @@ export default function RootLayout({ children }) {
     <html lang="en">
       <head>
         <meta httpEquiv="Content-Security-Policy" content={SITE_CSP} />
+        {/* Theme before first paint. Without this, a visitor whose saved choice
+            is light would see the dark page until the toggle hydrated. Static
+            string only — CSP allows it because script-src includes inline. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: "(function(){try{var s=localStorage.getItem('nsat-theme');var m=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches;document.documentElement.dataset.theme=(s==='light'||s==='dark')?s:(m?'light':'dark');}catch(e){}})();"
+          }}
+        />
+        {/* PWA: installable, standalone, offline shell (public/sw.js). */}
+        {/* .json, not .webmanifest: the static host has no manifest+json MIME
+            mapping, so a .webmanifest file was served as text/plain. */}
+        <link rel="manifest" href={`${BASE}/manifest.json`} />
+        <link rel="apple-touch-icon" href={`${BASE}/icons/apple-touch-icon.png`} />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-title" content="NSAT Wallet" />
+        <meta name="mobile-web-app-capable" content="yes" />
+        {/* Chrome/Edge/Brave fire `beforeinstallprompt` once, usually before
+            React has hydrated. Capture it here (static string, no data) so the
+            wallet's Install button can replay it on a real user gesture. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: "window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();window.__nsatInstallPrompt=e;window.dispatchEvent(new Event('nsat:installable'));});"
+          }}
+        />
       </head>
       <body>
         <Header />
         <main className="container site-main">{children}</main>
         <Footer />
+        <SwRegister />
       </body>
     </html>
   );

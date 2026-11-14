@@ -17,9 +17,13 @@ on:
   workflow_dispatch:
     inputs:
       custom_domain:
-        description: "Publish for wallet.satoshicore.org with root asset paths."
+        description: "Build for the custom domain root (satoshicore.org). Set false only for a github.io subpath preview build."
         type: boolean
-        default: false
+        default: true
+      custom_domain_name:
+        description: "Hostname written to out/CNAME when custom_domain=true. Must match the custom domain configured in Settings → Pages."
+        type: string
+        default: satoshicore.org
 
 permissions:
   contents: read
@@ -70,21 +74,39 @@ jobs:
 
       - name: Build static export
         env:
-          # The Pages site is published on the configured custom domain, whose
-          # document root is /. An empty basePath is required for every build.
-          NEXT_PUBLIC_BASE_PATH: ''
+          # The production origin satoshicore.org serves the site at its root,
+          # and the live HTML proves the base path must be empty — its script
+          # tags are /_next/... . Main-branch deploys and custom_domain=true
+          # dispatch builds are therefore root-relative; only an explicit
+          # github.io preview (dispatch with custom_domain=false) uses the
+          # /satoshicore project subpath, and that build must not be published
+          # to the custom domain.
+          NEXT_PUBLIC_BASE_PATH: ${{ github.event_name == 'workflow_dispatch' && inputs.custom_domain == false && '/satoshicore' || '' }}
           # Production gateway: the owner-operated HTTPS gateway in front of
           # the Mainnet node. The exact browser origin is allowlisted there.
           # The gateway allowlists exact browser origins — add this origin to
           # its ALLOWED_ORIGINS when changing the deploy domain.
           NEXT_PUBLIC_API_GATEWAY_URL: https://gateway.satoshicore.org
+          # The explorer reads transaction history from the indexer, which sits
+          # behind the same gateway origin (routes /v1/* there).
+          NEXT_PUBLIC_INDEXER_URL: https://gateway.satoshicore.org
           # Byte-exact Mainnet identity required before any signing UI unlocks.
           NEXT_PUBLIC_NSAT_NETWORK_ID: NSAT Mainnet ; October 2026 ; bc3098829fffc717
         run: npm run build
 
       - name: Apply custom-domain configuration
         if: github.ref_name == 'main' || (github.event_name == 'workflow_dispatch' && inputs.custom_domain == true)
-        run: cp CNAME.reference out/CNAME
+        env:
+          # Explicit hostname, so a deploy to satoshicore.org never silently
+          # ships the wallet.satoshicore.org value that CNAME.reference holds.
+          # A push to main has no dispatch inputs, so the input falls back to
+          # the production hostname instead of writing an empty CNAME.
+          CUSTOM_DOMAIN: ${{ inputs.custom_domain_name || 'satoshicore.org' }}
+        run: |
+          set -e
+          test -n "$CUSTOM_DOMAIN"
+          printf '%s\n' "$CUSTOM_DOMAIN" > out/CNAME
+          echo "out/CNAME -> $CUSTOM_DOMAIN"
 
       - name: Verify root asset paths for the production domain
         if: github.ref_name == 'main' || (github.event_name == 'workflow_dispatch' && inputs.custom_domain == true)
@@ -94,6 +116,16 @@ jobs:
 
       - name: Run static-export verification tests
         run: npm test
+
+      # Theme contract, named explicitly so a failure is readable in the UI.
+      # Pure Node (no browser): the palette must stay AA in both themes, the
+      # wallet copy of the palette may not drift, and no new colour literal may
+      # appear outside a token block. The browser-deep audit stays manual:
+      #   node scripts/theme-audit.mjs --base <origin>
+      - name: Theme contract (contrast tokens + CSS hex ratchet)
+        run: |
+          node --test tests/theme-contrast.test.mjs
+          node scripts/check-css-hex.mjs
 
       # Mainnet identity regression: the built artifact must carry the EXACT
       # full passphrase. A missing string means the strict-identity client
@@ -128,6 +160,8 @@ jobs:
   deploy:
     name: Deploy to GitHub Pages (owner-gated)
     runs-on: ubuntu-latest
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
     # Owner-approved gate (2026-10-31): automatic on main; feature branches
     # deploy ONLY via explicit workflow_dispatch. Enable Enforce HTTPS when
     # the domain certificate is issued (see docs/DEPLOYMENT.md).
@@ -140,3 +174,36 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+  verify:
+    name: Verify the deployed site
+    runs-on: ubuntu-latest
+    needs: [build, deploy]
+    if: github.ref_name == 'main' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # Evidence, not optimism: fetch the URLs GitHub Pages actually serves and
+      # fail the run when the live artifact is not the build we just produced
+      # (missing web app manifest, old landing page, wrong content type).
+      # Advisory lines cover the gateway origin allowlist, which the owner
+      # manages separately and which must never fail a site deploy.
+      - name: Verify deployed URLs
+        run: node scripts/verify-deployed-site.mjs "${{ needs.deploy.outputs.page_url }}"
+
+      - name: Write verification summary
+        if: always()
+        run: |
+          {
+            echo "### Deployed site verification"
+            echo ""
+            echo "- URL: ${{ needs.deploy.outputs.page_url }}"
+            echo "- Commit: ${{ github.sha }}"
+            echo "- Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } >> "$GITHUB_STEP_SUMMARY"

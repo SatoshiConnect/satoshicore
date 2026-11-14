@@ -1,0 +1,50 @@
+name: Verify deployed site (read-only, no deploy)
+
+# Evidence for what satoshicore.org is actually serving right now.
+# This workflow never builds, never deploys and never touches DNS: it fetches
+# the live URLs and fails when the deployed artifact is not the wallet build
+# (missing web app manifest, old landing page, wrong content type, 404 icons).
+# Run it before announcing a release, and after any deploy.
+
+on:
+  workflow_dispatch:
+    inputs:
+      site_url:
+        description: 'Site URL to verify (root or subpath, no trailing slash needed)'
+        type: string
+        default: 'https://satoshicore.org'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify deployed URLs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # No npm ci: the verifier uses global fetch only, so it runs even when the
+      # dependency tree is the thing under suspicion.
+      - name: Verify deployed URLs
+        env:
+          SITE_URL: ${{ inputs.site_url }}
+        run: node scripts/verify-deployed-site.mjs "$SITE_URL"
+
+      - name: Write verification summary
+        if: always()
+        run: |
+          {
+            echo "### Deployed site verification"
+            echo ""
+            echo "- URL: ${{ inputs.site_url }}"
+            echo "- Checked at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "- Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } >> "$GITHUB_STEP_SUMMARY"

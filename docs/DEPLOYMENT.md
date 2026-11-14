@@ -52,25 +52,95 @@ the nsat-core node (see `SatoshiConnect/nsat-core`, branch
 - Website integration: set `NEXT_PUBLIC_API_GATEWAY_URL` at build time. When
   unset or unreachable, the site renders its offline/experimental state.
 
-## GitHub Pages hosting
+## Where the site actually runs (read first)
+
+`satoshicore.org` is served by **Caddy on the owner's host** (apex A record
+`87.124.102.86`, `server: Caddy`, Let's Encrypt, HTTP/3). It is *not* served by
+GitHub Pages. The Pages workflow below is a prepared, owner-gated alternative,
+not the current live path. For the verified DNS state, the copy-to-host
+procedure, rollback and the DNS work a Pages migration needs, see
+[`DOMAINS.md`](./DOMAINS.md).
+
+The artifact path that matches the live host is
+`.github/workflows/publish-static.yml`: it builds, tests, packages a
+checksummed `tar.gz`, and only uploads into `releases/<sha>/` when the owner
+sets the `DEPLOY_*` secrets and asks for it. Activating a release stays manual.
+
+## GitHub Pages hosting (prepared alternative)
 
 1. **Build pipeline** (`.github/workflows/deploy-pages.yml`):
    - Installs dependencies, runs `next build` with `output: 'export'`.
    - Runs verification tests (`tests/static-export.test.mjs`) and a security
      scan (`tests/security-scan.mjs`) against `out/`.
    - Uploads `out/` as the Pages artifact.
-2. **Deploy job**: deploys `main` pushes and explicit
-   `workflow_dispatch` runs with `custom_domain=true`. Feature/preview builds
-   do not deploy. The Pages environment must remain restricted to `main`.
+2. **Deploy job**: owner-gated. Automatic on `main`, or manual through
+   `workflow_dispatch` (see below). Requires Repository → Settings → Pages →
+   Source: **GitHub Actions**.
+3. **Verify job**: runs after `deploy` against the URL Pages reports and fails
+   the run when the live artifact is not the build just produced. See
+   *Post-deploy verification*.
 
 ### Preview vs custom-domain builds
 
-- **Production custom domain**: `wallet.satoshicore.org` is served from `/`;
-  every build therefore uses an empty `NEXT_PUBLIC_BASE_PATH`. Main deploys
-  and approved custom-domain dispatches include `CNAME.reference`.
+- **Production/custom domain** (`satoshicore.org`, the default for both
+  `main` pushes and `workflow_dispatch`): built with an **empty** base path.
+  The live site proves this — its script tags are `/_next/...`. A non-empty
+  base path on the custom domain publishes an artifact whose assets 404.
+- **github.io subpath preview** (only `workflow_dispatch` with
+  `custom_domain=false`): built with `NEXT_PUBLIC_BASE_PATH=/satoshicore`.
+  This build must never be published to the custom domain.
+- `custom_domain_name` (dispatch input, default `satoshicore.org`) is written
+  to `out/CNAME` on every production deploy — `main` pushes included — so a
+  root deploy never silently ships the `wallet.satoshicore.org` value that
+  `CNAME.reference` holds.
+- A production deploy also asserts the artifact is root-relative
+  (`src="/_next/...` and no `/satoshicore/_next/`), so a preview build cannot
+  be published to the custom domain by accident.
 
 > Note: pushes to `feature/**` build with an empty base path so the artifact
 > can be inspected locally; they are never deployed.
+
+## Deploying to satoshicore.org
+
+1. Actions → **Build, test and deploy static site to GitHub Pages** →
+   *Run workflow* on `main` with `custom_domain=true` (default) and
+   `custom_domain_name=satoshicore.org`.
+2. The build job runs `npm ci`, `next build`, the static-export tests, the
+   Mainnet-identity regression check and the output security scan. Any failure
+   stops the deploy.
+3. `deploy` publishes the artifact; `verify` then fetches the live URLs and
+   prints the evidence. A stale deploy fails here, not in a release note.
+
+Nothing in this repository changes DNS. The apex `A` records and the `www`
+CNAME remain an owner action (see the section below).
+
+## Post-deploy verification
+
+```bash
+node scripts/verify-deployed-site.mjs https://satoshicore.org
+# or: npm run verify:deployed -- https://satoshicore.org
+```
+
+Read-only, dependency-free, exit code 1 on failure. It asserts that the live
+origin serves:
+
+- a wallet-first homepage (`Open NSAT Wallet`, `Install Browser Extension`,
+  link to `/wallet/`) — an old landing page fails;
+- `/wallet/`, `/docs/` and `/download/` as HTML (the download page must carry
+  the sha256 and say the artifact is unpublished);
+- `/manifest.json` (JSON MIME, `display: standalone`, **relative** `start_url`,
+  192/512 icons that actually resolve as images) — the file is `.json` because
+  the static host serves unknown extensions as `text/plain`;
+- `/sw.js` as JavaScript that ignores cross-origin requests, ignores non-GET
+  requests and names no money endpoint;
+- `/offline.html`.
+
+Two advisory lines (`WARN`, never gate the run) report the gateway `/health`
+and the CORS preflight for the deployed origin. The gateway allowlist is
+owner-managed, so a stale entry is reported rather than failing a site deploy.
+
+The same check can be run without deploying: Actions → **Verify deployed site
+(read-only, no deploy)** with a `site_url` input.
 
 ## Custom domain — `wallet.satoshicore.org` (production decision 2026-10-31)
 
@@ -116,6 +186,7 @@ npm run build          # static export into ./out
 npm test               # static-export checks (pages, asset paths, artifacts)
 node tests/security-scan.mjs out
 npx serve out          # or: npx http-server out -p 8080
+node scripts/verify-deployed-site.mjs http://127.0.0.1:8080   # same checks as CI
 ```
 
 Open `http://localhost:8080` and verify `/`, `/wallet/`, `/docs/`,

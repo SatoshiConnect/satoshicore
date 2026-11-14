@@ -13,7 +13,9 @@ const RULES = [
   { name: 'GitHub token', re: /ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}/ },
   { name: 'AWS access key', re: /AKIA[0-9A-Z]{16}/ },
   { name: 'Private key block', re: /-----BEGIN (RSA |EC |OPENSSH |PGP )?PRIVATE KEY-----/ },
-  { name: 'Generic API key assignment', re: /\b(API_KEY|SECRET|PRIVATE_KEY|MNEMONIC|SEED|PASSWORD)\s*[:=]\s*['"][^'"]{8,}['"]/ },
+  // Firebase Auth's bundled provider enum contains PASSWORD:"password";
+  // exclude only that exact SDK literal, not arbitrary password assignments.
+  { name: 'Generic API key assignment', re: /\b(API_KEY|SECRET|PRIVATE_KEY|MNEMONIC|SEED|PASSWORD)\s*[:=]\s*(['"])(?!password\2)[^'"]{8,}\2/ },
   { name: 'Admin API route reference', re: /\/admin\/(api|v\d)/i },
   { name: 'Internal service URL', re: /https?:\/\/[a-z0-9.-]*(internal|admin|staging)\.[a-z]{2,}/i },
   { name: 'Connection string', re: /(mongodb(\+srv)?|postgres(ql)?|redis|amqp):\/\/[^\s'"]+:[^\s'"]+@/ }
