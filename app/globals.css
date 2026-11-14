@@ -37,10 +37,21 @@
   --border-strong: rgba(255, 255, 255, 0.16);
   --fill: rgba(255, 255, 255, 0.06);
 
-  --accent: #4c6fff;
-  --accent-pressed: #6b87ff;
-  --accent-tint: rgba(76, 111, 255, 0.14);
+  /* White labels on the accent fill need 4.5:1, which caps how light this can
+   * be: #4c6fff measured 4.18:1 and failed. Pressed goes deeper, as it does in
+   * the light theme, instead of lighter (white on #6b87ff was 3.21:1). */
+  --accent: #4464f2;
+  --accent-pressed: #3a56db;
+  --accent-tint: rgba(68, 100, 242, 0.14);
   --on-accent: #ffffff;
+  /* Accent as TEXT needs its own step: #4c6fff on a card is 4.29:1, under AA.
+   * --accent stays the fill/focus colour (white on it is 4.68:1). */
+  --link: #8fa2ff;
+
+  /* Filled brand mark: indigo tile with a white glyph, identical in both
+   * themes, so it lives here instead of inline in the rule. */
+  --brand-grad: linear-gradient(180deg, #5b7bff, #3f5ce0);
+  --brand-ink: #ffffff;
 
   --ok: #2ed3a0;
   --ok-tint: rgba(46, 211, 160, 0.12);
@@ -93,6 +104,7 @@
   --accent-pressed: #2c46b8;
   --accent-tint: rgba(59, 91, 219, 0.1);
   --on-accent: #ffffff;
+  --link: #3b5bdb;
 
   --ok: #0a7f60;
   --ok-tint: rgba(10, 127, 96, 0.1);
@@ -175,7 +187,7 @@ p {
 }
 
 a {
-  color: var(--accent);
+  color: var(--link);
   text-decoration: none;
 }
 
@@ -258,10 +270,10 @@ hr {
   width: 28px;
   height: 28px;
   border-radius: 9px;
-  background: linear-gradient(180deg, #5b7bff, #3f5ce0);
+  background: var(--brand-grad);
   border: 1px solid rgba(255, 255, 255, 0.18);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.25);
-  color: #ffffff;
+  color: var(--brand-ink);
   display: grid;
   place-items: center;
   flex-shrink: 0;
@@ -439,7 +451,7 @@ hr {
   font-weight: 600;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: var(--accent);
+  color: var(--link);
 }
 
 .page-eyebrow::before {
@@ -737,7 +749,7 @@ hr {
   position: absolute;
   left: 0;
   top: 0;
-  color: var(--accent);
+  color: var(--link);
 }
 
 .status-list strong {
@@ -823,7 +835,7 @@ code {
 }
 
 .tx-table th {
-  color: var(--accent);
+  color: var(--link);
   font-family: var(--mono);
   font-size: 0.6875rem;
   font-weight: 600;
@@ -942,7 +954,7 @@ code {
 .exact-line {
   margin: 0 0 8px;
   font-size: 0.8125rem;
-  color: var(--accent);
+  color: var(--link);
   overflow-wrap: anywhere;
 }
 

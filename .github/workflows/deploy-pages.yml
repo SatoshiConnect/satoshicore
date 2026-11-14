@@ -111,6 +111,16 @@ jobs:
       - name: Run static-export verification tests
         run: npm test
 
+      # Theme contract, named explicitly so a failure is readable in the UI.
+      # Pure Node (no browser): the palette must stay AA in both themes, the
+      # wallet copy of the palette may not drift, and no new colour literal may
+      # appear outside a token block. The browser-deep audit stays manual:
+      #   node scripts/theme-audit.mjs --base <origin>
+      - name: Theme contract (contrast tokens + CSS hex ratchet)
+        run: |
+          node --test tests/theme-contrast.test.mjs
+          node scripts/check-css-hex.mjs
+
       # Mainnet identity regression: the built artifact must carry the EXACT
       # full passphrase. A missing string means the strict-identity client
       # was not included in the build. If the Mainnet identity ever changes

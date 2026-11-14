@@ -82,10 +82,13 @@ body:has(.nw-root) .site-main.container {
   --card: #14171f;
   --text: #edf1f7;
   --text-dim: #8b94a7;
-  --accent: #4c6fff;
-  --accent-pressed: #6b87ff;
-  --accent-tint: rgba(76, 111, 255, 0.14);
+  --accent: #4464f2;
+  --accent-pressed: #3a56db;
+  --accent-tint: rgba(68, 100, 242, 0.14);
   --on-accent: #ffffff;
+  /* Text step of the accent — see globals.css: the fill colour is 4.29:1 as
+   * text on this card and fails AA. */
+  --link: #8fa2ff;
   --ok: #2ed3a0;
   --ok-tint: rgba(46, 211, 160, 0.12);
   --warn: #f5a524;
@@ -297,7 +300,7 @@ body:has(.nw-root) .site-main.container {
   font-size: 12px; color: var(--text-dim);
 }
 .nw-chip-btn {
-  background: var(--accent-tint); color: var(--accent);
+  background: var(--accent-tint); color: var(--link);
   padding: 4px 10px; font-size: 12px; border-radius: 999px;
 }
 
@@ -320,7 +323,7 @@ body:has(.nw-root) .site-main.container {
   width: 40px; height: 40px; border-radius: 12px;
   display: grid; place-items: center; font-size: 17px; font-weight: 600;
   flex-shrink: 0;
-  background: var(--accent-tint); color: var(--accent);
+  background: var(--accent-tint); color: var(--link);
 }
 
 .nw-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -337,7 +340,7 @@ body:has(.nw-root) .site-main.container {
 .nw-badge.ok   { color: var(--ok);     background: var(--ok-tint);     border-color: rgba(46, 211, 160, 0.24); }
 .nw-badge.warn { color: var(--warn);   background: var(--warn-tint);   border-color: rgba(245, 165, 36, 0.24); }
 .nw-badge.err  { color: var(--danger); background: var(--danger-tint); border-color: rgba(240, 97, 109, 0.24); }
-.nw-badge.info { color: var(--accent); background: var(--accent-tint); border-color: rgba(76, 111, 255, 0.28); }
+.nw-badge.info { color: var(--link); background: var(--accent-tint); border-color: rgba(76, 111, 255, 0.28); }
 
 .nw-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .nw-dim  { color: var(--text-dim); }
@@ -371,7 +374,7 @@ body:has(.nw-root) .site-main.container {
 .nw-ghost-btn {
   background: transparent; border: 1px solid var(--border-input); color: var(--text);
 }
-.nw-danger-btn { background: var(--danger); color: #ffffff; font-weight: 600; }
+.nw-danger-btn { background: var(--danger); color: var(--on-accent); font-weight: 600; }
 .nw-danger-btn:hover { background: var(--danger); filter: brightness(0.94); }
 
 .nw-btn-row { display: flex; gap: 10px; margin-top: 22px; flex-wrap: wrap; align-items: center; }
@@ -476,6 +479,7 @@ label.nw-chip-btn:focus-within { outline: 2px solid var(--accent); outline-offse
   --accent-pressed: #2c46b8;
   --accent-tint: rgba(59, 91, 219, 0.1);
   --on-accent: #ffffff;
+  --link: #3b5bdb;
   --ok: #0a7f60;
   --ok-tint: rgba(10, 127, 96, 0.1);
   --warn: #a45b06;

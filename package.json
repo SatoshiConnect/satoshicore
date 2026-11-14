@@ -5,7 +5,10 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "test": "node tests/static-export.test.mjs && node --test tests/service-worker.test.mjs && node --test tests/wallet-engine.test.mjs",
+    "test": "node tests/static-export.test.mjs && node --test tests/service-worker.test.mjs && node --test tests/wallet-engine.test.mjs && node --test tests/theme-contrast.test.mjs && node scripts/check-css-hex.mjs",
+    "test:theme": "node --test tests/theme-contrast.test.mjs",
+    "check:css": "node scripts/check-css-hex.mjs",
+    "audit:theme": "node scripts/theme-audit.mjs",
     "test:sw": "node --test tests/service-worker.test.mjs",
     "test:wallet": "node --test tests/wallet-engine.test.mjs",
     "verify:deployed": "node scripts/verify-deployed-site.mjs",

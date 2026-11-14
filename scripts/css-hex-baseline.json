@@ -1,0 +1,8 @@
+{
+  "note": "Frozen count of colour literals outside token blocks. Lower as files migrate to tokens.",
+  "files": {
+    "app/dashboard/dashboard.css": 55,
+    "app/home.css": 36,
+    "app/wallet/wallet.css": 1
+  }
+}

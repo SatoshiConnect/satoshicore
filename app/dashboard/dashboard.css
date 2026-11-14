@@ -47,10 +47,11 @@ body:has(.nsx) .site-footer {
   --border: rgba(255, 255, 255, 0.08);
   --border-strong: rgba(255, 255, 255, 0.16);
   --fill: rgba(255, 255, 255, 0.06);
-  --accent: #4c6fff;
-  --accent-pressed: #6b87ff;
-  --accent-tint: rgba(76, 111, 255, 0.16);
+  --accent: #4464f2;
+  --accent-pressed: #3a56db;
+  --accent-tint: rgba(68, 100, 242, 0.16);
   --on-accent: #ffffff;
+  --link: #8fa2ff;
   --ok: #2ed3a0;
   --ok-tint: rgba(46, 211, 160, 0.12);
   --warn: #f5a524;
@@ -136,7 +137,7 @@ body:has(.nsx) .site-footer {
   display: grid;
   place-items: center;
   border-radius: 9px;
-  color: var(--accent);
+  color: var(--link);
   background: var(--accent-tint);
   border: 1px solid rgba(103, 232, 249, 0.6);
   box-shadow: 0 0 16px rgba(56, 189, 248, 0.45), inset 0 0 10px rgba(56, 189, 248, 0.3);
@@ -162,7 +163,7 @@ body:has(.nsx) .site-footer {
   font-weight: 500;
   letter-spacing: 0.3em;
   text-transform: uppercase;
-  color: var(--accent);
+  color: var(--link);
   margin-top: 0.18rem;
 }
 
@@ -312,7 +313,7 @@ body:has(.nsx) .site-footer {
 }
 
 .nsx-pill.is-link {
-  color: var(--accent);
+  color: var(--link);
   text-decoration: none;
 }
 
@@ -503,7 +504,7 @@ body:has(.nsx) .site-footer {
   font-size: 0.5625rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--accent);
+  color: var(--link);
   text-shadow: 0 0 10px rgba(56, 189, 248, 0.6);
 }
 
@@ -1124,7 +1125,7 @@ i.is-dim { background: #64748b; }
 }
 
 .nsx-foot-brand {
-  color: var(--accent);
+  color: var(--link);
   text-shadow: 0 0 10px rgba(56, 189, 248, 0.4);
 }
 
