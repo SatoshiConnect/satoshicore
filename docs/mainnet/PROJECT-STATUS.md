@@ -28,7 +28,7 @@ Commit ล่าสุดของรอบนี้: `e013e06` (ก่อน tr
 | 2 | Shared wallet logic | **VERIFIED** | `lib/nsatClient.js`, `lib/nsatWallet.js`, `lib/nsatCodec.js`, `lib/nsatSendPreflight.js` ถูกใช้ร่วมกันทั้งเว็บและ extension (ไฟล์เดียวกัน ไม่ได้ fork) |
 | 3 | Extension (Chromium MV3) | **BUILD_PRODUCED** | `extension/dist` + zip; artifact suite 10/10; ยังไม่มีคนโหลดเข้า Chrome จริง |
 | 4 | Extension (Firefox) | **BUILD_PRODUCED** | `extension/dist-firefox` + zip; manifest มี `browser_specific_settings.gecko.id = wallet@satoshicore.org`; ยังไม่ทดสอบใน Firefox |
-| 5 | PWA (manifest + SW + offline) | **VERIFIED (live; ยังไม่ทดสอบติดตั้งจริง)** | `public/manifest.json` (`.json` เพราะ host ไม่มี MIME ของ `.webmanifest`), `public/sw.js` v4, `public/offline.html`, ไอคอน 192/512/180; `start_url`/`scope`/`id` = `./` (เปิดกระเป๋าที่ homepage); static-export 12/12 + SW behavioural 3/3; ตรวจบน `https://satoshicore.org` จริง: manifest `application/json`, start_url `./`, SW `nsat-pwa-v4`; **ยังไม่มีหลักฐานติดตั้ง/ใช้งาน offline บนเบราว์เซอร์จริง** (ดูข้อจำกัดท้ายเอกสาร) |
+| 5 | PWA (manifest + SW + offline) | **VERIFIED (live + Chrome จริง; ยังไม่กดติดตั้ง/iOS)** | `public/manifest.json` (`.json` เพราะ host ไม่มี MIME ของ `.webmanifest`), `public/sw.js` v4, `public/offline.html`, ไอคอน 192/512/180; `start_url`/`scope`/`id` = `./` (เปิดกระเป๋าที่ homepage); static-export 12/12 + SW behavioural 3/3; ตรวจบน `https://satoshicore.org` จริง: manifest `application/json`, start_url `./`, SW `nsat-pwa-v4`; **ยังไม่มีหลักฐานติดตั้ง/ใช้งาน offline บนเบราว์เซอร์จริง** (ดูข้อจำกัดท้ายเอกสาร) |
 | 6 | Homepage = ตัว wallet | **DEPLOYED + VERIFIED (live)** | `/` render `WalletPanel` เอง (ไม่มี landing page คั่น) + `/wallet/` เป็น alias; first-time เห็น Create/Import/network status + Install app/extension; returning user เห็น unlock form; unlocked เห็น dashboard เดิม |
 | 7 | `/download` | **IMPLEMENTED** | แสดงขนาด/sha256/permissions/endpoints จริง และสถานะต่อเบราว์เซอร์ (ยังไม่ขึ้น store ใด ๆ) |
 | 8 | Gateway production | **VERIFIED** | `https://gateway.satoshicore.org/health` 200, `/api/v1/chain/info` 200 (ledger สด) |
@@ -178,11 +178,23 @@ browser (live /)                                 nw-root present, Create/Import,
 
 ข้อจำกัดที่ยังค้าง: ยังไม่มีใครโหลด zip เข้า Chrome/Firefox จริง; account switching ยังไม่ได้ทดสอบด้วยกระเป๋าจริงสองใบ; Chrome ไม่ยิง `beforeinstallprompt` ในโปรไฟล์ที่ยังไม่มี engagement จึงเห็นเป็นขั้นตอนเมนูแทน (ไม่ใช่ปุ่มปลอม)
 
+### หลักฐาน PWA จากเบราว์เซอร์จริง (2026-11-14)
+
+รันกับ Chrome จริงผ่าน CDP บน `https://satoshicore.org` (14 checks, **14 passed / 0 failed**) — ตัวขับไม่ได้ commit ไว้ใน repo:
+
+- manifest ถูก parse โดยเบราว์เซอร์เอง: `0 manifest error(s)`, `start_url` = `./`
+- `Page.getInstallabilityErrors` = `[]` → **เบราว์เซอร์ไม่พบเหตุที่ทำให้ติดตั้งไม่ได้**
+- service worker `activated` + หน้าถูก `controller` ควบคุม
+- cache `nsat-pwa-v4` มี 30 entries รวม `wallet/`, `offline.html`, `manifest.json`; **0 path ของ API/chain**
+- ตัดเน็ตเวิร์กจริง (emulate offline + block ทุก URL ที่ **ทั้ง page และ service-worker target** — จำเป็น เพราะ CDP แยก target ต่อ worker): `navigator.onLine === false`, reload แล้วได้ shell จาก cache, `/api/v1/chain/info` ตอบ `network-error` (ไม่เสิร์ฟจาก cache), route ที่ไม่เคยแคชตกไปที่ shell ของกระเป๋า, กลับมา online แล้วใช้งานได้
+- console สะอาดขณะ online; ขณะ offline มี 1 error ที่ถูกกักไว้ (`drawImage` กับ image ที่ broken) — **ไม่พบ `drawImage` ในโค้ดแอป** จึงยังไม่สรุปว่าเป็น defect ของเรา แต่บันทึกไว้
+
 ### ข้อจำกัดของ PWA ที่ยังไม่มีหลักฐาน (ต้องไม่ประกาศว่าผ่าน)
 
-- **ยังไม่เคยติดตั้งจริงในเบราว์เซอร์ใด** — ทุกหลักฐานของ "installable" มาจาก manifest ที่ถูกต้อง + live HTTP content type/MIME + เทสต์ static; ไม่มี Lighthouse/PWA audit และไม่มี install flow อัตโนมัติ
-- **โหมด offline ยังไม่เคยรันบนอุปกรณ์จริง** — navigation fallback (network → cache → `wallet/` → `offline.html` → 503) ผ่านเฉพาะการจำลอง Cache API ใน `tests/service-worker.test.mjs`
+- **ยังไม่เคยกดติดตั้งจริงและเปิดในโหมด standalone** — ยืนยันได้แค่ว่าเบราว์เซอร์ไม่พบ installability error; ไม่ได้ทดสอบ dialog, `appinstalled`, หรือหน้าต่าง standalone
 - **iOS/Safari ยังไม่ทดสอบ** — มี `apple-touch-icon` และอ่าน `navigator.standalone` แล้ว แต่ path "Add to Home Screen" ไม่เคยลองบนเครื่องจริง
+- **ทดสอบบน Chrome desktop headless เท่านั้น** — ไม่ได้ครอบ Android/มือถือ หรือโปรไฟล์ที่มี engagement จริง (ซึ่งเป็นเงื่อนไขที่ Chrome จะยิง `beforeinstallprompt`)
+- **offline ทดสอบด้วยการตัดเน็ตผ่าน CDP** ไม่ใช่การปิด Wi-Fi บนอุปกรณ์จริง — ผลลัพธ์เทียบเท่าในระดับ network stack แต่ยังไม่ใช่การทดสอบภาคสนาม
 - **ไม่มี UI แจ้งว่ามีเวอร์ชันใหม่** — ยอมรับได้เพราะ navigation เป็น network-first (เห็นของใหม่ในรอบถัดไป) แต่ต้องรู้ว่าไม่มี
 - **cache version ผูกกับเทสต์** — `tests/static-export.test.mjs` ยืนยันสตริง `nsat-pwa-v4`; เมื่อ bump `VERSION` ใน `public/sw.js` ต้องแก้ assertion ในเทสต์พร้อมกัน ไม่งั้น CI แดง
 - **offline ไม่ได้แปลว่ากระเป๋าทำงานได้** — ยอดคงเหลือ ค่าธรรมเนียม และผลยืนยันต้องออนไลน์เสมอ และไม่มีอะไรถูกเซ็นตอนไม่มีเน็ต (ตามดีไซน์)
