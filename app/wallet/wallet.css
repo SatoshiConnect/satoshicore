@@ -192,7 +192,10 @@ body:has(.nw-root) .site-main.container {
   max-width: 430px;
   display: flex;
   flex-direction: column;
-  min-height: min(720px, calc(100vh - 190px));
+  /* A phone screen, not a page: the shell keeps its height and only the
+   * content scrolls, so the tab bar is always reachable at the bottom. */
+  height: min(760px, calc(100vh - 170px));
+  min-height: 480px;
   background: var(--bg);
   border: 1px solid var(--border-card);
   border-radius: 26px;
@@ -298,6 +301,9 @@ body:has(.nw-root) .site-main.container {
   margin: 0;
   padding: 14px 16px 18px;
   flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .nw-section-head {
@@ -324,10 +330,9 @@ body:has(.nw-root) .site-main.container {
   gap: 2px;
   padding: 8px 8px 10px;
   border-top: 1px solid var(--border-soft);
-  background: color-mix(in srgb, var(--bg) 92%, transparent);
-  backdrop-filter: blur(12px);
-  position: sticky;
-  bottom: 0;
+  background: var(--bg);
+  /* No sticky needed: the content above is the only scrolling region. */
+  flex-shrink: 0;
 }
 
 .nw-navitem {
@@ -441,10 +446,23 @@ body:has(.nw-root) .site-main.container {
   .nw-root { padding: 0; }
   .nw-phone {
     max-width: none;
-    min-height: 100vh;
+    /* The site header wraps at this width, so its height is not a constant:
+     * let the page scroll and keep the tab bar pinned to the viewport instead
+     * of subtracting a number that is only right on a desktop. */
+    height: auto;
+    min-height: calc(100vh - var(--chrome-h, 57px));
     border: none;
     border-radius: 0;
     box-shadow: none;
+    /* overflow:hidden would make the phone its own scroll container and stop
+     * the sticky tab bar from pinning to the viewport. */
+    overflow: visible;
+  }
+  .nw-content { overflow: visible; }
+  .nw-bottomnav {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
   }
 }
 
@@ -642,14 +660,19 @@ body:has(.nw-root) .site-main.container {
 }
 
 @media (max-width: 640px) {
-  .nw-tabs { padding: 8px; }
-  .nw-tab { padding: 6px 8px; font-size: 10px; }
-  .nw-tab-tools { margin-left: 0; width: 100%; }
-  .nw-unlock { width: 100%; }
-  .nw-unlock select,
-  .nw-unlock input { flex: 1 1 120px; }
   .nw-row { flex-direction: column; align-items: stretch; }
   .nw-row > label { width: auto; }
+}
+
+/* In a column-flex form a flex-basis becomes a HEIGHT: the base input rule's
+ * `flex: 1 1 120px` (tuned for the old inline unlock toolbar) made these
+ * controls 120px tall once they moved into the phone shell. */
+.nw-unlock-card input,
+.nw-unlock-card select,
+.nw-account-switch select,
+.nw-txf input,
+.nw-txf select {
+  flex: 0 0 auto;
 }
 
 /* The restore control is a <label> wrapping a hidden file input; give it a

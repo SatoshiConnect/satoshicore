@@ -649,9 +649,25 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
   // First run is one decision, not two competing forms: a phone wallet offers
   // Create or Import as a segmented control, then shows the chosen form.
   const [mode, setMode] = useState('create');
+  // With a wallet already stored, creating another one is a deliberate act,
+  // not something to put in front of the unlock form.
+  const [showNew, setShowNew] = useState(false);
+  const hideSetup = wallets.length > 0 && !showNew;
   if (!active) {
     return (
       <div>
+        {wallets.length > 0 && (
+          <section className="nw-card" hidden={!hideSetup}>
+            <h2 style={{ color: 'var(--text)' }}>Add another wallet</h2>
+            <p className="nw-small nw-dim" style={{ margin: '8px 0 12px' }}>
+              Create a new wallet or restore one from a backup. Existing wallets stay as they are.
+            </p>
+            <button type="button" className="nw-chip-btn" onClick={() => setShowNew(true)}>
+              Create or import another wallet
+            </button>
+          </section>
+        )}
+        <div hidden={hideSetup}>
         <div className="nw-segmented" role="tablist" aria-label="Wallet setup">
           <button type="button" role="tab" aria-selected={mode === 'create'}
             className={'nw-seg' + (mode === 'create' ? ' is-active' : '')}
@@ -701,6 +717,7 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
             </div>
           </form>
         </section>
+        </div>
       </div>
     );
   }
