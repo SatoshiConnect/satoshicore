@@ -109,9 +109,10 @@ export default function DownloadPage() {
             </p>
           </details>
 
-          <a className="button secondary" href="/docs/" style={{ marginTop: '1rem' }}>
-            Read the security model
-          </a>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '.6rem', marginTop: '1rem' }}>
+            <a className="button secondary" href="/docs/">Read the security model</a>
+            <a className="button secondary" href="/extension/privacy/">Extension privacy</a>
+          </div>
         </article>
       </div>
 
