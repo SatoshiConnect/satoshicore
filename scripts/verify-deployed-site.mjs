@@ -15,6 +15,8 @@
 //
 // No dependencies: Node 20+ has global fetch.
 
+import { readFileSync } from 'node:fs';
+
 const SITE_TIMEOUT_MS = 15_000;
 
 const args = process.argv.slice(2).filter((a) => a !== '--');
@@ -119,6 +121,31 @@ async function main() {
     assert(/[a-f0-9]{64}/.test(body), 'download page has no sha256 digest');
     assert(/not published/i.test(body), 'download page does not say the artifact is unpublished');
     return 'sha256 + unpublished status present';
+  });
+
+  // The page used to print the filename without serving the file, so the
+  // obvious click (and /extension/<file>.zip) was a 404.
+  await check('Extension downloads are actually served', async () => {
+    const release = JSON.parse(
+      readFileSync(new URL('../extension/release.json', import.meta.url), 'utf8'),
+    );
+    const artifacts = [
+      [release.file, release.bytes],
+      [release.firefoxFile, release.firefoxBytes],
+    ];
+    for (const [name, bytes] of artifacts) {
+      const res = await fetch(url(`/extension/${name}`), {
+        signal: AbortSignal.timeout(SITE_TIMEOUT_MS),
+      });
+      assert(res.status === 200, `/extension/${name} returned HTTP ${res.status}`);
+      const served = Number(res.headers.get('content-length'));
+      assert(
+        !Number.isNaN(served) && served === bytes,
+        `/extension/${name} is ${res.headers.get('content-length')} bytes, release.json says ${bytes}`,
+      );
+      void res.body?.cancel();
+    }
+    return `${artifacts.length} artifacts downloadable`;
   });
 
   // --- PWA: manifest, service worker, shell --------------------------------

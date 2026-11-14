@@ -46,31 +46,72 @@ export default function DownloadPage() {
         </article>
 
         <article className="card">
-          <h3>2. Load the browser extension</h3>
+          <h3>2. Add the browser extension</h3>
           <p style={{ color: 'var(--muted)' }}>
-            Manifest V{release.manifestVersion}, version {release.version}, built{' '}
-            {release.builtAt} · {release.permissions.join(', ')} · talks only to the
-            gateway and indexer.
+            Manifest V{release.manifestVersion} · v{release.version} · built {release.builtAt} ·{' '}
+            {release.permissions.join(', ')} · talks only to the gateway and indexer.
           </p>
-          <p style={{ color: 'var(--muted)' }}>
-            <strong>Not published to any extension store.</strong> Load{' '}
-            <code>extension/{release.file}</code> ({release.bytes.toLocaleString()}{' '}
-            bytes) with <em>Load unpacked</em> in <code>chrome://extensions</code>.
+
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '.6rem', margin: '1rem 0 .4rem' }}>
+            <a className="button" href={`/extension/${release.file}`} download>
+              Download for Chrome, Edge, Brave
+            </a>
+            <a className="button secondary" href={`/extension/${release.firefoxFile}`} download>
+              Download for Firefox
+            </a>
+          </div>
+          <p style={{ color: 'var(--muted)', fontSize: '.85rem', margin: '0 0 1rem' }}>
+            {release.bytes.toLocaleString()} bytes · {release.firefoxBytes.toLocaleString()} bytes.
+            Both are the same wallet; only the manifest differs.
           </p>
-          <p className="mono" style={{ fontSize: '.78rem', color: 'var(--muted)', wordBreak: 'break-all' }}>
-            sha256 {release.sha256}
+
+          <p style={{ color: 'var(--fg)' }}>
+            <strong>Chrome, Edge, Brave</strong>
           </p>
-          <p style={{ color: 'var(--muted)', fontSize: '.85rem' }}>
-            Verify before loading: <code>shasum -a 256 {release.file}</code>
+          <ol style={{ color: 'var(--muted)', lineHeight: 1.7, paddingLeft: '1.2rem', margin: '0 0 1rem' }}>
+            <li>Unzip the downloaded file.</li>
+            <li>Open <code>chrome://extensions</code> and turn on <strong>Developer mode</strong> (top right).</li>
+            <li>Click <strong>Load unpacked</strong> and select the unzipped folder.</li>
+          </ol>
+
+          <p style={{ color: 'var(--fg)' }}>
+            <strong>Firefox</strong>
           </p>
-          <p style={{ color: 'var(--muted)', fontSize: '.85rem' }}>
-            Firefox package: <code>{release.firefoxFile}</code>
-            {' '}({release.firefoxBytes.toLocaleString()} bytes)
+          <ol style={{ color: 'var(--muted)', lineHeight: 1.7, paddingLeft: '1.2rem', margin: '0 0 1rem' }}>
+            <li>Unzip the file.</li>
+            <li>
+              Open <code>about:debugging#/runtime/this-firefox</code> →{' '}
+              <strong>Load Temporary Add-on…</strong> → select <code>manifest.json</code>.
+            </li>
+            <li>A permanent install needs a signed build from addons.mozilla.org; this one lasts until Firefox restarts.</li>
+          </ol>
+
+          <p style={{ color: 'var(--muted)', fontSize: '.9rem' }}>
+            <strong>Why there is no one-click install:</strong> Chrome and Firefox only install
+            extensions from their own stores, and this build is not published to one yet. The steps
+            above are the supported route — the download gives you a zip, not an install prompt.
+            The web app in section 1 needs no unzip and no developer mode.
           </p>
-          <p className="mono" style={{ fontSize: '.78rem', color: 'var(--muted)', wordBreak: 'break-all' }}>
-            sha256 {release.firefoxSha256}
-          </p>
-          <a className="button secondary" href="/docs/">Read the security model</a>
+
+          <details style={{ marginTop: '.75rem' }}>
+            <summary style={{ cursor: 'pointer', color: 'var(--muted)', fontSize: '.9rem' }}>
+              Verify the download (sha256)
+            </summary>
+            <p className="mono" style={{ fontSize: '.75rem', color: 'var(--muted)', wordBreak: 'break-all' }}>
+              Chrome/Edge/Brave<br />{release.file}<br />sha256 {release.sha256}
+            </p>
+            <p className="mono" style={{ fontSize: '.75rem', color: 'var(--muted)', wordBreak: 'break-all' }}>
+              Firefox<br />{release.firefoxFile}<br />sha256 {release.firefoxSha256}
+            </p>
+            <p style={{ color: 'var(--muted)', fontSize: '.85rem' }}>
+              Compare with <code>shasum -a 256 &lt;file&gt;</code> before loading. A mismatch means the
+              file is not the build this page describes.
+            </p>
+          </details>
+
+          <a className="button secondary" href="/docs/" style={{ marginTop: '1rem' }}>
+            Read the security model
+          </a>
         </article>
       </div>
 

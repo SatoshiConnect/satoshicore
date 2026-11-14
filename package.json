@@ -3,7 +3,9 @@
   "version": "24.0.0",
   "private": true,
   "scripts": {
+    "predev": "node scripts/sync-extension-downloads.mjs",
     "dev": "next dev",
+    "prebuild": "node scripts/sync-extension-downloads.mjs",
     "build": "next build",
     "test": "node tests/static-export.test.mjs && node --test tests/service-worker.test.mjs && node --test tests/wallet-engine.test.mjs && node --test tests/theme-contrast.test.mjs && node scripts/check-css-hex.mjs",
     "test:theme": "node --test tests/theme-contrast.test.mjs",
