@@ -281,7 +281,7 @@ export default function ExplorerDashboard() {
       <PageHeader
         eyebrow="NSAT · live network"
         title="Live explorer"
-        lead="Every figure below is a reading from the running nsat-core node, taken through the same-origin gateway (/info, /peers, /quorum, /metrics). Nothing here is simulated: when the node does not answer, a value shows — and the banner says why."
+        lead="Live readings from the running node. Nothing is simulated."
         actions={
           <>
             <Link href="/explorer" className="button secondary">Search an account</Link>

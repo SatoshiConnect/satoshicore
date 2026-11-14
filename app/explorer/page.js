@@ -12,7 +12,7 @@ export default function ExplorerPage() {
       <PageHeader
         eyebrow="NSAT · read-only lookup"
         title="Search the chain"
-        lead="Look up one NSAT account ID or transaction hash. Live balances come from a node through the Web Wallet API Gateway; transaction history and transaction details come from the indexer built from the node's own history archive. Nothing here can sign or submit a transaction."
+        lead="One account ID or transaction hash. Read-only."
         actions={
           <>
             <Link href="/dashboard" className="button">Open the live explorer</Link>

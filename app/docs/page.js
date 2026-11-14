@@ -12,7 +12,7 @@ export default function DocsPage() {
       <PageHeader
         eyebrow="NSAT · documentation"
         title="Documentation"
-        lead="What this project is, what NSAT is, how this site is served, and how the wallet keeps a key safe. Everything below describes the running chain — no roadmap promises and no valuation claims."
+        lead="What NSAT is, how this site works, and how the wallet keeps a key safe."
         actions={
           <>
             <Link href="/dashboard" className="button">Live explorer</Link>
@@ -28,13 +28,8 @@ export default function DocsPage() {
         </div>
         <div className="panel-body">
           <p>
-            SatoshiCore is an independent, non-commercial study project: it exists to
-            understand — by building and running — how a coin, a ledger and a wallet
-            really behave. Nothing here is sold, there is no presale or token
-            offering, and nothing on this site is investment advice. The first phase
-            has one goal: a chain and wallet that simply work, send and receive
-            included. If NSAT ever comes to have value, that would be a later, openly
-            discussed chapter — this page makes no claims about it today.
+            An independent, non-commercial study project. Nothing is sold, there is
+            no presale, and nothing here is investment advice.
           </p>
         </div>
       </section>
@@ -47,30 +42,24 @@ export default function DocsPage() {
         <div className="panel-body">
           <ul className="status-list">
             <li>
-              <strong>Own chain:</strong> SatoshiCore, with its own genesis — not a
-              token on another network and not a Bitcoin account.
+              <strong>Own chain:</strong> SatoshiCore, own genesis, fixed supply —
+              not a token on another network.
             </li>
             <li>
-              <strong>Supply:</strong> fixed at genesis and never re-minted — no
-              inflation and no halving schedule. The exact figure is a ledger fact,
-              not a marketing number.
-            </li>
-            <li>
-              <strong>Decimals:</strong> {NSAT.decimals} — one atomic unit is one
-              NSAT; the wallet refuses fractional amounts.
+              <strong>Decimals:</strong> {NSAT.decimals} — whole NSAT only.
             </li>
             <li>
               <strong>Fee:</strong> {NSAT.baseFee} NSAT per operation, read from the
-              live ledger header before signing.
+              live ledger before signing.
             </li>
             <li>
               <strong>Base reserve:</strong> {groupExact(NSAT.baseReserve)} NSAT; a
-              brand-new account needs {groupExact(NSAT.createMinimum)} NSAT on its
-              first deposit (2× reserve, a CREATE).
+              new account needs {groupExact(NSAT.createMinimum)} NSAT on its first
+              deposit (2× reserve).
             </li>
             <li>
-              <strong>Accounts:</strong> {NSAT.accountKey} — the same address works
-              on the iPhone app, the desktop wallet and this site.
+              <strong>Accounts:</strong> {NSAT.accountKey} — one address across the
+              iPhone app, desktop wallet and this site.
             </li>
           </ul>
         </div>
@@ -84,46 +73,19 @@ export default function DocsPage() {
         <div className="panel-body">
           <ul className="status-list">
             <li>
-              <code>satoshicore.org</code> is a <strong>static export</strong>
-              {' '}(<code>output: &apos;export&apos;</code>) served by Caddy from
-              this machine — no Node.js server runs behind the page itself.
+              <strong>Static export</strong> served by Caddy — no Node.js server
+              behind the page.
             </li>
             <li>
-              The page calls its <strong>own origin</strong>: <code>/api/v1/*</code>{' '}
-              goes to the Web Wallet API Gateway and <code>/v1/*</code> to the block
-              indexer. One domain, no CORS preflight, and the same build works on any
-              hostname Caddy answers on.
-            </li>
-            <li>
-              Three separate services sit behind it: the <code>nsat-core</code> node
-              (loopback only), the API gateway (read-only lookups + relay of
-              already-signed envelopes), and the read-only indexer that powers the{' '}
-              <Link href="/explorer">search page</Link>.
+              Same origin only: <code>/api/v1/*</code> is the gateway,{' '}
+              <code>/v1/*</code> is the indexer behind{' '}
+              <Link href="/explorer">search</Link>.
             </li>
             <li>
               If a service is down the UI says so — it never shows a fabricated
-              balance, fee or history row.
+              balance or history row.
             </li>
           </ul>
-        </div>
-      </section>
-
-      <section className="panel">
-        <div className="panel-head">
-          <h2 className="panel-title">Updating the site</h2>
-          <span className="panel-meta">build &amp; publish</span>
-        </div>
-        <div className="panel-body">
-          <pre className="mono doc-block">
-{`# build with the same-origin API switch
-NEXT_PUBLIC_API_SAME_ORIGIN=1 npx next build
-
-# publish the export into the directory Caddy serves (NSAT_WEB_ROOT)
-rsync -a --delete out/ "$NSAT_WEB_ROOT"/
-
-# then prove what is actually live
-node scripts/verify-deployed-site.mjs https://satoshicore.org`}
-          </pre>
         </div>
       </section>
 
@@ -135,19 +97,18 @@ node scripts/verify-deployed-site.mjs https://satoshicore.org`}
         <div className="panel-body">
           <ul className="status-list">
             <li>
-              Seeds are generated in the browser, encrypted with PBKDF2-SHA256
-              (600k) + AES-GCM and stored only as ciphertext. Signing happens
-              client-side; the gateway receives signed envelopes only.
+              Seeds are generated here, encrypted with PBKDF2 + AES-GCM, and stored
+              only as ciphertext. Signing is client-side; the gateway relays signed
+              envelopes.
             </li>
             <li>
-              A signature is refused unless the gateway reports the exact network
-              identity <span className="mono">{NSAT.network}</span>.
+              No signature unless the gateway reports the exact network identity{' '}
+              <span className="mono">{NSAT.network}</span>.
             </li>
             <li>
-              Shielded operations need the native prover and are desktop-only; this
-              site states that instead of faking the feature.
+              Shielded transfers need the native prover, so they are desktop-only.
             </li>
-            <li>See <code>SECURITY.md</code> in the repository for the full review.</li>
+            <li>Full review: <code>SECURITY.md</code> in the repository.</li>
           </ul>
         </div>
       </section>
