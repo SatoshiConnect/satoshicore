@@ -7,11 +7,12 @@ import ThemeToggle from './ThemeToggle';
 // One navigation for the whole site. "Explorer" is the live dashboard, and
 // "Search" is the account/transaction lookup that used to be called Explorer
 // too — two pages under one name is what made the site feel like two sites.
+// Wallet IS the homepage, so there is no separate "Home" entry; "Wallet"
+// points at / and the rest are the tools people actually open.
 const NAV = [
-  { href: '/', label: 'Home' },
+  { href: '/', label: 'Wallet' },
   { href: '/dashboard', label: 'Explorer' },
   { href: '/explorer', label: 'Search' },
-  { href: '/wallet', label: 'Wallet' },
   { href: '/download', label: 'Download' },
   { href: '/docs', label: 'Docs' },
   { href: '/status', label: 'Status' }

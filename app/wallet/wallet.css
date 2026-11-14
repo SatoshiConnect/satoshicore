@@ -33,7 +33,7 @@ body:has(.nw-root) .site-main.container {
 .nw-extras {
   max-width: var(--page-max, 1240px);
   margin: 0 auto;
-  padding: 1.5rem var(--gutter, 1.25rem) 0;
+  padding: 0 var(--gutter, 1.25rem) 2.5rem;
   display: flex;
   align-items: center;
   gap: 0.6rem;

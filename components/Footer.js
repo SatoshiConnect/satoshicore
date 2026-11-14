@@ -6,10 +6,8 @@ export default function Footer() {
     <footer className="site-footer">
       <div className="container">
         <p>
-          SatoshiCore · NSAT Mainnet — an independent study project, not a sale
-          and not an investment offer. {NSAT.decimals} decimals,{' '}
-          {NSAT.baseFee} NSAT per operation; the same account as the iPhone and
-          desktop wallets.
+          Non-custodial · {NSAT.baseFee} NSAT per operation · not a sale or
+          investment offer.
         </p>
         <p className="footer-links">
           <Link href="/dashboard">Explorer</Link> · <Link href="/explorer">Search</Link> ·{' '}
@@ -17,7 +15,7 @@ export default function Footer() {
           <Link href="/status">Status</Link> · <Link href="/security">Security</Link> ·{' '}
           <Link href="/terms">Terms</Link> · <Link href="/privacy">Privacy</Link>
         </p>
-        <p className="mono muted">{NSAT.network}</p>
+
       </div>
     </footer>
   );

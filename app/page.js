@@ -18,16 +18,12 @@ export const metadata = {
 export default function HomePage() {
   return (
     <>
-      {/* Secondary to the wallet itself: install this app, or install the
-          browser extension. Both are real capabilities of this build. */}
+      <WalletPanel />
+      {/* Secondary: after the wallet actions, not in front of them. */}
       <div className="nw-extras">
         <InstallApp />
         <Link className="button secondary" href="/download/">Install browser extension</Link>
-        <span className="nw-extras-note">
-          Keys stay on this device · Mainnet only
-        </span>
       </div>
-      <WalletPanel />
     </>
   );
 }

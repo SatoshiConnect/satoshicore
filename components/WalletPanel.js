@@ -43,14 +43,15 @@ const PAGE_TITLE = {
   overview: 'Overview', send: 'Send NSAT', receive: 'Receive NSAT',
   shielded: 'Shielded NSAT', activity: 'Activity', settings: 'Settings',
 };
-// One line of context per section, rendered by the shared PageHeader.
+// One short line per section — context only, never an essay. Overview and
+// Settings need none: the cards say what they are.
 const PAGE_LEAD = {
-  overview: 'One account, one balance, no floats. Keys are generated and encrypted in this browser.',
-  send: 'Recipient, amount, then a review with the exact total — the fee is read from the live ledger header.',
-  receive: 'Your public address only. Funding a brand-new account needs the CREATE toggle on Send.',
-  shielded: 'Shielded transfers need the native prover and are desktop-only; this site says so instead of faking it.',
-  activity: 'Transfers this app signed — each status is the ledger\'s own result for that transaction hash.',
-  settings: 'Session control, stored wallets and the encrypted keystore backup.',
+  overview: null,
+  send: 'Recipient, amount, then a review with the exact total.',
+  receive: 'Your public address only.',
+  shielded: 'Desktop only — the native prover is required.',
+  activity: 'Transfers signed here, with the ledger\'s verdict.',
+  settings: null,
 };
 
 // Founder Mint policy (docs/NSAT-FOUNDER-MINT-ENGINE.md): 18,175 units were
@@ -466,21 +467,20 @@ export default function WalletPanel() {
       <main className="nw-content">
           {!configured && (
             <p className="nw-dim nw-small" style={{ marginTop: 0 }}>
-              Offline mode: set NEXT_PUBLIC_API_GATEWAY_URL at build time to
-              connect to the NSAT API Gateway.
+              Offline: no gateway configured for this build.
             </p>
           )}
 
           <PageHeader
-            eyebrow="NSAT · wallet"
-            title={PAGE_TITLE[page]}
+            title={active ? PAGE_TITLE[page] : hasWallets ? 'Unlock' : 'Wallet'}
             lead={PAGE_LEAD[page]}
-            meta={`${active ? active.name : hasWallets ? 'Locked' : 'No wallet yet'} · NSAT · ${connLine}`}
+            meta={active ? `${active.name} · ${connLine}` : null}
             actions={<NetworkBadge net={net ? { ...net, ledger: liveLedger ?? net.ledger } : net} />}
           />
 
-          {/* Section switcher in a horizontal strip — the same pattern as the
-           * explorer toolbar, so the wallet is not a fourth layout. */}
+          {/* Section switcher only once there is something to switch between.
+           * A first-time visitor gets the two actions, nothing else. */}
+          {(active || hasWallets) && (
           <div className="nw-tabs">
             <nav className="nw-tab-list" aria-label="Wallet sections">
               {PAGES.map((p) => (
@@ -523,6 +523,7 @@ export default function WalletPanel() {
               )}
             </div>
           </div>
+          )}
 
           {page === 'overview' && (
             <OverviewPage active={active} wallets={wallets} balance={balance} funded={funded}
@@ -615,23 +616,17 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
     return (
       <div className="nw-grid-2">
         <section className="nw-card">
-          <div className="nw-step">SATOSHICORE · NEW</div>
           <h2 style={{ color: 'var(--text)' }}>Create a New Wallet</h2>
-          <p className="nw-small nw-dim">
-            Keys are generated locally with a CSPRNG, encrypted at rest with
-            PBKDF2 + AES-GCM, and never leave this browser.
-          </p>
+          <p className="nw-small nw-dim">Generated and encrypted in this browser.</p>
           <form onSubmit={bus.doCreate} className="nw-txf" style={{ marginTop: 10 }}>
             <label className="nw-label" htmlFor="nw-new-name">Wallet name</label>
             <input id="nw-new-name" value={bus.newName}
               onChange={(e) => bus.setNewName(e.target.value)}
               placeholder="Personal wallet" required />
-            <label className="nw-label" htmlFor="nw-new-pass">Password (encrypts the seed, ≥ 8 chars)</label>
+            <label className="nw-label" htmlFor="nw-new-pass">Password (≥ 8 chars, needed to sign)</label>
             <input id="nw-new-pass" type="password" value={bus.newPass}
               onChange={(e) => bus.setNewPass(e.target.value)} minLength={8} required />
-            <div className="nw-small nw-dim">
-              Needed every time you sign. There is no server-side recovery.
-            </div>
+            <div className="nw-small nw-dim">There is no server-side recovery.</div>
             <div className="nw-btn-row" style={{ margin: '4px 0 0' }}>
               <button type="submit" className="nw-send-btn" disabled={bus.busy}>
                 Create Wallet</button>
@@ -639,12 +634,8 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
           </form>
         </section>
         <section className="nw-card">
-          <div className="nw-step">SATOSHICORE · IMPORT</div>
           <h2 style={{ color: 'var(--text)' }}>Import Existing Wallet</h2>
-          <p className="nw-small nw-dim">
-            Bring in an S… secret seed. It is encrypted immediately and never
-            displayed back.
-          </p>
+          <p className="nw-small nw-dim">Encrypted immediately; never shown again.</p>
           <form onSubmit={bus.doImport} className="nw-txf" style={{ marginTop: 10 }}>
             <label className="nw-label" htmlFor="nw-imp-name">Wallet name</label>
             <input id="nw-imp-name" value={bus.newName}
@@ -678,7 +669,7 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
               {balance == null ? '…' : formatExactBalance(balance)}
               <span className="nw-balance-unit">NSAT</span>
             </div>
-            <div className="nw-small nw-dim">exact on-chain value · 128-bit integers · no floats</div>
+
           </div>
           <div style={{ textAlign: 'right' }}>
             <div className="nw-address-chip">
@@ -696,18 +687,15 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
       <div className="nw-quick-actions">
         <button className="nw-action-card" onClick={onSend}>
           <div className="nw-action-icon">↗</div>
-          <div><div style={{ fontWeight: 700 }}>Send</div>
-            <div className="nw-small nw-dim">Pay someone in NSAT</div></div>
+          <div style={{ fontWeight: 700 }}>Send</div>
         </button>
         <button className="nw-action-card" onClick={onReceive}>
           <div className="nw-action-icon">↙</div>
-          <div><div style={{ fontWeight: 700 }}>Receive</div>
-            <div className="nw-small nw-dim">Show address</div></div>
+          <div style={{ fontWeight: 700 }}>Receive</div>
         </button>
         <button className="nw-action-card" onClick={onManage}>
           <div className="nw-action-icon">#</div>
-          <div><div style={{ fontWeight: 700 }}>Backup</div>
-            <div className="nw-small nw-dim">In Settings</div></div>
+          <div style={{ fontWeight: 700 }}>Backup</div>
         </button>
       </div>
 
@@ -719,19 +707,12 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
           <div className="nw-kv"><span className="nw-k">Funded on network</span>
             <span className="nw-v"><span className={'nw-badge ' + (fundedBadge === true ? 'ok' : 'warn')}>
               {fundedBadge === true ? 'Yes' : fundedBadge === false ? 'No / not funded' : 'unknown'}</span></span></div>
-          <div className="nw-kv"><span className="nw-k">Latest ledger</span>
-            <span className="nw-v">{net.ledger == null ? '—' : Number(net.ledger).toLocaleString()}</span></div>
-          <div className="nw-kv"><span className="nw-k">Issuance (policy)</span>
-            <span className="nw-v"><span className="nw-mono">
-              {net.minted == null ? '—' : net.minted.toLocaleString()}</span>
-              <small className="nw-dim"> +4 / ledger</small></span></div>
+
         </section>
         <section className="nw-card">
           <h2 style={{ color: 'var(--text)' }}>Network</h2>
           <div className="nw-kv" style={{ marginTop: 10 }}><span className="nw-k">Status</span>
             <span className="nw-v">{net.netOk ? 'Connected' : 'Offline'}</span></div>
-          <div className="nw-kv"><span className="nw-k">Network</span>
-            <span className="nw-v nw-mono nw-small">{net.net?.network ?? '—'}</span></div>
           <div className="nw-kv"><span className="nw-k">Base fee (NSAT)</span>
             <span className="nw-v">{net.fee ?? '…'} <small className="nw-dim">live</small></span></div>
         </section>
@@ -856,8 +837,7 @@ function ReceivePage({ activePubkey, notify }) {
             Copy address
           </button>
           <p className="nw-small nw-dim" style={{ marginTop: 14 }}>
-            This PUBLIC address only — never a secret key. Funding a brand-new
-            account needs ≥ 2× base reserve; otherwise use the CREATE toggle in Send.
+            Public address only. A brand-new account needs 2× base reserve.
           </p>
         </>)}
     </section>
@@ -873,22 +853,13 @@ function ShieldedGatePage() {
       <section className="nw-card nw-balance-card">
         <div className="nw-balance-row">
           <div>
-            <div className="nw-balance-label">SHIELDED STATUS</div>
+            <div className="nw-balance-label">SHIELDED NSAT</div>
             <div className="nw-balance-amount">DESKTOP ONLY</div>
             <div className="nw-small nw-dim">
-              web · native kernel required · see the Desktop Wallet for gate state
+              Needs the native prover, which only the Desktop Wallet runs.
             </div>
           </div>
         </div>
-      </section>
-      <section className="nw-card">
-        <p className="nw-small nw-dim">
-          Shielded NSAT (deposit · private transfer · withdrawal) requires the
-          native Rust kernel and local proof generation, which only the Desktop
-          Wallet provides. The web wallet never receives or creates proof
-          material, and makes no shielded signing claims here. On Mainnet the
-          SHIELDED gate release is a separate controlled activation.
-        </p>
       </section>
     </div>
   );
@@ -903,8 +874,7 @@ function ActivityPage({ history, activeName, onRecheck, canRecheck }) {
         <span className="nw-badge info">locally verified · not a chain indexer</span>
       </h2>
       {history.length === 0 ? (
-        <EmptyState
-          text={'No verified transactions yet.\nThe list records transfers this app signed and confirmed on-chain.'} />
+        <EmptyState text="No signed transfers yet." />
       ) : (
         <ul className="nw-tx-list" style={{ marginTop: 10 }}>
           {history.map((h, i) => (
@@ -982,9 +952,7 @@ function SettingsPage({ s }) {
       <section className="nw-card">
         <h2 style={{ color: 'var(--text)' }}>Backup & restore</h2>
         <p className="nw-small nw-dim" style={{ margin: '8px 0 12px' }}>
-          Exports the ENCRYPTED keystore (AES-GCM, PBKDF2 600k). Restoring it
-          here rebuilds this wallet's locker — the same file also imports into
-          fresh browsers.
+          Encrypted keystore. Restores here or in another browser.
         </p>
         <div className="nw-btn-row" style={{ margin: 0 }}>
           <button className="nw-send-btn" onClick={s.doBackup}>Export encrypted backup</button>
@@ -998,14 +966,12 @@ function SettingsPage({ s }) {
       <section className="nw-card">
         <h2 style={{ color: 'var(--text)' }}>Security model</h2>
         <div className="nw-kv" style={{ marginTop: 10 }}>
-          <span className="nw-k">Key scheme</span>
-          <span className="nw-v">Ed25519 · strkey CRC16 (same codec as the Desktop Wallet)</span></div>
-        <div className="nw-kv"><span className="nw-k">Keystore</span>
-          <span className="nw-v">PBKDF2-HMAC-SHA256 (600k) + AES-GCM in this browser</span></div>
+          <span className="nw-k">Keys</span>
+          <span className="nw-v">Ed25519 · PBKDF2 + AES-GCM in this browser</span></div>
         <div className="nw-kv"><span className="nw-k">Signing</span>
           <span className="nw-v">client-side only — the gateway never sees a key</span></div>
         <div className="nw-kv"><span className="nw-k">Network gate</span>
-          <span className="nw-v">exact identity match required before any signature</span></div>
+          <span className="nw-v">exact identity match before any signature</span></div>
       </section>
     </div>
   );
