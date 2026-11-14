@@ -11,12 +11,10 @@ export const metadata = {
     + 'explorer and live network status.'
 };
 
-// Same chrome colors as the iPhone app: #F2F2F7 light, #1C1C1E dark.
+// One dark surface (#0a0c11) on every route, so the browser chrome matches
+// the page instead of tinting a light bar above a dark wallet.
 export const viewport = {
-  themeColor: [
-    { media: '(prefers-color-scheme: light)', color: '#f2f2f7' },
-    { media: '(prefers-color-scheme: dark)', color: '#1c1c1e' }
-  ],
+  themeColor: '#0a0c11',
   // An installed PWA should fill the screen like the native apps do.
   viewportFit: 'cover'
 };

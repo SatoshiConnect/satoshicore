@@ -137,6 +137,7 @@ browser: cache keys = [nsat-pwa-v3], API entries = 0 (even after an /api fetch)
 | manifest / SW | **DEPLOYED** | `start_url` + `id` = `./`, `scope` = `./`, cache `nsat-pwa-v4` |
 | Extension artifacts | **REPACKAGED** | zip ใหม่ทั้ง Chromium (80,660 B, `4ac897f9aaad…`) และ Firefox (80,697 B, `989d04142537…`) เพราะ popup ใช้ `WalletPanel` เดียวกัน; `release.json` เขียนจาก zip จริง; artifact suite 10/10 |
 | เทสต์ที่แก้ | **VERIFIED** | `static-export.test.mjs` เปลี่ยนจาก "homepage ต้องมี Open NSAT Wallet" เป็น "homepage คือ wallet shell + Create/Import + ไม่มี landing CTA"; `service-worker.test.mjs` อ่าน cache VERSION จาก worker เอง; `verify-deployed-site.mjs` ตรวจ homepage แบบ wallet + `start_url === './'` |
+| Design refresh (2026-11-14) | **DEPLOYED** | เปลี่ยน palette จาก cyan-on-navy เป็น neutral slate + electric indigo (#4c6fff) พร้อม semantic ok/warn/danger ใหม่, ลด glow, การ์ด/ปุ่ม/แท็บ/แบดจ์ใช้ token ชุดเดียวทั้งเว็บและ popup; พื้นหลังต่อเนื่องไม่มีรอยต่อ (`.nw-root` โปร่งใส, popup ตั้ง `#0a0c11`), theme-color ตรงกัน; build+เทสต์ผ่านและ live verify 8/8 |
 | Engine ด้วย synthetic identity (offline) | **VERIFIED** | `tests/wallet-engine.test.mjs` (4/4): seed ถูกเก็บเป็น ciphertext เท่านั้น, รหัสผิดถูกปฏิเสธ, address ที่แสดง = กุญแจที่เซ็น, envelope verify ด้วย Ed25519 ในเครื่อง, determinism, backup→restore ได้กุญแจเดิม, keystore ที่ถูกสลับ pubkey / แก้ ciphertext ถูกปฏิเสธ, history patch ด้วย tx hash; ทั้งไฟล์ไม่เรียก network (fetch ถูกทำให้ throw) |
 
 ```

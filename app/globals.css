@@ -23,31 +23,35 @@
 :root {
   color-scheme: dark;
 
-  --bg: #050a14;
-  --bg-deep: #03060d;
-  --surface: #0a1424;
-  --card: rgba(11, 24, 42, 0.92);
-  --fg: #e6f3ff;
-  --muted: #7c93ad;
-  --border: rgba(56, 189, 248, 0.18);
-  --border-strong: rgba(56, 189, 248, 0.34);
-  --fill: rgba(56, 189, 248, 0.1);
+  /* Neutral slate surfaces with one electric-indigo accent — the palette
+   * today's wallets and exchanges converge on (Coinbase, Phantom, Robinhood)
+   * instead of the 2021 cyan-on-navy glow. Accent is reserved for actions,
+   * focus and live state; everything structural is a grey step. */
+  --bg: #0a0c11;
+  --bg-deep: #07080c;
+  --surface: #12151c;
+  --card: #14171f;
+  --fg: #edf1f7;
+  --muted: #8b94a7;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --fill: rgba(255, 255, 255, 0.06);
 
-  --accent: #38bdf8;
-  --accent-pressed: #7dd3fc;
-  --accent-tint: rgba(56, 189, 248, 0.14);
-  --on-accent: #04121d;
+  --accent: #4c6fff;
+  --accent-pressed: #6b87ff;
+  --accent-tint: rgba(76, 111, 255, 0.14);
+  --on-accent: #ffffff;
 
-  --ok: #4ade80;
-  --ok-tint: rgba(74, 222, 128, 0.14);
-  --warn: #fbbf24;
-  --warn-tint: rgba(251, 191, 36, 0.14);
-  --danger: #fb7185;
-  --danger-tint: rgba(251, 113, 133, 0.14);
+  --ok: #2ed3a0;
+  --ok-tint: rgba(46, 211, 160, 0.12);
+  --warn: #f5a524;
+  --warn-tint: rgba(245, 165, 36, 0.12);
+  --danger: #f0616d;
+  --danger-tint: rgba(240, 97, 109, 0.12);
 
-  --radius-sm: 8px;
-  --radius: 12px;
-  --radius-lg: 16px;
+  --radius-sm: 10px;
+  --radius: 14px;
+  --radius-lg: 18px;
 
   /* Height of the sticky global header services keep clear of. */
   --chrome-h: 57px;
@@ -79,9 +83,9 @@ body {
   flex-direction: column;
   min-height: 100vh;
   background:
-    radial-gradient(1100px 560px at 14% -10%, rgba(30, 64, 130, 0.4), transparent 62%),
-    radial-gradient(900px 520px at 88% -2%, rgba(96, 22, 66, 0.26), transparent 62%),
-    linear-gradient(180deg, #060d1c 0%, var(--bg) 42%, var(--bg-deep) 100%);
+    radial-gradient(900px 480px at 12% -12%, rgba(76, 111, 255, 0.14), transparent 60%),
+    radial-gradient(760px 420px at 92% -8%, rgba(46, 211, 160, 0.07), transparent 60%),
+    linear-gradient(180deg, #0b0d14 0%, var(--bg) 46%, var(--bg-deep) 100%);
   background-attachment: fixed;
   background-color: var(--bg);
   color: var(--fg);
@@ -211,10 +215,10 @@ hr {
   width: 28px;
   height: 28px;
   border-radius: 9px;
-  background: linear-gradient(180deg, rgba(56, 189, 248, 0.32), rgba(56, 189, 248, 0.08));
-  border: 1px solid rgba(103, 232, 249, 0.6);
-  box-shadow: 0 0 16px rgba(56, 189, 248, 0.4), inset 0 0 10px rgba(56, 189, 248, 0.25);
-  color: #67e8f9;
+  background: linear-gradient(180deg, #5b7bff, #3f5ce0);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  color: #ffffff;
   display: grid;
   place-items: center;
   flex-shrink: 0;
@@ -257,10 +261,9 @@ hr {
 }
 
 .main-nav a[aria-current='page'] {
-  color: #dff3ff;
-  background: linear-gradient(180deg, rgba(56, 189, 248, 0.3), rgba(56, 189, 248, 0.1));
-  border: 1px solid rgba(103, 232, 249, 0.55);
-  box-shadow: 0 0 14px rgba(56, 189, 248, 0.35);
+  color: #eef2ff;
+  background: rgba(76, 111, 255, 0.16);
+  border: 1px solid rgba(76, 111, 255, 0.42);
 }
 
 .main-nav a {
@@ -304,6 +307,7 @@ hr {
   letter-spacing: -0.01em;
   text-decoration: none;
   cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.14);
   transition: background 0.15s ease, transform 0.05s ease;
 }
 
@@ -324,12 +328,14 @@ hr {
 
 .button.secondary {
   background: var(--surface);
-  border-color: var(--border);
+  border-color: var(--border-strong);
   color: var(--fg);
+  box-shadow: none;
 }
 
 .button.secondary:hover {
   background: var(--fill);
+  border-color: rgba(255, 255, 255, 0.24);
   color: var(--fg);
 }
 
@@ -400,10 +406,9 @@ hr {
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  background: var(--card);
-  box-shadow: inset 0 1px 0 rgba(125, 211, 252, 0.08), 0 12px 30px rgba(2, 6, 14, 0.45);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  background: linear-gradient(180deg, #171a23, #13161d);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 28px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .panel + .panel {
@@ -417,7 +422,7 @@ hr {
   gap: 12px;
   padding: 12px 16px;
   border-bottom: 1px solid var(--border);
-  background: linear-gradient(180deg, rgba(56, 189, 248, 0.08), transparent);
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .panel-title {
@@ -427,7 +432,7 @@ hr {
   font-weight: 600;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: #cfe9ff;
+  color: #dbe2f2;
 }
 
 .panel-meta {
@@ -476,12 +481,12 @@ hr {
 }
 
 .card {
-  background: var(--card);
+  background: linear-gradient(180deg, #171a23, #13161d);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 1.25rem;
-  box-shadow: inset 0 1px 0 rgba(125, 211, 252, 0.08), 0 12px 30px rgba(2, 6, 14, 0.45);
-  backdrop-filter: blur(6px);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 28px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .card h3 {
@@ -501,7 +506,7 @@ hr {
 
 .site-footer {
   border-top: 1px solid var(--border);
-  background: rgba(4, 9, 17, 0.9);
+  background: rgba(7, 8, 12, 0.92);
   color: var(--muted);
   font-size: 0.75rem;
   padding: 1.5rem 0;
