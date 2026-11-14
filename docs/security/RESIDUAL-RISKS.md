@@ -22,7 +22,7 @@ Nothing here should be read as "accepted" — each item carries its owner/next s
 | R6 | Post-quantum migration: Ed25519/Halo2 signatures are not PQC | MEDIUM (long-term) | Open — deliberate; NO swap without a protocol design + compatibility testing + coordinated upgrade, per directive | Documented as cryptographic-agility requirement in THREAT-MODEL T14 |
 | R7 | Inactivity auto-lock for the web wallet not yet implemented | LOW | **FIXED (2026-11-14)** | 5-minute idle lock (1–60 min configurable, not disableable) + immediate lock on background/pagehide; UI behavior still needs a browser pass |
 | R8 | E2E suite skip-by-default without disposable devnet env | LOW | By design (no Mainnet txs from the CI/E2E path) | Keep; document in release manifest as deliberately skipped |
-| R9 | Production artifact stale vs latest wallet lib edits (unit/static suites green; rebuild+redeploy pending) | LOW | Rebuild done (2026-11-14, `npm test` + `next build` green); deploy pending owner approval | Deploy the rebuilt export in an approved window, then run `npm run verify:deployed` |
+| R9 | Production artifact stale vs latest wallet lib edits | LOW | **FIXED (2026-11-14)** — rebuild deployed to the Caddy webroot from commit `5f4eaa0`; `npm run verify:deployed` passed 8/8 (2 advisory) | Keep the deploy step and `verify:deployed` in every wallet release |
 | R10 | Browser runtime compromise (malicious extension/exploit) is OUT of scope of every control here | Acknowledged | Standing assumption | Threat model: minimize seed lifetime; no effective software guarantee possible |
 
 ## Explicit non-claims
