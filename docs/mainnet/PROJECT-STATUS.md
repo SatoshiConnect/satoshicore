@@ -137,15 +137,27 @@ browser: cache keys = [nsat-pwa-v3], API entries = 0 (even after an /api fetch)
 | manifest / SW | **DEPLOYED** | `start_url` + `id` = `./`, `scope` = `./`, cache `nsat-pwa-v4` |
 | Extension artifacts | **REPACKAGED** | zip ใหม่ทั้ง Chromium (80,660 B, `4ac897f9aaad…`) และ Firefox (80,697 B, `989d04142537…`) เพราะ popup ใช้ `WalletPanel` เดียวกัน; `release.json` เขียนจาก zip จริง; artifact suite 10/10 |
 | เทสต์ที่แก้ | **VERIFIED** | `static-export.test.mjs` เปลี่ยนจาก "homepage ต้องมี Open NSAT Wallet" เป็น "homepage คือ wallet shell + Create/Import + ไม่มี landing CTA"; `service-worker.test.mjs` อ่าน cache VERSION จาก worker เอง; `verify-deployed-site.mjs` ตรวจ homepage แบบ wallet + `start_url === './'` |
+| Engine ด้วย synthetic identity (offline) | **VERIFIED** | `tests/wallet-engine.test.mjs` (4/4): seed ถูกเก็บเป็น ciphertext เท่านั้น, รหัสผิดถูกปฏิเสธ, address ที่แสดง = กุญแจที่เซ็น, envelope verify ด้วย Ed25519 ในเครื่อง, determinism, backup→restore ได้กุญแจเดิม, keystore ที่ถูกสลับ pubkey / แก้ ciphertext ถูกปฏิเสธ, history patch ด้วย tx hash; ทั้งไฟล์ไม่เรียก network (fetch ถูกทำให้ throw) |
 
 ```
 npm run build (NEXT_PUBLIC_API_SAME_ORIGIN=1)   ✓ Compiled successfully
 tests/static-export.test.mjs                    11 / 11 pass
 tests/service-worker.test.mjs                    3 / 3 pass
+tests/wallet-engine.test.mjs (synthetic)         4 / 4 pass, no network calls
 npm run test:extension                           10 / 10 pass + release artifacts OK
 verify-deployed-site https://satoshicore.org     8 passed / 0 failed, 2 advisory
 browser (live /)                                 nw-root present, Create/Import, Install app + extension, console clean
 ```
+
+### Release readiness (2026-11-14)
+
+| ผลิตภัณฑ์ | สถานะ | หลักฐาน / ช่องว่างที่เหลือ |
+|---|---|---|
+| PWA Wallet (`https://satoshicore.org/`) | **RELEASE-READY → DEPLOYED** | `/` = wallet, live verify 8/8, manifest/SW v4, offline shell, synthetic engine suite; ไม่มีงานค้างเชิงฟังก์ชัน |
+| Extension packages (Chromium MV3 / Firefox MV3) | **BUILD_PRODUCED** (ไม่ใช่ RELEASE-READY) | zip แพ็กจาก source ปัจจุบัน, artifact suite 10/10, `release.json` ตรงกับ zip; ยังไม่มีหลักฐานรันใน Chrome/Edge/Brave/Firefox จริง → ห้ามประกาศว่ารองรับ |
+| Website connection (dApp provider) | **MISSING / BLOCKED** | ยังเป็น design doc เท่านั้น; ต้องมีเจ้าของตัดสินใจเรื่อง grant lifetime, Firefox floor, HTTPS-only policy ก่อนเขียนโค้ด |
+| Legal | **DRAFT** | `/terms/` `/privacy/` ติดป้าย draft รอตรวจ |
+| PR | **OPEN** | https://github.com/SatoshiConnect/satoshicore/pull/11 (branch นี้สะสมงาน wallet ต่อจาก sponsored-account work) |
 
 ข้อจำกัดที่ยังค้าง: ยังไม่มีใครโหลด zip เข้า Chrome/Firefox จริง; account switching ยังไม่ได้ทดสอบด้วยกระเป๋าจริงสองใบ; Chrome ไม่ยิง `beforeinstallprompt` ในโปรไฟล์ที่ยังไม่มี engagement จึงเห็นเป็นขั้นตอนเมนูแทน (ไม่ใช่ปุ่มปลอม)
 
