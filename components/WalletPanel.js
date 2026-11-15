@@ -2247,9 +2247,6 @@ function ActivityPage({ history, activeName, chain, onLoadOlder, onRecheck, canR
   const shown = chainItems.length;
   const sent = chainItems.filter((item) => item.direction === 'out').length;
   const received = chainItems.filter((item) => item.direction !== 'out').length;
-  const mintData = mint?.data;
-  const eras = Array.isArray(mint?.timeline) ? mint.timeline : [];
-  const { supply, minted } = supplyAndMinted(mintData?.total_coins);
   return (
     <div>
       <section className="nw-card">
