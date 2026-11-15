@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   isGatewayConfigured, isIndexerConfigured, EXPECTED_NETWORK_ID,
-  verifyNetworkIdentity, getChainInfo, getAccount,
+  verifyNetworkIdentity, getChainInfo, getAccount, readAccountBalance,
   submitSignedTransaction, estimateFee, formatExactBalance,
   waitForConfirmation, accountEventsUrl,
 } from '../lib/nsatClient';
@@ -131,6 +131,8 @@ export default function WalletPanel() {
   const [accountsOpen, setAccountsOpen] = useState(false);
   const [switchName, setSwitchName] = useState('');
   const [switchPass, setSwitchPass] = useState('');
+  // name -> { kind: 'loading' | 'exact' | 'missing' | 'unavailable', value }
+  const [switchBalances, setSwitchBalances] = useState({});
   const [dest, setDest] = useState('');
   const [createDest, setCreateDest] = useState(false);
   const [amount, setAmount] = useState('');
@@ -552,6 +554,33 @@ export default function WalletPanel() {
       setBusy(false);
     }
   }
+
+  // Balances inside the switcher come from a read-only lookup of each public
+  // address — no key involved — so a locked wallet can still show its amount
+  // and a person can pick by balance. One failure only affects its own row.
+  useEffect(() => {
+    if (!accountsOpen || wallets.length === 0) return undefined;
+    let cancelled = false;
+    setSwitchBalances((cur) => {
+      const next = {};
+      for (const w of wallets) next[w.name] = cur[w.name] ?? { kind: 'loading', value: null };
+      return next;
+    });
+    (async () => {
+      for (const w of wallets) {
+        if (!w.pubkey) continue;
+        let entry;
+        try {
+          entry = readAccountBalance(await getAccount(w.pubkey));
+        } catch {
+          entry = { kind: 'unavailable', value: null };
+        }
+        if (cancelled) return;
+        setSwitchBalances((cur) => ({ ...cur, [w.name]: entry }));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [accountsOpen, wallets]);
 
   async function toggleBiometricUnlock() {
     if (!active?.seed32) {
@@ -1005,7 +1034,12 @@ export default function WalletPanel() {
                         onClick={() => (isActive ? setAccountsOpen(false) : switchTo(w.name))}
                         aria-current={isActive ? 'true' : undefined}>
                         <span className="nw-acc-name">{w.name}</span>
-                        <span className="nw-acc-addr nw-mono">{shortAddr(w.pubkey, 6)}</span>
+                        <span className="nw-acc-meta">
+                          <span className="nw-mono">{shortAddr(w.pubkey, 6)}</span>
+                          <span className="nw-acc-bal">
+                            {accountBalanceLine(switchBalances[w.name])}
+                          </span>
+                        </span>
                       </button>
                       {isActive ? (
                         <span className="nw-badge ok">active</span>
@@ -1657,6 +1691,15 @@ function EmptyState({ text }) {
       )}
     </div>
   );
+}
+
+// One line per wallet in the switcher. "not on chain yet" is a real state (a
+// fresh address is invisible until its first deposit), not a failure.
+function accountBalanceLine(entry) {
+  if (!entry || entry.kind === 'loading') return '…';
+  if (entry.kind === 'missing') return 'not on chain yet';
+  if (entry.kind === 'unavailable') return 'balance unavailable';
+  return `${formatExactBalance(entry.value)} NSAT`;
 }
 
 function shortAddr(addr, keep = 8) {
