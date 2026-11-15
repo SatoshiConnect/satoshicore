@@ -288,3 +288,21 @@ browser 430×932 (/  local)                    gate มีสองปุ่ม,
 ```
 
 หมายเหตุ: รอบนี้ **deploy ขึ้น production แล้ว** (2026-11-16, `741b2c7`); ยังไม่ทดสอบ Google OAuth จริง (sign-in/sign-out round trip), ยังไม่ได้ทดสอบ account switching ด้วยกระเป๋าจริงสองใบ และยังไม่ได้คลิก restore ผ่าน UI (ยืนยันด้วย unit test)
+
+## 9. Tranche 2026-11-16 — แชทเข้ารหัส + โปรไฟล์ (deploy ขึ้นโดเมนจริง)
+
+| รายการ | สถานะ | หลักฐาน / หมายเหตุ |
+|---|---|---|
+| แชท E2E ระหว่างกระเป๋า | **IMPLEMENTED + TESTED (local), NOT ENABLED** | `lib/e2eChat.js` (คีย์จาก seed = libsodium `crypto_sign_ed25519_sk_to_curve25519`, อ้าง vector จาก PyNaCl), `services/api-gateway/chat-relay.mjs` (เก็บเฉพาะ ciphertext, auth ด้วยลายเซ็นกระเป๋า), `lib/chatClient.js`, `components/ChatPanel.js`; `tests/e2e-chat.test.mjs` 6/6, `chat-relay` 5/5, `chat-client` 5/5; สาธิตจริง: UI ส่ง → relay 200 → seed ผู้รับถอดได้ข้อความเดิม, `strings` บน DB ไม่พบ plaintext; **ปิดอยู่** เพราะ relay ต้อง `NSAT_CHAT_RELAY=1` + restart gateway (ยังไม่อนุมัติ) — web build นี้ไม่ตั้ง `NEXT_PUBLIC_CHAT_RELAY` จึงไม่มีปุ่ม Messages |
+| โปรไฟล์: ID ของตัวเอง + อีเมล verified + กระเป๋าหลัก | **DEPLOYED (UI), BLOCKED ON RULES** | `lib/profile.js`, `components/ProfileCard.js`, `firestore.rules` (`profiles/{uid}`, `profileIds/{id}`); `tests/profile.test.mjs` 12/12; build นี้ live ที่ `d06138d` — ทดสอบบน production ด้วยบัญชีจริงแล้ว: การ์ดขึ้นอีเมล `verified`, มี ID + primary wallet ให้เลือก, และเมื่อกดสร้าง **rules ที่ publish อยู่ปฏิเสธ** (`permission-denied` → ข้อความ "The database refused this change") ไม่มีอะไรถูกเขียน — ต้อง publish `firestore.rules` ฉบับใหม่ใน Firebase console ก่อนใช้งานจริง |
+| เปลี่ยน ID / แสดง `@id` บนหน้ากระเป๋า | **DEPLOYED** | `renameProfileIdIn()` (จองใหม่ → เขียน → คืน ID เก่า; ล้มเหลว = คืน ID ใหม่และคงของเดิม) และปุ่ม `@id` ข้าง address; เทสต์ 2 เคสใน `tests/profile.test.mjs` |
+
+```
+cd .deploy-d06138d && NEXT_PUBLIC_API_SAME_ORIGIN=1 npm run build   ✓ exit 0
+npm test (ใน worktree ที่ build แล้ว)                               ✓ exit 0, 160 ✔, 0 failing
+node scripts/verify-deployed-site.mjs https://satoshicore.org       ✓ 8 passed / 0 failed, 2 advisory
+live index.html sha256 = 117bdf36…6aa114 (ตรงกับ out/index.html)
+9 routes: / /wallet/ /docs/ /explorer/ /dashboard/ /status/ /privacy/ /terms/ /download/ → 200
+```
+
+หมายเหตุ: deploy ใช้ symlink swap (`satoshicore-webroot` → `satoshicore-webroot-profile-d06138d`); rollback = `ln -sfn satoshicore-webroot-notices-persist-94ab5ed ~/nsat-ops/satoshicore-webroot`. บน macOS ต้องใช้ `ln -sfn` (ไม่ใช่ `mv` ทับ symlink ที่ชี้ไปโฟลเดอร์). ยังไม่มีอะไรถูกเขียนลงฐานข้อมูลจากรอบนี้; console มี 429 จาก gateway rate limit (120/min/IP) เพราะเปิดหลายแท็บ ไม่ใช่จาก build ใหม่.
