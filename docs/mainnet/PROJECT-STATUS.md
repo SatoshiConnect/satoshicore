@@ -33,6 +33,18 @@ Commit ล่าสุดของรอบนี้: `e013e06` (ก่อน tr
 | ไม่ได้แตะ | Mainnet/genesis/ledger/validator/คีย์จริง, DNS, Caddy config, ไม่มีธุรกรรมใด ๆ |
 | ยังไม่ deploy | `6f2e7cd` (session idle limit 30 วัน) — รออนุมัติแยก |
 
+### Deploy 2026-11-16 (รอบสี่) — แจ้งเตือนการโอน (commit `94ab5ed`)
+
+| รายการ | ค่า |
+|---|---|
+| Commit ที่ build | `94ab5ed` — รวม `d5f24e7` (แจ้งเตือนการโอนทั้งสองฝั่ง) และ `94ab5ed` (เก็บรายการข้ามการล็อกใน `sessionStorage`) |
+| สิ่งที่เปลี่ยน | Activity มีการ์ด "Transfer notices" และ toast ต่อการโอนที่เลดเจอร์ยืนยันแล้ว; รายการผูกกับ address และเก็บไว้ 20 รายการต่อแท็บ; ผู้ใช้เห็นย้อนหลังได้หลังปลดล็อกอีกครั้ง |
+| Caddy root | `satoshicore-webroot-notices-persist-94ab5ed` |
+| Rollback | `satoshicore-webroot-transfer-notices-d5f24e7`, `satoshicore-webroot-mint-visibility-a795d5c`, `satoshicore-webroot-wallet-security-741b2c7` |
+| หลักฐาน | `index.html` sha256 `f6fa0c532b14ebc83cf72b24dfae6708f1926a7b5f5f78f58aa6e26967c92b1e` ตรงกับไฟล์ที่เสิร์ฟ (`cmp`); 9 routes 200; `verify:deployed` 8 passed / 0 failed (2 advisory); bundle มี `Transfer notices` และ `nsat-notices-v1`; แท็บที่ลงชื่ออยู่ยังเปิด wallet ได้ (ไม่โดน gate) |
+| หมายเหตุ ops | ระหว่างตรวจพบ HTTP 429 จาก gateway (`/api/v1/chain/info`, `/health`) เพราะเปิดหลายแท็บพร้อมกันจนเกิน 120 req/min ต่อ IP (wallet poll ประมาณ 15 req/min ต่อแท็บ); เมื่อหมดหน้าต่าง 60 วินาทีกลับมา 200 ทั้งคู่ — ไม่ใช่ gateway ล่ม แต่ควรลดจำนวนแท็บหรือปรับ `RATE_MAX_REQUESTS` ถ้าใช้งานหลายแท็บจริง |
+| ยังไม่ได้ทดสอบ | การโอนจริงบน Mainnet (ห้ามส่งตาม directive) — ยืนยันด้วย stub indexer ในเครื่องและ unit test 12/12 |
+
 ### Deploy 2026-11-16 (รอบสาม) — mint status เฉพาะกระเป๋าที่เกี่ยวข้อง (commit `a795d5c`)
 
 | รายการ | ค่า |
@@ -261,7 +273,7 @@ Chrome 157.0.8103.52 (โปรไฟล์ใหม่, ไม่ headless) ก
 | นโยบายหมดอายุ session ที่จำไว้บนเครื่อง | **IMPLEMENTED + VERIFIED (unit test)** | `lib/sessionPolicy.js`: เก็บเฉพาะ `{uid, lastSeenAt}`; ไม่ได้ใช้ 30 วัน → จบ session บนเบราว์เซอร์นี้และแจ้งที่ gate (อ่านซ้ำได้ ไม่หายตอน mount ซ้อน) แล้วล้างเมื่อ sign-in สำเร็จ; record ที่อ่านไม่ได้/หายไป **ไม่**ทำให้ถูกบังคับ sign-in; เทสต์ `tests/session-policy.test.mjs` 8/8 |
 | ลำดับการตรวจสิทธิ์ก่อนถอดรหัส keystore | **FIXED + DEPLOYED (2026-11-16, `741b2c7`)** | พบว่า `unlockWithPassword()` ถอดรหัสก่อนแล้วค่อยหา entry และไม่ปฏิเสธเมื่อไม่พบ → ย้ายไปที่ `visibleWalletNamed()` **ก่อน** `keystoreUnlock()`; เทสต์ `an unlock request resolves only wallets this session may see` |
 | Restore keystore ต้องไม่ทำกุญแจหาย | **FIXED + DEPLOYED (`741b2c7`)** | เดิม `keystoreRestore()` เขียนทับทั้ง keystore ทำให้ wallet ที่สร้างหลัง backup หายถาวร → เปลี่ยนเป็น merge (เพิ่ม/ใช้ entry เมื่อกุญแจเดียวกัน/รายงาน conflict เมื่อชื่อซ้ำแต่กุญแจต่าง); เทสต์ใน `tests/keystore.test.mjs` (13/13) และเพิ่มไฟล์นี้เข้า `npm test` |
-| แจ้งเตือนการโอนสำหรับผู้ส่งและผู้รับ | **เสร็จใน branch + deploy แล้ว (`d5f24e7`, 2026-11-16) — persistence รอ commit ถัดไป** | ใช้ row ที่ indexer commit หลังแนบผลเลดเจอร์ (มีให้ทั้ง source และ destination) → toast + การ์ด "Transfer notices" ใน Activity; dedupe ต่อ address+hash, ไม่ประกาศรายการที่เก่ากว่าที่กระเป๋ารู้อยู่แล้ว; เทสต์ `tests/transfer-notice.test.mjs` 10/10 + ตรวจในเบราว์เซอร์ด้วย stub indexer (5 รายการ → 5 แจ้งเตือน ไม่ซ้ำ) — **ไม่มีแชต/ข้ามเครื่อง** ตาม `docs/TRANSFER-NOTICES.md` |
+| แจ้งเตือนการโอนสำหรับผู้ส่งและผู้รับ | **FIXED + DEPLOYED (`94ab5ed`, 2026-11-16)** | ใช้ row ที่ indexer commit หลังแนบผลเลดเจอร์ (มีให้ทั้ง source และ destination) → toast + การ์ด "Transfer notices" ใน Activity; dedupe ต่อ address+hash, ไม่ประกาศรายการที่เก่ากว่าที่กระเป๋ารู้อยู่แล้ว; เทสต์ `tests/transfer-notice.test.mjs` 10/10 + ตรวจในเบราว์เซอร์ด้วย stub indexer (5 รายการ → 5 แจ้งเตือน ไม่ซ้ำ) — **ไม่มีแชต/ข้ามเครื่อง** ตาม `docs/TRANSFER-NOTICES.md` |
 | Mint status แสดงเฉพาะกระเป๋าที่เกี่ยวข้อง | **FIXED + DEPLOYED (`a795d5c`, 2026-11-16)** | Founder Mint เครดิตบัญชีปลายทางเดียว (`GDAIL…QB55` ใน `nsat-core/src/ledger/NSATFounderMint.cpp`) → `lib/mintVisibility.js` + `seesMintStatus()` ใช้ทั้งการซ่อนการ์ดใน Activity และการไม่ยิง request `getMintStatus()` สำหรับกระเป๋าที่ไม่เกี่ยว; เทสต์ `tests/mint-visibility.test.mjs` (3/3, ตรวจตรงกับค่าคงที่ใน core) |
 | Disclosure ของ Google Drive backup / export | **FIXED + DEPLOYED (`741b2c7`)** | การ์ดและ `/privacy/` ระบุว่าไฟล์มีชื่อ wallet + public address อ่านได้ (seed เป็น ciphertext); toast ของ export บอกจำนวน wallet ที่ซ่อนอยู่ในไฟล์ |
 | ข้อจำกัด: wallet ที่ผูกบัญชีแล้วใช้งานแบบไม่มีบัญชีไม่ได้ | **KNOWN LIMITATION (by design)** | เมื่อผูกบัญชีแล้วและบัญชีไม่ได้ลงชื่อบนเบราว์เซอร์นี้ wallet จะถูกซ่อนจนกว่าจะลงชื่อกลับ (ไม่มี UI ปลด binding นอกจากลบ wallet) — ปลอดภัยกับเครื่องร่วม แต่ต้องแจ้งเจ้าของว่าเป็นพฤติกรรมที่ตั้งใจ |
