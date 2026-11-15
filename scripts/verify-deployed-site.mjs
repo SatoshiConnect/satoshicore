@@ -102,11 +102,15 @@ async function main() {
     assert(status === 200, `GET / returned HTTP ${status}`);
     assert(isHtml(type), `GET / served ${type || 'no content-type'} instead of HTML`);
     assert(body.includes('nw-root'), 'homepage does not render the wallet shell');
-    assert(body.includes('Create a New Wallet'), 'homepage has no create-wallet action');
-    assert(body.includes('Import Existing Wallet'), 'homepage has no import action');
+    // Using the wallet starts with a Google sign-in, so a signed-out visitor
+    // gets the wallet's own gate. The create/import forms are client-side and
+    // must not be served to a browser that has not signed in.
+    assert(body.includes('Sign in to start'), 'signed-out homepage is missing the sign-in gate');
+    assert(!body.includes('Create a New Wallet'), 'wallet forms are served before sign-in');
+    assert(!body.includes('Import Existing Wallet'), 'wallet import is served before sign-in');
     assert(/href="[^"]*\/download\/?"/.test(body), 'homepage has no extension download action');
     assert(!body.includes('Open NSAT Wallet'), 'the old landing CTA is still being served');
-    return 'wallet-first homepage served';
+    return 'wallet-first homepage served, signed out at the gate';
   });
 
   await check('Wallet page renders', page('/wallet/'));
