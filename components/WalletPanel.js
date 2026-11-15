@@ -2602,6 +2602,11 @@ function ActivityPage({ history, activeName, chain, notices, chatEnabled, onOpen
           <ul className="nw-tx-list" style={{ marginTop: 10 }}>
             {chainItems.map((item) => (
               <li key={historyKey(item)} className="nw-tx-row">
+                {explorerHrefFor(item.hash) ? (
+                  <a className="nw-tx-open" href={explorerHrefFor(item.hash)}
+                    target="_blank" rel="noreferrer"
+                    aria-label={`Open transaction ${item.hash} in the chain explorer (new tab)`} />
+                ) : null}
                 <div className={'nw-tx-dir ' + (item.direction === 'out' ? 'sent' : 'rec')}>
                   {item.direction === 'out' ? '↗' : '↙'}</div>
                 <div style={{ flex: 1 }}>
@@ -2617,6 +2622,7 @@ function ActivityPage({ history, activeName, chain, notices, chatEnabled, onOpen
                   {String(item.hash || '') && (
                     <div className="nw-small nw-dim nw-mono">
                       {`${String(item.hash).slice(0, 10)}…${String(item.hash).slice(-8)}`}
+                      {explorerHrefFor(item.hash) ? <span className="nw-tx-go">explorer ↗</span> : null}
                     </div>
                   )}
                 </div>
@@ -2664,6 +2670,11 @@ function ActivityPage({ history, activeName, chain, notices, chatEnabled, onOpen
           <ul className="nw-tx-list" style={{ marginTop: 10 }}>
             {localOnly.map((h, i) => (
               <li key={`${h.txhash || 'row'}-${i}`} className="nw-tx-row">
+                {explorerHrefFor(h.txhash) ? (
+                  <a className="nw-tx-open" href={explorerHrefFor(h.txhash)}
+                    target="_blank" rel="noreferrer"
+                    aria-label={`Open transaction ${h.txhash} in the chain explorer (new tab)`} />
+                ) : null}
                 <div className={'nw-tx-dir ' + (h.dir === 'sent' ? 'sent' : 'rec')}>
                   {h.dir === 'sent' ? '↗' : '↙'}</div>
                 <div style={{ flex: 1 }}>
@@ -2678,6 +2689,12 @@ function ActivityPage({ history, activeName, chain, notices, chatEnabled, onOpen
                     <div className="nw-small nw-dim">result {h.result_code}{h.evidence ? ` · ${h.evidence}` : ''}</div>
                   )}
                   {h.reason && <div className="nw-small nw-dim">reason {h.reason}</div>}
+                  {explorerHrefFor(h.txhash) ? (
+                    <div className="nw-small nw-dim nw-mono">
+                      {`${String(h.txhash).slice(0, 10)}…${String(h.txhash).slice(-8)}`}
+                      <span className="nw-tx-go">explorer ↗</span>
+                    </div>
+                  ) : null}
                 </div>
                 <div style={{ textAlign: 'right' }}>
                   {fmtGroup(h.amount)} NSAT
@@ -2869,4 +2886,14 @@ function accountBalanceLine(entry) {
 function shortAddr(addr, keep = 8) {
   if (!addr) return '—';
   return addr.length <= keep * 2 + 3 ? addr : `${addr.slice(0, keep)}…${addr.slice(-4)}`;
+}
+
+// The explorer accepts an account ID or a transaction hash as `?q=`. Only a
+// well-formed hash is offered as a link: a local row that never got one (or a
+// malformed index row) would otherwise open the explorer on an error.
+const EXPLORER_HASH_RE = /^[0-9a-f]{64}$/i;
+
+function explorerHrefFor(hash) {
+  const value = String(hash || '').trim();
+  return EXPLORER_HASH_RE.test(value) ? `/explorer/?q=${value.toLowerCase()}` : '';
 }

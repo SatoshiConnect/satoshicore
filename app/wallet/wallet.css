@@ -1161,8 +1161,23 @@ body:has(.nw-root) .site-footer {
   display: flex; align-items: center; gap: 14px;
   padding: 12px 4px; border-bottom: 1px solid var(--row-border);
   cursor: default; border-radius: 10px;
+  /* Rows that carry a transaction hash are clickable as a whole: the anchor
+   * below is stretched over the row so the target is the whole line, not an
+   * 12px word. */
+  position: relative;
 }
 .nw-tx-row:last-child { border-bottom: none; }
+.nw-tx-row:has(.nw-tx-open) { cursor: pointer; }
+.nw-tx-row:has(.nw-tx-open):hover { background: var(--hover); }
+.nw-tx-open { position: absolute; inset: 0; border-radius: 10px; z-index: 1; }
+.nw-tx-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* The row's own controls must stay above the stretched link, or "Check ledger"
+ * would be swallowed by it. */
+.nw-tx-row button { position: relative; z-index: 2; }
+.nw-tx-go {
+  margin-left: 8px; font-family: inherit; white-space: nowrap;
+  color: var(--link);
+}
 .nw-tx-dir {
   width: 34px; height: 34px; border-radius: 10px;
   display: grid; place-items: center; font-weight: 600; flex-shrink: 0;

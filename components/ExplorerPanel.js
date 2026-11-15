@@ -89,6 +89,25 @@ export default function ExplorerPanel() {
     [walletReady]
   );
 
+  // Arriving from a wallet row with `?q=<hash>` (or an account) should show the
+  // result, not an empty search box the person has to fill in again. Read from
+  // location rather than useSearchParams so the static export needs no Suspense
+  // boundary, and only ever use a value the field would accept anyway.
+  useEffect(() => {
+    const raw = new URLSearchParams(window.location.search).get('q');
+    const value = String(raw || '').trim();
+    if (ACCOUNT_RE.test(value)) {
+      setQuery(value);
+      load({ kind: 'account', value });
+    } else if (HASH_RE.test(value)) {
+      setQuery(value);
+      load({ kind: 'tx', value });
+    }
+    // Intentionally once per navigation: re-running on `load` would repeat the
+    // request every time the wallet-ready flag settles.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   function submit(event) {
     event.preventDefault();
     const value = query.trim();
