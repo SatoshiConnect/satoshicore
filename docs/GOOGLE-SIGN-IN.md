@@ -42,14 +42,17 @@ production build environment before deploying.
 The Firebase SDK uses browser-session auth persistence; signing out or closing
 the browser session ends the website login. Firebase/Google process the Google
 account ID and basic profile data needed for sign-in. SatoshiCore does not read
-Gmail, request mailbox permission, or send wallet addresses, balances, history,
-seed, or password to Firebase. The site does not use the Firebase user identity
-to authorize wallet signing or wallet access.
+Gmail, request mailbox permission, or send the wallet name, balances, history,
+seed or password to Firebase. A public wallet address is stored only if the user
+explicitly links one (below). The site never uses the Firebase user identity to
+authorize signing: a signature still requires the local encrypted keystore and
+its password.
 
-Signing in writes nothing by itself. No wallet data is ever written to Firestore,
-Realtime Database, Cloud Storage, or a SatoshiCore backend: the only client-writable
-document is the opt-in theme entry below. This login is not a security boundary for
-private wallet data and must not be described as wallet recovery.
+Signing in writes nothing by itself. No wallet key material is ever written to
+Firestore, Realtime Database, Cloud Storage, or a SatoshiCore backend. The only
+client-writable documents are the two opt-in entries below: the theme, and
+optionally one public address. This login is not a security boundary for private
+wallet data and must not be described as wallet recovery.
 
 ## Optional theme sync
 
@@ -81,6 +84,33 @@ Rules are enforced by the database, not the page, so a modified client still
 cannot read another account's document or add fields. If the database or rules
 are missing, the toggle reports that sync could not be changed and the wallet is
 unaffected — the theme keeps working locally.
+
+## Optional watch-only address link
+
+Settings → Website account has a **Wallet address** control, separate from theme
+sync and off by default. Linking writes exactly one document:
+
+```
+walletLinks/{googleAuthUid} = { address: "G…" }
+```
+
+What it is for: after signing in with Google on another device, that device can
+show the address's balance and receive screen without holding a key. What it is
+not: an address is public, it proves nothing about ownership, it confers no
+spending power, and it is not a backup. Every send path still requires the
+keystore and password on the device doing the signing; a watched address is
+rendered read-only, with the Send action absent rather than failing later.
+
+The address must be a canonical 56-character account id. `firestore.rules` enforces
+the owner check plus `keys().hasOnly(['address'])` and
+`address.matches('^G[A-Z2-7]{55}$')`, so no balance, history, name, seed or
+password can be added to that document. On read, a document containing any
+additional field is ignored entirely (`lib/walletLinks.js`). Unlinking deletes
+the document and clears the local per-account flag.
+
+Deploy uses the same Firestore database and the same `firestore.rules` file; the
+`walletLinks` block must be published together with the preferences block or the
+link control reports that it could not be changed (the wallet is unaffected).
 
 ## Local verification
 

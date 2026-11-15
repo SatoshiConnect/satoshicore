@@ -176,7 +176,12 @@ test('Google sign-in disclosures, setup UI, and targeted CSP ship in the static 
   const privacy = readFileSync(join(OUT, 'privacy/index.html'), 'utf8');
   assert.match(privacy, /Google sign-in is optional/);
   assert.match(privacy, /does not request Gmail mailbox access/);
-  assert.match(privacy, /does not send wallet name, address, seed, password, balance or history/);
+  // Sign-in itself sends no wallet data; a public address is stored only when
+  // the user links one, and the disclosure has to say both things.
+  assert.match(privacy, /does not send the wallet name, seed, password, balance or history/);
+  assert.match(privacy, /a wallet address is stored only if you choose to link one/);
+  assert.match(privacy, /Linked wallet address \(optional\)/);
+  assert.match(privacy, /Wallet address link \(only when you link one\)/);
   const clientBundles = files
     .filter((f) => f.endsWith('.js'))
     .map((f) => readFileSync(f, 'utf8'))
@@ -184,6 +189,8 @@ test('Google sign-in disclosures, setup UI, and targeted CSP ship in the static 
   assert.match(clientBundles, /Website account/);
   assert.match(clientBundles, /This does not unlock, back up, or sync your NSAT wallet/);
   assert.match(clientBundles, /Google sign-in is not configured in this build yet/);
+  assert.match(clientBundles, /Watch only/);
+  assert.match(clientBundles, /sending still needs the wallet password and key on the device that signs/);
 
   const home = readFileSync(join(OUT, 'index.html'), 'utf8');
   const csp = home.match(/http-equiv="Content-Security-Policy" content="([^"]+)"/)?.[1]

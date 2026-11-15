@@ -6,6 +6,10 @@ import {
   currentTheme, disableThemeSync, enableThemeSync, pullThemeForUser,
   syncEnabledFor,
 } from '../lib/themeSync';
+import { keystoreList } from '../lib/nsatWallet';
+import {
+  linkAddressForUser, linkedAddressForCurrentUser, unlinkAddressForUser,
+} from '../lib/walletLinks';
 
 const configured = isFirebaseWebConfigured();
 
@@ -17,6 +21,8 @@ function friendlyAuthError(error) {
   return 'Google sign-in failed. Check the Firebase project settings and try again.';
 }
 
+const shortAddress = (address) => (address ? `${address.slice(0, 6)}…${address.slice(-6)}` : '');
+
 export default function GoogleAccount() {
   const [user, setUser] = useState(null);
   const [ready, setReady] = useState(!configured);
@@ -25,6 +31,16 @@ export default function GoogleAccount() {
   // Theme sync is a separate, opt-in choice; signing in alone uploads nothing.
   const [syncOn, setSyncOn] = useState(false);
   const [syncNote, setSyncNote] = useState('');
+  // Optional watch-only address link. Also separate from sign-in: nothing is
+  // stored until the user links an address here.
+  const [linked, setLinked] = useState('');
+  const [linkTarget, setLinkTarget] = useState('');
+  const [linkNote, setLinkNote] = useState('');
+  const [localWallets, setLocalWallets] = useState([]);
+
+  useEffect(() => {
+    setLocalWallets(keystoreList());
+  }, [user]);
 
   useEffect(() => {
     if (!configured) return undefined;
@@ -44,6 +60,15 @@ export default function GoogleAccount() {
         // An opted-in account brings its theme to this device. A miss just
         // leaves the local theme as it is.
         if (uid) void pullThemeForUser(uid).catch(() => {});
+        // A linked address only pre-fills the field; it is never applied to a
+        // wallet or used to sign anything.
+        if (uid) {
+          void linkedAddressForCurrentUser().then((address) => {
+            if (mounted) setLinked(address || '');
+          }).catch(() => { if (mounted) setLinked(''); });
+        } else {
+          setLinked('');
+        }
       }, () => {
         setError('Could not read the Google sign-in session.');
         setReady(true);
@@ -112,6 +137,46 @@ export default function GoogleAccount() {
     }
   }
 
+  async function linkAddress() {
+    const uid = user?.uid;
+    const target = (linkTarget || localWallets[0]?.pubkey || '').trim();
+    if (!uid) return;
+    setBusy(true);
+    setError('');
+    setLinkNote('');
+    try {
+      const saved = await linkAddressForUser(uid, target);
+      setLinked(saved);
+      setLinkTarget('');
+      setLinkNote(`Linked ${shortAddress(saved)}. Balance and receive now work on another device after Google sign-in; sending still needs this wallet's key.`);
+    } catch (err) {
+      setError(
+        /account id/.test(String(err?.message))
+          ? 'That is not a wallet address. Use the full 56-character address starting with G.'
+          : 'Could not link the address. The site database may not be configured yet.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function unlinkAddress() {
+    const uid = user?.uid;
+    if (!uid) return;
+    setBusy(true);
+    setError('');
+    setLinkNote('');
+    try {
+      await unlinkAddressForUser(uid);
+      setLinked('');
+      setLinkNote('Address unlinked and deleted from your account.');
+    } catch {
+      setError('Could not unlink the address. The site database may not be configured yet.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <section className="nw-card nw-google-account" aria-labelledby="nw-google-account-title">
       <h2 id="nw-google-account-title" style={{ color: 'var(--text)' }}>Website account</h2>
@@ -160,6 +225,62 @@ export default function GoogleAccount() {
             history, seed or password is uploaded, and turning it off deletes the entry.
           </p>
           {syncNote ? <p className="nw-small nw-dim" role="status" style={{ margin: '6px 0 0' }}>{syncNote}</p> : null}
+        </div>
+      ) : null}
+      {user ? (
+        <div className="nw-google-sync">
+          <div className="nw-kv">
+            <span className="nw-k">Wallet address</span>
+            <span className="nw-v nw-mono nw-small">{linked ? shortAddress(linked) : 'not linked'}</span>
+          </div>
+          <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
+            Optional. Stores this public address with your website account so you can see
+            its balance and receive screen after signing in on another device. An address is
+            public and cannot move funds, so this is not backup or recovery: sending still
+            needs the wallet password and key on the device that signs. No balance, history,
+            wallet name or seed is stored, and unlinking deletes the entry.
+          </p>
+          {linked ? (
+            <div className="nw-btn-row" style={{ margin: '8px 0 0' }}>
+              <button type="button" className="nw-chip-btn" onClick={unlinkAddress} disabled={busy}>
+                Unlink address
+              </button>
+            </div>
+          ) : (
+            <>
+              {localWallets.length > 0 ? (
+                <div className="nw-kv" style={{ marginTop: 8 }}>
+                  <span className="nw-k">Use</span>
+                  <span className="nw-v">
+                    <select
+                      aria-label="Wallet address to link"
+                      value={linkTarget}
+                      onChange={(e) => setLinkTarget(e.target.value)}>
+                      <option value="">{`${localWallets[0].name} (this device)`}</option>
+                      {localWallets.slice(1).map((w) => (
+                        <option key={w.name} value={w.pubkey}>{w.name} (this device)</option>
+                      ))}
+                    </select>
+                  </span>
+                </div>
+              ) : (
+                <input
+                  type="text"
+                  spellCheck={false}
+                  aria-label="Public wallet address to link"
+                  placeholder="G… public address"
+                  value={linkTarget}
+                  onChange={(e) => setLinkTarget(e.target.value)}
+                  style={{ marginTop: 8 }} />
+              )}
+              <div className="nw-btn-row" style={{ margin: '8px 0 0' }}>
+                <button type="button" className="nw-chip-btn" onClick={linkAddress} disabled={busy}>
+                  Link address
+                </button>
+              </div>
+            </>
+          )}
+          {linkNote ? <p className="nw-small nw-dim" role="status" style={{ margin: '6px 0 0' }}>{linkNote}</p> : null}
         </div>
       ) : null}
     </section>

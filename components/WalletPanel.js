@@ -17,6 +17,8 @@ import { decodeSeed } from '../lib/nsatCodec';
 // source of truth for WHY a send is blocked; see NSAT-WALLET-BUTTON-STATES).
 import { sendPreflight, maxSendable, fmtGroup } from '../lib/nsatSendPreflight';
 import { startBalanceRefresh } from '../lib/walletBalanceRefresh.mjs';
+import { isFirebaseWebConfigured, loadGoogleAuth } from '../lib/firebaseAuth';
+import { pullLinkedAddressForUser } from '../lib/walletLinks';
 import GoogleAccount from './GoogleAccount';
 
 // Full transactional Web Wallet rendered in the ORIGINAL DESKTOP WALLET
@@ -91,6 +93,10 @@ export default function WalletPanel() {
   const [active, setActive] = useState(null);    // { name, pubkey, seed32 }
   const [balance, setBalance] = useState(null);  // exact stroops string
   const [funded, setFunded] = useState(null);    // true / false / unknown
+  // Watch-only: a PUBLIC address linked to the signed-in website account. It
+  // shows a balance and a receive screen on a device with no key, and can do
+  // nothing else — there is no seed here, so nothing can be signed.
+  const [watch, setWatch] = useState(null);      // { address } | null
   // ui
   const [page, setPage] = useState('overview');
   const [busy, setBusy] = useState(false);
@@ -258,8 +264,35 @@ export default function WalletPanel() {
     if (active) {
       void refreshBalance(active.pubkey);
       setHistory(historyLoad(active.name));
+    } else if (watch) {
+      // Read-only balance for the linked address. No key, no history of ours:
+      // this wallet never signed anything from this device.
+      void refreshBalance(watch.address);
+      setHistory([]);
     } else { setBalance(null); setHistory([]); }
-  }, [active, refreshBalance]);
+  }, [active, watch, refreshBalance]);
+
+  // Follow the website account: if it has a linked address and this device has
+  // no wallet of its own, the wallet opens in watch-only mode instead of the
+  // create/import forms. Signing in is not enough to spend anything — the link
+  // is a public pointer, and every send path still requires a local key.
+  useEffect(() => {
+    if (!SHOW_GOOGLE_ACCOUNT || !isFirebaseWebConfigured()) return undefined;
+    let alive = true;
+    let unsubscribe = () => {};
+    loadGoogleAuth().then(({ auth, authSdk }) => {
+      if (!alive) return;
+      unsubscribe = authSdk.onAuthStateChanged(auth, (user) => {
+        const uid = user?.uid || '';
+        if (!uid) { if (alive) setWatch(null); return; }
+        pullLinkedAddressForUser(uid).then((address) => {
+          if (!alive) return;
+          setWatch(address ? { address } : null);
+        }).catch(() => { /* no database yet: leave the wallet as it is */ });
+      }, () => { /* a session read failure must not break the wallet */ });
+    }).catch(() => { /* sign-in unavailable: watch-only simply stays off */ });
+    return () => { alive = false; unsubscribe(); };
+  }, []);
 
   // Recipient/sender balance notifications.
   //
@@ -607,7 +640,7 @@ export default function WalletPanel() {
             title={`${netOk ? 'Connected' : net == null ? 'Connecting…' : 'Offline'} — wallet settings`}>
             <span className="nw-tokenlogo" aria-hidden>◈</span>
             <span className="nw-account-name">
-              {active ? active.name : hasWallets ? 'Locked' : 'NSAT Wallet'}
+              {active ? active.name : hasWallets ? 'Locked' : watch ? 'Watch only' : 'NSAT Wallet'}
             </span>
             <span className={'nw-dot ' + (netOk ? 'ok' : net == null ? 'wait' : 'err')} aria-hidden />
             <span className="nw-account-chevron" aria-hidden>⌄</span>
@@ -656,7 +689,12 @@ export default function WalletPanel() {
             </form>
           )}
 
-          {page === 'overview' && (
+          {page === 'overview' && !active && wallets.length === 0 && watch && (
+            <WatchOnlyHome address={watch.address} balance={balance} funded={funded}
+              onReceive={() => setPage('receive')} onSettings={() => setPage('settings')} />
+          )}
+
+          {page === 'overview' && !(watch && !active && wallets.length === 0) && (
             <OverviewPage active={active} wallets={wallets} balance={balance} funded={funded}
               bus={{ busy, doCreate, doImport, newName, setNewName, newPass, setNewPass,
                 importSeed, setImportSeed }}
@@ -676,7 +714,7 @@ export default function WalletPanel() {
           )}
 
           {page === 'receive' && (
-            <ReceivePage activePubkey={active?.pubkey ?? ''} notify={notify} />
+            <ReceivePage activePubkey={active?.pubkey || watch?.address || ''} notify={notify} />
           )}
 
           {page === 'shielded' && <ShieldedGatePage />}
@@ -756,6 +794,56 @@ export default function WalletPanel() {
       {toast && (
         <div className={`nw-toast ${toast.kind}`} role="status">{toast.text}</div>
       )}
+    </div>
+  );
+}
+
+/* ------------------------------ Watch only ------------------------------- */
+// The address is a public pointer on the signed-in website account, so this
+// device can show the balance and the receive screen without a key. Everything
+// that needs a signature is explicitly out of reach here instead of failing
+// later: no Send button, and a plain sentence saying why.
+function WatchOnlyHome({ address, balance, funded, onReceive, onSettings }) {
+  const exact = balance == null ? '…' : formatExactBalance(balance);
+  return (
+    <div className="nw-home">
+      <section className="nw-hero">
+        <div className="nw-hero-amount">
+          {exact}
+          <span className="nw-hero-unit">NSAT</span>
+        </div>
+        <div className="nw-hero-foot">
+          <span className={'nw-badge ' + (funded === true ? 'ok' : 'warn')}>
+            {funded === true ? 'funded' : funded === false ? 'not funded yet' : 'funding unknown'}
+          </span>
+          <span className="nw-badge info">watch only</span>
+          <span className="nw-chip-btn nw-mono">{shortAddr(address, 8)}</span>
+        </div>
+      </section>
+
+      <div className="nw-quick-actions">
+        <button type="button" className="nw-action-card" onClick={onReceive}>
+          <span className="nw-action-icon" aria-hidden>▦</span>
+          <span className="nw-action-label">Receive</span>
+        </button>
+        <button type="button" className="nw-action-card" onClick={onSettings}>
+          <span className="nw-action-icon" aria-hidden>⚙</span>
+          <span className="nw-action-label">Settings</span>
+        </button>
+      </div>
+
+      <section className="nw-card">
+        <h2 style={{ color: 'var(--text)' }}>Read-only on this device</h2>
+        <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
+          This address is linked to your website account. An address is public, so it can be
+          watched, but it cannot move funds: sending needs the wallet&apos;s password and key
+          on the device that holds them.
+        </p>
+        <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
+          To send from here, restore your encrypted keystore in Settings, or open the wallet on
+          the device where it was created.
+        </p>
+      </section>
     </div>
   );
 }

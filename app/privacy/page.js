@@ -33,6 +33,11 @@ const STORED = [
     what: 'Theme and session preferences',
     where: 'localStorage / in memory · optional account copy',
     detail: 'Theme persists on this device. If you turn on theme sync with Google sign-in, only your light or dark choice is stored with your website account in Firebase; turning sync off deletes it. Wallet signing state clears when the page closes.'
+  },
+  {
+    what: 'Linked wallet address (optional)',
+    where: 'Firebase · only if you link one',
+    detail: 'The public address you choose to link to your website account, so another device can show its balance and receive screen after Google sign-in. An address is public and confers no spending power — sending still needs the wallet password and key on the device that signs. No balance, history, wallet name, seed or password is stored with it, and unlinking deletes it.'
   }
 ];
 
@@ -55,7 +60,11 @@ const TRANSMITTED = [
   },
   {
     what: 'Google sign-in (only when you choose it)',
-    why: 'Google and Firebase Authentication receive the identity data needed to authenticate your website session, such as your Google account ID, name and email. The app does not request Gmail mailbox access and does not send wallet name, address, seed, password, balance or history.'
+    why: 'Google and Firebase Authentication receive the identity data needed to authenticate your website session, such as your Google account ID, name and email. The app does not request Gmail mailbox access and does not send the wallet name, seed, password, balance or history; a wallet address is stored only if you choose to link one below.'
+  },
+  {
+    what: 'Wallet address link (only when you link one)',
+    why: 'Stores one public G… address under your own signed-in account so a device without the key can show its balance and receive screen. Only the address is written: no balance, history, wallet name, seed or password, and unlinking deletes the entry.'
   },
   {
     what: 'Theme sync (only when you turn it on)',
