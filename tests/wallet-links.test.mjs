@@ -8,6 +8,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   LINKS_COLLECTION,
+  describeLinkFailure,
+  diagnoseFirestoreProblem,
   linkDocument,
   linkEnabledFor,
   normalizeAddress,
@@ -22,6 +24,57 @@ const MODULE = readFileSync(join(process.cwd(), 'lib', 'walletLinks.js'), 'utf8'
 
 // A real-shaped account id: 'G' + 55 base32 characters.
 const ADDRESS = `G${'A'.repeat(55)}`;
+
+// A link that cannot be saved must name the reason and the page that fixes it,
+// because a deadline alone reads as "frozen" rather than "not configured".
+const reply = (status, message) => async () => ({
+  status, ok: status >= 200 && status < 300,
+  json: async () => ({ error: { message } }),
+});
+
+const CONFIG = { projectId: 'nsat-wallet-login', apiKey: 'key' };
+
+test('a disabled database is named, not reported as a timeout', async () => {
+  const { code } = await diagnoseFirestoreProblem({
+    config: CONFIG,
+    doFetch: reply(403, 'Cloud Firestore API has not been used in project nsat-wallet-login before or it is disabled.'),
+  });
+  assert.equal(code, 'FIRESTORE_API_DISABLED');
+  const dialog = describeLinkFailure(code, { projectId: CONFIG.projectId });
+  assert.match(dialog.title, /Firestore/i);
+  assert.match(dialog.fix.url, /apis\/library\/firestore\.googleapis\.com\?project=nsat-wallet-login/);
+});
+
+test('a rules denial and a missing database get their own pages', async () => {
+  const denied = await diagnoseFirestoreProblem({
+    config: CONFIG, doFetch: reply(403, 'Missing or insufficient permissions.'),
+  });
+  assert.equal(denied.code, 'FIRESTORE_REFUSED');
+  assert.match(describeLinkFailure(denied.code, { projectId: 'p' }).fix.url, /firestore\/rules/);
+
+  const missing = await diagnoseFirestoreProblem({
+    config: CONFIG, doFetch: reply(404, 'The database (default) does not exist for project p.'),
+  });
+  assert.equal(missing.code, 'FIRESTORE_NO_DATABASE');
+  assert.match(describeLinkFailure(missing.code, { projectId: 'p' }).fix.label, /Create/i);
+});
+
+test('an answering database or an offline probe keeps the timeout wording', async () => {
+  assert.equal((await diagnoseFirestoreProblem({ config: CONFIG, doFetch: reply(200, '') })).code, '');
+  assert.equal((await diagnoseFirestoreProblem({
+    config: CONFIG, doFetch: async () => { throw new Error('offline'); },
+  })).code, '');
+  const fallback = describeLinkFailure('', { projectId: 'p' });
+  assert.match(fallback.message, /Reload to check/i);
+  assert.equal(fallback.fix, undefined);
+});
+
+test('unlinking says unlinking, so the popup never misdescribes the action', () => {
+  const unlink = describeLinkFailure('FIRESTORE_API_DISABLED', { action: 'unlink', projectId: 'p' });
+  assert.match(unlink.message, /remove the linked address/i);
+  const link = describeLinkFailure('FIRESTORE_API_DISABLED', { action: 'link', projectId: 'p' });
+  assert.match(link.message, /save this address/i);
+});
 
 function fakeStore(initial = null) {
   const state = { data: initial, writes: [], removes: 0 };

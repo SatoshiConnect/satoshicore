@@ -8,7 +8,9 @@
 // and land off-view on a tall page.
 import { createPortal } from 'react-dom';
 
-export default function DriveFailureDialog({ dialog, onClose, onDownload, canDownload }) {
+export default function DriveFailureDialog({
+  dialog, onClose, onDownload, canDownload, step = 'WALLET BACKUP · GOOGLE DRIVE',
+}) {
   if (!dialog || typeof document === 'undefined') return null;
   return createPortal(
     <div className="nw-modal-back" role="presentation"
@@ -16,7 +18,7 @@ export default function DriveFailureDialog({ dialog, onClose, onDownload, canDow
       <div className="nw-modal nw-modal-alert" role="alertdialog" aria-modal="true"
         aria-labelledby="nw-drive-dialog-title" tabIndex={-1} autoFocus
         onKeyDown={(e) => { if (e.key === 'Escape') onClose(); }}>
-        <div className="nw-step">WALLET BACKUP · GOOGLE DRIVE</div>
+        <div className="nw-step">{step}</div>
         <h3 id="nw-drive-dialog-title" style={{ color: 'var(--text)' }}>{dialog.title}</h3>
         <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>{dialog.message}</p>
         <div className="nw-btn-row" style={{ margin: '14px 0 0' }}>

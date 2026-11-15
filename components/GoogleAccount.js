@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import {
-  isFirebaseWebConfigured, loadGoogleAuth, setGoogleSessionPersistence,
-  setRememberGoogleSession, shouldRememberGoogleSession,
+  getFirebaseWebConfig, isFirebaseWebConfigured, loadGoogleAuth,
+  setGoogleSessionPersistence, setRememberGoogleSession, shouldRememberGoogleSession,
 } from '../lib/firebaseAuth';
 import {
   currentTheme, disableThemeSync, enableThemeSync, pullThemeForUser,
@@ -11,8 +11,10 @@ import {
 } from '../lib/themeSync';
 import { keystoreList } from '../lib/nsatWallet';
 import {
-  linkAddressForUser, linkedAddressForCurrentUser, unlinkAddressForUser,
+  describeLinkFailure, diagnoseFirestoreProblem, linkAddressForUser,
+  linkedAddressForCurrentUser, unlinkAddressForUser,
 } from '../lib/walletLinks';
+import DriveFailureDialog from './DriveFailureDialog';
 
 const configured = isFirebaseWebConfigured();
 
@@ -38,6 +40,9 @@ export default function GoogleAccount({ variant = 'card' } = {}) {
   // Theme sync is a separate, opt-in choice; signing in alone uploads nothing.
   const [syncOn, setSyncOn] = useState(false);
   const [syncNote, setSyncNote] = useState('');
+  // A link that could not be saved says why in a dialog: the usual cause is a
+  // disabled database or a rules denial, and both have a page that fixes them.
+  const [linkDialog, setLinkDialog] = useState(null);
   // Optional watch-only address link. Also separate from sign-in: nothing is
   // stored until the user links an address here.
   const [linked, setLinked] = useState('');
@@ -195,13 +200,14 @@ export default function GoogleAccount({ variant = 'card' } = {}) {
       setLinkNote(`Linked ${shortAddress(saved)}. Balance and receive now work on another device after Google sign-in; sending still needs this wallet's key.`);
     } catch (err) {
       const message = String(err?.message || '');
-      setError(
-        /account id/.test(message)
-          ? 'That is not a wallet address. Use the full 56-character address starting with G.'
-          : /did not complete/.test(message)
-            ? 'The address was not confirmed as saved. Reload to check before relying on it; if it appears, it is linked.'
-            : 'Could not link the address. The site database may not be configured yet.',
-      );
+      if (/account id/.test(message)) {
+        setError('That is not a wallet address. Use the full 56-character address starting with G.');
+      } else {
+        // Ask the API itself rather than guessing from a deadline: a disabled
+        // database and a rules denial need different pages to fix.
+        const { code } = await diagnoseFirestoreProblem();
+        setLinkDialog(describeLinkFailure(code, { action: 'link', projectId: getFirebaseWebConfig().projectId }));
+      }
     } finally {
       setBusy(false);
     }
@@ -218,9 +224,8 @@ export default function GoogleAccount({ variant = 'card' } = {}) {
       setLinked('');
       setLinkNote('Address unlinked and deleted from your account.');
     } catch (err) {
-      setError(/did not complete/.test(String(err?.message || ''))
-        ? 'Unlinking was not confirmed. Reload to check whether it is still linked.'
-        : 'Could not unlink the address. The site database may not be configured yet.');
+      const { code } = await diagnoseFirestoreProblem();
+      setLinkDialog(describeLinkFailure(code, { action: 'unlink', projectId: getFirebaseWebConfig().projectId }));
     } finally {
       setBusy(false);
     }
@@ -385,6 +390,8 @@ export default function GoogleAccount({ variant = 'card' } = {}) {
           {linkNote ? <p className="nw-small nw-dim" role="status" style={{ margin: '6px 0 0' }}>{linkNote}</p> : null}
         </div>
       ) : null}
+      <DriveFailureDialog dialog={linkDialog} onClose={() => setLinkDialog(null)}
+        step="WEBSITE ACCOUNT · LINKED ADDRESS" />
     </section>
   );
 }
