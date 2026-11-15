@@ -27,6 +27,7 @@ import {
 } from '../lib/biometricUnlock';
 import { backupSilently } from '../lib/driveBackup';
 import { seesMintStatus } from '../lib/mintVisibility';
+import { addNotice, buildTransferNotice, isNewTransfer } from '../lib/transferNotice';
 import {
   bindOwner, unbindOwner, visibleWalletNamed, walletNameForAccount, walletsForAccount,
 } from '../lib/walletBinding';
@@ -197,11 +198,17 @@ export default function WalletPanel() {
   const [mintStatus, setMintStatus] = useState({
     phase: 'idle', data: null, timeline: [], unattributed: null, error: '',
   });
+  // Confirmed transfers this session announced, newest first. Built from the
+  // indexer's committed rows for this wallet (both directions); nothing leaves
+  // the device.
+  const [notices, setNotices] = useState([]);
 
-  const notify = (text, kind = 'ok') => {
+  // Stable identity: the event stream and other callbacks list it as a
+  // dependency, and a new function every render would reconnect the stream.
+  const notify = useCallback((text, kind = 'ok') => {
     setToast({ text, kind });
     window.setTimeout(() => setToast(null), 6000);
-  };
+  }, []);
 
   // Locking must destroy the seed bytes, not just drop the state reference:
   // an unreferenced Uint8Array is still readable until the GC runs. Reading the
@@ -210,6 +217,12 @@ export default function WalletPanel() {
   const activeRef = useRef(null);
   const lockEpoch = useRef(0);
   const pendingSeedsRef = useRef(new Set());
+  // A row the wallet already shows is not news: the stream replays from
+  // `since=0`, so the newest known ledger and the ids already announced keep a
+  // page load from reporting months of history.
+  const newestLedgerRef = useRef(0);
+  const noticesSeenRef = useRef(new Set());
+  const streamStartedRef = useRef(0);
   const lockWallet = useCallback((message) => {
     lockEpoch.current += 1;
     const current = activeRef.current;
@@ -241,6 +254,9 @@ export default function WalletPanel() {
     setHistory([]);
     setChainHistory({ phase: 'idle', items: [], total: null, coverage: null, next: null, loadingMore: false, error: '' });
     setMintStatus({ phase: 'idle', data: null, timeline: [], unattributed: null, error: '' });
+    setNotices([]);
+    noticesSeenRef.current = new Set();
+    newestLedgerRef.current = 0;
     setBalance(null);
     setReview(null);
     setAccountsOpen(false);
@@ -641,6 +657,51 @@ export default function WalletPanel() {
     return () => { cancelled = true; };
   }, [page, watchAddresses, active?.pubkey]);
 
+  // A notice belongs to one wallet. Switching the wallet, or a new watch
+  // address, starts a fresh list; the previous wallet's payments are not left
+  // on screen for the next person. What was already announced stays remembered
+  // (keyed by address), so a stream replay cannot toast the same payment twice.
+  useEffect(() => {
+    newestLedgerRef.current = 0;
+    streamStartedRef.current = Date.now();
+    setNotices([]);
+  }, [active?.pubkey, watchAddress]);
+
+  // Whatever the history already shows is not news, so it becomes the floor for
+  // the stream that replays from `since=0`.
+  useEffect(() => {
+    const newest = Number(chainHistory.items?.[0]?.ledger);
+    if (chainHistory.phase === 'ready' && Number.isFinite(newest) && newest > 0) {
+      newestLedgerRef.current = Math.max(newestLedgerRef.current, newest);
+    }
+  }, [chainHistory]);
+
+  // One notice per confirmed row, for the sender and for the recipient: the
+  // index writes the row for both accounts, and it only writes it once the
+  // ledger result is attached. A failed payment is announced as failed instead
+  // of as a payment, because only the fee moved.
+  const announceTransfer = useCallback((rawData, address) => {
+    let row = null;
+    try { row = JSON.parse(rawData || 'null'); } catch { return; }
+    if (!row || typeof row !== 'object') return;
+    const notice = buildTransferNotice(row);
+    if (!notice) return;
+    // The same ledger row can arrive more than once (an `EventSource`
+    // reconnect replays from its cursor, and a dev re-mount opens a second
+    // stream). One announcement per address per row, not one per delivery.
+    const seenKey = `${String(address || '').toUpperCase()}:${notice.id}`;
+    if (noticesSeenRef.current.has(seenKey)) return;
+    if (!isNewTransfer(row, {
+      baselineLedger: newestLedgerRef.current,
+      startedAt: streamStartedRef.current,
+    })) return;
+    noticesSeenRef.current.add(seenKey);
+    if (notice.ledger) newestLedgerRef.current = Math.max(newestLedgerRef.current, notice.ledger);
+    setNotices((current) => addNotice(current, notice));
+    notify(`${notice.title}${notice.detail ? ` — ${notice.detail}` : ''}`,
+      notice.failed ? 'err' : 'ok');
+  }, [notify]);
+
   // Recipient/sender balance notifications.
   //
   // The index emits an event for every row it COMMITS (after the ledger result
@@ -652,7 +713,9 @@ export default function WalletPanel() {
   // EventSource reconnects on its own and replays from `Last-Event-ID`, so a
   // dropped connection does not lose the transfer that caused the refresh.
   useEffect(() => {
-    const pubkey = active?.pubkey;
+    // The address on screen, unlocked or watch-only: the recipient of a payment
+    // is often watching an address they hold on another device.
+    const pubkey = active?.pubkey || watchAddress;
     if (!pubkey) return undefined;
     let closed = false;
     let stream = null;
@@ -667,7 +730,10 @@ export default function WalletPanel() {
     }
     try {
       stream = new window.EventSource(accountEventsUrl(pubkey, 0));
-      stream.addEventListener('tx', () => { void refreshBalance(pubkey); });
+      stream.addEventListener('tx', (event) => {
+        void refreshBalance(pubkey);
+        announceTransfer(event?.data, pubkey);
+      });
       stream.addEventListener('error', () => {
         // The stream is bounded (the indexer closes it after ~1 minute) and a
         // proxy can buffer it; poll until EventSource reconnects.
@@ -681,7 +747,7 @@ export default function WalletPanel() {
       if (stream) stream.close();
       stopPolling?.();
     };
-  }, [active?.pubkey, refreshBalance]);
+  }, [active?.pubkey, watchAddress, refreshBalance, announceTransfer]);
 
   // Re-check one stored transfer against the exact-hash endpoint. This never
   // upgrades a row to "confirmed" without a ledger result for that hash.
@@ -1417,6 +1483,7 @@ export default function WalletPanel() {
             <ActivityPage history={history}
               activeName={active?.name || (watchAddress ? `watch only · ${shortAddr(watchAddress, 6)}` : '')}
               chain={chainHistory}
+              notices={notices}
               onLoadOlder={loadOlderHistory}
               onRecheck={recheckTransfer} canRecheck={isIndexerConfigured()} />
           )}
@@ -2353,7 +2420,36 @@ function MintStatusCard({ mint }) {
   );
 }
 
-function ActivityPage({ history, activeName, chain, onLoadOlder, onRecheck, canRecheck }) {
+function TransferNotices({ notices }) {
+  if (!notices || notices.length === 0) return null;
+  return (
+    <section className="nw-card nw-notices" aria-labelledby="nw-notices-title">
+      <div className="nw-notices-head">
+        <h2 id="nw-notices-title">Transfer notices</h2>
+        <span className="nw-badge info">{notices.length}</span>
+      </div>
+      <p className="nw-small nw-dim" style={{ margin: '6px 0 0' }}>
+        Confirmed by the ledger for this wallet. Each notice is built on this device from the
+        indexer&rsquo;s committed row — nothing is sent to the other party or to any server.
+      </p>
+      <ul className="nw-notice-list">
+        {notices.map((notice) => (
+          <li key={notice.id} className={'nw-notice' + (notice.failed ? ' is-failed' : '')}>
+            <span className="nw-notice-dir" aria-hidden>
+              {notice.direction === 'in' ? '↙' : notice.direction === 'out' ? '↗' : '⇄'}
+            </span>
+            <div style={{ flex: 1 }}>
+              <div className="nw-notice-title">{notice.title}</div>
+              {notice.detail ? <div className="nw-small nw-dim">{notice.detail}</div> : null}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function ActivityPage({ history, activeName, chain, notices, onLoadOlder, onRecheck, canRecheck }) {
   // Anything the index already knows is shown from the index; the local list
   // keeps only what the chain has not reported yet (a transfer sent moments
   // ago, or one the node rejected before inclusion).
@@ -2373,6 +2469,7 @@ function ActivityPage({ history, activeName, chain, onLoadOlder, onRecheck, canR
   const received = chainItems.filter((item) => item.direction !== 'out').length;
   return (
     <div>
+      <TransferNotices notices={notices} />
       <section className="nw-card">
         <h2 style={{ color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           {activeName ? `On-chain activity — ${activeName}` : 'On-chain activity'}

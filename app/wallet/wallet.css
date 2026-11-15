@@ -1170,6 +1170,27 @@ body:has(.nw-root) .site-footer {
 .nw-tx-dir.sent { background: var(--danger-tint); color: var(--danger); }
 .nw-tx-dir.rec  { background: var(--ok-tint); color: var(--ok); }
 
+/* Confirmed-transfer notices: the ledger's own row, kept for this wallet. They
+ * sit above the activity list because a payment the person just received should
+ * not be something they have to find by scrolling. */
+.nw-notices-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+}
+.nw-notices-head h2 { color: var(--text); margin: 0; }
+.nw-notice-list { list-style: none; margin: 10px 0 0; padding: 0; }
+.nw-notice {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 10px 4px; border-bottom: 1px solid var(--row-border);
+}
+.nw-notice:last-child { border-bottom: none; }
+.nw-notice-dir {
+  width: 30px; height: 30px; border-radius: 9px; flex-shrink: 0;
+  display: grid; place-items: center; font-weight: 600;
+  background: var(--ok-tint); color: var(--ok);
+}
+.nw-notice.is-failed .nw-notice-dir { background: var(--warn-tint); color: var(--warn); }
+.nw-notice-title { color: var(--text); font-weight: 600; }
+
 .nw-txf { display: flex; flex-direction: column; gap: 10px; }
 .nw-row { display: flex; gap: 12px; align-items: center; }
 .nw-row > label { width: 150px; color: var(--text-dim); font-size: 13px; flex-shrink: 0; }
