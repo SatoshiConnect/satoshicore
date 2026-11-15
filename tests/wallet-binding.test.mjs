@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  bindOwner, normalizeAccount, ownerOf, unbindOwner, walletNameForAccount,
+  bindOwner, normalizeAccount, ownerOf, unbindOwner, visibleWalletNamed, walletNameForAccount,
   walletsForAccount,
 } from '../lib/walletBinding.js';
 
@@ -54,6 +54,26 @@ test('standalone mode never lists a wallet that belongs to another account', () 
   // A build with no Google sign-in has no accounts to hide.
   assert.deepEqual(walletsForAccount(wallets, '', { signInRequired: false }).map((w) => w.name), ['Mine', 'Theirs', 'Loose']);
   assert.deepEqual(walletsForAccount(null, '', { signInRequired: true }), []);
+});
+
+// The unlock path resolves the wallet it is about to decrypt through this
+// helper, so a hidden wallet must resolve to nothing even with the exact name.
+test('an unlock request resolves only wallets this session may see', () => {
+  globalThis.localStorage = memoryStorage();
+  bindOwner('Mine', 'me@example.com');
+  bindOwner('Theirs', 'other@example.com');
+  const wallets = [{ name: 'Mine', pubkey: 'G-MINE' }, { name: 'Theirs', pubkey: 'G-THEIRS' }, { name: 'Loose', pubkey: 'G-LOOSE' }];
+
+  // Standalone on a build with Google: the other account's wallet is invisible.
+  assert.equal(visibleWalletNamed(wallets, '', 'Theirs', { signInRequired: true }), null);
+  assert.equal(visibleWalletNamed(wallets, '', 'Mine', { signInRequired: true }), null);
+  assert.deepEqual(visibleWalletNamed(wallets, '', 'Loose', { signInRequired: true }), { name: 'Loose', pubkey: 'G-LOOSE' });
+
+  // Signed in as the owner: its own wallet resolves, the other account's does not.
+  assert.deepEqual(visibleWalletNamed(wallets, 'me@example.com', 'Mine', { signInRequired: true }), { name: 'Mine', pubkey: 'G-MINE' });
+  assert.equal(visibleWalletNamed(wallets, 'me@example.com', 'Theirs', { signInRequired: true }), null);
+  assert.equal(visibleWalletNamed(wallets, '', 'Nope', { signInRequired: true }), null);
+  assert.equal(visibleWalletNamed(wallets, '', '', { signInRequired: true }), null);
 });
 
 test('an empty account or name is never bound', () => {

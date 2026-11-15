@@ -27,7 +27,7 @@ import {
 } from '../lib/biometricUnlock';
 import { backupSilently } from '../lib/driveBackup';
 import {
-  bindOwner, unbindOwner, walletNameForAccount, walletsForAccount,
+  bindOwner, unbindOwner, visibleWalletNamed, walletNameForAccount, walletsForAccount,
 } from '../lib/walletBinding';
 import GoogleAccount from './GoogleAccount';
 import DriveBackupCard from './DriveBackupCard';
@@ -792,6 +792,15 @@ export default function WalletPanel() {
   // produces replaces any previous one through activateWallet(), which wipes
   // the previous seed first.
   async function unlockWithPassword(name, password) {
+    // Visibility is decided BEFORE any decryption. A wallet that belongs to
+    // another account stays hidden even when its name is typed exactly: the
+    // request is refused while it is still just a name, so no seed is ever
+    // unwrapped for a wallet this session may not use.
+    const entry = visibleWalletNamed(keystoreList(), accountEmail, name, { signInRequired });
+    if (!entry) {
+      notify('That wallet is not available in this session. Sign in with the account it belongs to, or check the name.', 'err');
+      return false;
+    }
     const operationEpoch = lockEpoch.current;
     setBusy(true);
     try {
@@ -800,11 +809,9 @@ export default function WalletPanel() {
         zeroSeed(seed32);
         return false;
       }
-      // Only a wallet this account may see can be unlocked: another account's
-      // wallet stays hidden even if its name is guessed.
-      const list = visibleWallets();
-      const entry = list.find(w => w.name === name);
-      activateWallet({ name, pubkey: entry?.pubkey, seed32 });
+      // The keystore's own integrity check proves the decrypted seed belongs to
+      // this entry's address, so the visible address is the one we sign with.
+      activateWallet({ name, pubkey: entry.pubkey, seed32 });
       notify(`Wallet "${name}" unlocked.`, 'ok');
       return true;
     } catch (err) {
@@ -1212,8 +1219,9 @@ export default function WalletPanel() {
     && BigInt(amount.replace(/[,_ ]/g, '') || '0') > 0n;
   const destOk = ACCOUNT_RE.test(dest.trim()) && dest.trim() !== active?.pubkey;
   const hasWallets = wallets.length > 0;
-  // Wallets still encrypted on this device but bound to another Google account:
-  // they are not listed, and the unlock form says so instead of looking empty.
+  // Wallets still encrypted on this device but bound to a Google account that is
+  // not signed in here: they are not listed, and the unlock form says so instead
+  // of looking empty.
   const hiddenWallets = Math.max(0, keystoreList().length - wallets.length);
 
   const ledger = net?.ledger ?? null;
@@ -1317,7 +1325,8 @@ export default function WalletPanel() {
               {hiddenWallets > 0 && (
                 <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
                   {`${hiddenWallets} wallet${hiddenWallets === 1 ? '' : 's'} on this device `
-                    + 'belong to another Google account and stay hidden until that account signs in. Nothing was deleted.'}
+                    + 'belong to a Google account that is not signed in on this browser, and stay hidden '
+                    + 'until it signs in. Nothing was deleted.'}
                 </p>
               )}
               {unlockName && biometricWallets.includes(unlockName) ? (
