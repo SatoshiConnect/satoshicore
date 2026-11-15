@@ -1355,6 +1355,47 @@ label.nw-chip-btn {
 }
 label.nw-chip-btn:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+/* iPhone 14 Pro Max typography (430pt CSS viewport).
+ * Use the native iOS system face already selected by .nw-root, with a clear
+ * SF-style hierarchy: large titles for sections, 17pt body copy, and a more
+ * legible floor for metadata. This only changes the portrait phone scale; the
+ * tablet/desktop preview and landscape compact layout keep their existing size. */
+@media (max-width: 440px) {
+  .nw-root {
+    font-size: 17px;
+    letter-spacing: -0.015em;
+    line-height: 1.4;
+  }
+
+  .nw-root h1 { font-size: 28px; line-height: 1.14; font-weight: 600; }
+  .nw-root h2 { font-size: 22px; line-height: 1.2; font-weight: 600; }
+  .nw-root h3 { font-size: 20px; line-height: 1.25; }
+  .nw-root .nw-section-title { font-size: 22px; line-height: 1.2; }
+  .nw-root .nw-page-lead { font-size: 15px; line-height: 1.4; }
+
+  .nw-root .nw-small,
+  .nw-root .nw-label,
+  .nw-root .nw-row > label,
+  .nw-root .nw-kv .nw-k {
+    font-size: 14px;
+    line-height: 1.4;
+  }
+
+  .nw-root .nw-account-pill { font-size: 15px; }
+  .nw-root .nw-asset-name,
+  .nw-root .nw-signin-row-title { font-size: 16px; }
+  .nw-root .nw-asset-sub { font-size: 13px; }
+  .nw-root .nw-asset-value { font-size: 15px; }
+  .nw-root .nw-badge { font-size: 13px; }
+  .nw-root .nw-navitem { font-size: 12px; }
+  .nw-root .nw-navlabel { font-size: 11px; }
+  .nw-root .nw-chip-btn { font-size: 13px; }
+  .nw-root .nw-send-btn,
+  .nw-root .nw-ghost-btn,
+  .nw-root .nw-danger-btn { font-size: 16px; }
+  .nw-root .nw-kv { gap: 12px; }
+}
+
 /* ----------------------------- Light theme -------------------------------
  * The wallet is also bundled into the extension popup, which loads this file
  * WITHOUT globals.css — so the palette has to live here too. Same token names,
