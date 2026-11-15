@@ -2612,7 +2612,15 @@ function ActivityPage({ history, activeName, chain, notices, chatEnabled, onOpen
                 <div style={{ flex: 1 }}>
                   <div>
                     {item.direction === 'out' ? 'To' : 'From'}{' '}
-                    <span className="nw-mono">{shortAddr(item.counterparty)}</span>{' '}
+                    {explorerAccountHref(item.counterparty) ? (
+                      <a className="nw-mono nw-addr-link" href={explorerAccountHref(item.counterparty)}
+                        target="_blank" rel="noreferrer"
+                        title={`Open ${item.counterparty} in the chain explorer`}>
+                        {shortAddr(item.counterparty)}
+                      </a>
+                    ) : (
+                      <span className="nw-mono">{shortAddr(item.counterparty)}</span>
+                    )}{' '}
                     <span className={'nw-badge ' + (item.success ? 'ok' : 'err')}>
                       {item.success ? 'confirmed' : (item.result_code || 'failed')}</span>
                   </div>
@@ -2680,7 +2688,15 @@ function ActivityPage({ history, activeName, chain, notices, chatEnabled, onOpen
                 <div style={{ flex: 1 }}>
                   <div>
                     {h.dir === 'sent' ? 'To' : 'Received'}{' '}
-                    <span className="nw-mono">{shortAddr(h.to)}</span>{' '}
+                    {explorerAccountHref(h.to) ? (
+                      <a className="nw-mono nw-addr-link" href={explorerAccountHref(h.to)}
+                        target="_blank" rel="noreferrer"
+                        title={`Open ${h.to} in the chain explorer`}>
+                        {shortAddr(h.to)}
+                      </a>
+                    ) : (
+                      <span className="nw-mono">{shortAddr(h.to)}</span>
+                    )}{' '}
                     <span className={'nw-badge ' + (h.status === 'confirmed' ? 'ok' : h.status === 'failed' ? 'err' : 'warn')}>
                       {h.status}</span>
                   </div>
@@ -2892,8 +2908,17 @@ function shortAddr(addr, keep = 8) {
 // well-formed hash is offered as a link: a local row that never got one (or a
 // malformed index row) would otherwise open the explorer on an error.
 const EXPLORER_HASH_RE = /^[0-9a-f]{64}$/i;
+const ACCOUNT_ID_RE = /^G[A-Z2-7]{55}$/;
 
 function explorerHrefFor(hash) {
   const value = String(hash || '').trim();
   return EXPLORER_HASH_RE.test(value) ? `/explorer/?q=${value.toLowerCase()}` : '';
+}
+
+// The same lookup takes an account ID, so the other party in a transfer is one
+// click away too. Mixed case is normalised rather than rejected: the node and
+// the indexer both answer for the upper-case form.
+function explorerAccountHref(address) {
+  const value = String(address || '').trim().toUpperCase();
+  return ACCOUNT_ID_RE.test(value) ? `/explorer/?q=${value}` : '';
 }
