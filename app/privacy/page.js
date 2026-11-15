@@ -26,8 +26,8 @@ const STORED = [
   },
   {
     what: 'Google website sign-in session (optional)',
-    where: 'Firebase Authentication, browser-session persistence',
-    detail: 'When you choose Google sign-in, Firebase stores the website identity session for this browser session. It is not connected to the wallet keystore and does not sync or recover signing keys.'
+    where: 'Firebase Authentication, browser session or this browser only',
+    detail: 'By default, the session ends when the browser session closes. If you check Remember this device, Firebase keeps the website sign-in on this browser until you sign out or clear site data. This remembers only website identity: it never unlocks the wallet, remembers its password, or syncs/recover signing keys. Do not enable it on a shared device.'
   },
   {
     what: 'Theme and session preferences',
@@ -119,10 +119,10 @@ export default function PrivacyPage() {
           <ul className="status-list">
             <li>No wallet account is required. Google sign-in is optional and only identifies a website session.</li>
             <li>Theme sync is off by default and separate from sign-in: nothing is uploaded unless you turn it on, and it covers the light or dark theme only.</li>
-            <li>No analytics, advertising or fingerprinting. Firebase Auth code is bundled locally; authentication requests may restore an existing browser-session login and interactive sign-in starts only after you choose Google.</li>
+            <li>No analytics, advertising or fingerprinting. Firebase Auth code is bundled locally. Google sign-in is optional; the website session is browser-session-only by default, or persists on this browser only if you opt into Remember this device.</li>
             <li>The site does not set its own cookies. Google/Firebase may use their own authentication cookies during sign-in.</li>
             <li>No seed, wallet password or private key transmitted to Google/Firebase, logged or stored in plaintext.</li>
-            <li>Google/Firebase receive account identity data only if you opt into sign-in; SatoshiCore does not use it to access your Gmail mailbox or wallet keys.</li>
+            <li>Google/Firebase receive account identity data only if you opt into sign-in; SatoshiCore does not use it to access your Gmail mailbox or wallet keys. Remember this device stores the sign-in session in this browser, not a wallet unlock.</li>
           </ul>
         </div>
       </section>

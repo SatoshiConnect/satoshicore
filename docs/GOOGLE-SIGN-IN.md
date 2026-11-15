@@ -32,21 +32,35 @@ NEXT_PUBLIC_FIREBASE_PROJECT_ID=your-project
 NEXT_PUBLIC_FIREBASE_APP_ID=...
 ```
 
-The app uses Firebase Authentication only. The sign-in UI remains disabled
-when these variables are missing; the non-custodial wallet stays usable.
+The app uses Firebase Authentication for the optional website identity only.
+The sign-in UI remains disabled when these variables are missing; the
+non-custodial wallet stays usable. Session persistence defaults to session-only;
+Remember this device is a separate opt-in and affects Firebase sign-in only.
 Firebase config is compiled into static assets at build time, so configure the
 production build environment before deploying.
 
 ## Data and session behavior
 
-The Firebase SDK uses browser-session auth persistence; signing out or closing
-the browser session ends the website login. Firebase/Google process the Google
-account ID and basic profile data needed for sign-in. SatoshiCore does not read
-Gmail, request mailbox permission, or send the wallet name, balances, history,
-seed or password to Firebase. A public wallet address is stored only if the user
-explicitly links one (below). The site never uses the Firebase user identity to
-authorize signing: a signature still requires the local encrypted keystore and
-its password.
+Google sign-in is session-only by default: closing the browser session ends the website login. The optional **Remember this device** checkbox selects Firebase
+`browserLocalPersistence`, which keeps the Firebase website sign-in session on
+this browser until the user signs out or clears site data. This preference is
+stored locally as a single boolean; Firebase stores its authentication session
+using its normal browser persistence. It is specific to this browser/origin;
+it does not transfer sign-in to a different device. Do not enable it on a shared
+or public computer. Signing out removes the Firebase session and resets the
+choice to off.
+
+This persists only the website identity session. It does not unlock the wallet,
+remember its password, sync a signing key, or grant permission to sign. Even on
+a remembered device, signing still requires the local encrypted keystore to be
+unlocked. A watched wallet address remains public/read-only as described below.
+
+Firebase/Google process the Google account ID and basic profile data needed for
+sign-in. SatoshiCore does not read Gmail, request mailbox permission, or send
+the wallet name, balances, history, seed or password to Firebase. A public wallet
+address is stored only if the user explicitly links one (below). The site never
+uses the Firebase user identity to authorize signing: a signature still
+requires the local encrypted keystore and its password.
 
 Signing in writes nothing by itself. No wallet key material is ever written to
 Firestore, Realtime Database, Cloud Storage, or a SatoshiCore backend. The only

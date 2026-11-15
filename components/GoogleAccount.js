@@ -1,7 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { isFirebaseWebConfigured, loadGoogleAuth } from '../lib/firebaseAuth';
+import {
+  isFirebaseWebConfigured, loadGoogleAuth, setGoogleSessionPersistence,
+  setRememberGoogleSession, shouldRememberGoogleSession,
+} from '../lib/firebaseAuth';
 import {
   currentTheme, disableThemeSync, enableThemeSync, pullThemeForUser,
   syncEnabledFor,
@@ -31,6 +34,7 @@ export default function GoogleAccount({ variant = 'card' } = {}) {
   const [ready, setReady] = useState(!configured);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [rememberDevice, setRememberDevice] = useState(false);
   // Theme sync is a separate, opt-in choice; signing in alone uploads nothing.
   const [syncOn, setSyncOn] = useState(false);
   const [syncNote, setSyncNote] = useState('');
@@ -59,6 +63,7 @@ export default function GoogleAccount({ variant = 'card' } = {}) {
           email: nextUser.email || '',
         } : null);
         setSyncOn(syncEnabledFor(uid));
+        setRememberDevice(shouldRememberGoogleSession());
         setReady(true);
         // An opted-in account brings its theme to this device. A miss just
         // leaves the local theme as it is.
@@ -92,11 +97,39 @@ export default function GoogleAccount({ variant = 'card' } = {}) {
     setError('');
     try {
       const { auth, authSdk } = await loadGoogleAuth();
+      // Persistence is set before starting OAuth so a completed sign-in is
+      // stored only according to the explicit checkbox state. The helper
+      // refuses LOCAL persistence if the opt-in flag cannot be saved locally.
+      await setGoogleSessionPersistence(rememberDevice);
       const provider = new authSdk.GoogleAuthProvider();
       provider.setCustomParameters({ prompt: 'select_account' });
       await authSdk.signInWithPopup(auth, provider);
     } catch (err) {
+      // A cancelled/failed OAuth attempt must not leave persistent sign-in
+      // enabled as a side effect of the pre-login checkbox.
+      if (!user) {
+        try { await setGoogleSessionPersistence(false); } catch { /* auth may never have initialized */ }
+        setRememberGoogleSession(false);
+        setRememberDevice(false);
+      }
       setError(friendlyAuthError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleRememberDevice() {
+    const next = !rememberDevice;
+    setBusy(true);
+    setError('');
+    try {
+      // Firebase migrates the currently signed-in user to the selected mode.
+      // If it fails, leave the checkbox unchanged and explain that the current
+      // session is unaffected.
+      await setGoogleSessionPersistence(next);
+      setRememberDevice(next);
+    } catch {
+      setError('Could not change this device’s sign-in setting. Your current session is unchanged.');
     } finally {
       setBusy(false);
     }
@@ -107,7 +140,13 @@ export default function GoogleAccount({ variant = 'card' } = {}) {
     setError('');
     try {
       const { auth, authSdk } = await loadGoogleAuth();
+      // Switch this user back to session-only before signing out, so an
+      // explicit sign-out never leaves Firebase's persistent auth record.
+      try { await authSdk.setPersistence(auth, authSdk.browserSessionPersistence); }
+      catch { /* sign out still removes the existing persisted Firebase session */ }
       await authSdk.signOut(auth);
+      setRememberGoogleSession(false);
+      setRememberDevice(false);
     } catch {
       setError('Could not sign out. Please try again.');
     } finally {
@@ -238,12 +277,38 @@ export default function GoogleAccount({ variant = 'card' } = {}) {
           </button>
         </div>
       ) : (
-        <button type="button" className="nw-send-btn" onClick={signIn} disabled={busy}>
-          {busy ? 'Opening Google…' : 'Continue with Google'}
-        </button>
+        <>
+          <button type="button" className="nw-send-btn" onClick={signIn} disabled={busy}>
+            {busy ? 'Opening Google…' : 'Continue with Google'}
+          </button>
+          <label className="nw-small" style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 10 }}>
+            <input type="checkbox" checked={rememberDevice} onChange={(e) => setRememberDevice(e.target.checked)}
+              disabled={busy} style={{ marginTop: 2, width: 'auto' }} />
+            <span>
+              <strong>Remember this device</strong>
+              <span className="nw-dim"> — stay signed in to this website on this browser. Do not use on a shared device. This does not unlock the wallet or remember its password.</span>
+            </span>
+          </label>
+        </>
       )}
       {error ? <p className="nw-small nw-google-error" role="alert">{error}</p> : null}
-      {user ? <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>Signed in for this browser session only.</p> : null}
+      {user ? (
+        <div className="nw-google-sync" style={{ marginTop: 10 }}>
+          <label className="nw-small" style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+            <input type="checkbox" checked={rememberDevice} onChange={toggleRememberDevice}
+              disabled={busy} style={{ marginTop: 2, width: 'auto' }} />
+            <span>
+              <strong>Remember this device</strong>
+              <span className="nw-dim"> — stay signed in to this website on this browser. Do not use on a shared device. This does not unlock the wallet or remember its password.</span>
+            </span>
+          </label>
+          <p className="nw-small nw-dim" style={{ margin: '6px 0 0' }}>
+            {rememberDevice
+              ? 'Remembered on this browser. Sign out to remove the saved session.'
+              : 'Off — Google sign-in ends when this browser session closes.'}
+          </p>
+        </div>
+      ) : null}
       {user ? (
         <div className="nw-google-sync">
           <div className="nw-kv">

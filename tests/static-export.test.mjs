@@ -180,6 +180,9 @@ test('Google sign-in disclosures, setup UI, and targeted CSP ship in the static 
   // the user links one, and the disclosure has to say both things.
   assert.match(privacy, /does not send the wallet name, seed, password, balance or history/);
   assert.match(privacy, /a wallet address is stored only if you choose to link one/);
+  assert.match(privacy, /Remember this device/);
+  assert.match(privacy, /never unlocks the wallet/);
+  assert.match(privacy, /Do not enable it on a shared device/);
   assert.match(privacy, /Linked wallet address \(optional\)/);
   assert.match(privacy, /Wallet address link \(only when you link one\)/);
   assert.match(privacy, /Device unlock \(only if you turn it on\)/);
@@ -195,6 +198,8 @@ test('Google sign-in disclosures, setup UI, and targeted CSP ship in the static 
   assert.match(clientBundles, /Website account/);
   assert.match(clientBundles, /This does not unlock, back up, or sync your NSAT wallet/);
   assert.match(clientBundles, /Google sign-in is not configured in this build yet/);
+  assert.match(clientBundles, /Remember this device/);
+  assert.match(clientBundles, /stay signed in to this website on this browser/);
   assert.match(clientBundles, /Set up Face ID \/ device unlock/);
   assert.match(clientBundles, /Unlock with this device/);
   assert.match(clientBundles, /Watch only/);
