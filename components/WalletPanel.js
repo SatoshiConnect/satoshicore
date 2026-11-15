@@ -500,12 +500,21 @@ export default function WalletPanel() {
 
   // Founder Mint is close-level accounting carried in the ledger header. Read it
   // from the index (the header itself), never recomputed from a policy rate.
+  //
+  // Every ledger close writes a new heartbeat and grows totalCoins, so a single
+  // read freezes the figure the moment Activity opens. While the page is on
+  // screen it is re-read on an interval, and again as soon as the tab becomes
+  // visible — the card therefore shows the latest indexed header, not the one
+  // that happened to be current at the first click.
   useEffect(() => {
     if (page !== 'activity' || !isIndexerConfigured()) return undefined;
     let cancelled = false;
-    setMintStatus({ phase: 'loading', data: null, timeline: [], unattributed: null, error: '' });
-    getMintStatus()
-      .then((doc) => {
+    const read = async ({ first = false } = {}) => {
+      if (first) {
+        setMintStatus({ phase: 'loading', data: null, timeline: [], unattributed: null, error: '' });
+      }
+      try {
+        const doc = await getMintStatus();
         if (cancelled) return;
         setMintStatus({
           phase: 'ready',
@@ -516,15 +525,31 @@ export default function WalletPanel() {
           unattributed: doc?.timeline_unattributed ?? null,
           error: '',
         });
-      })
-      .catch((err) => {
+      } catch (err) {
         if (cancelled) return;
-        setMintStatus({
-          phase: 'unavailable', data: null, timeline: [], unattributed: null,
-          error: String(err?.message || err),
-        });
-      });
-    return () => { cancelled = true; };
+        // A refresh that fails must not blank the last known header: it stays
+        // on screen, and the error travels with it.
+        setMintStatus((cur) => (cur.data
+          ? { ...cur, phase: 'ready', error: String(err?.message || err) }
+          : {
+            phase: 'unavailable', data: null, timeline: [], unattributed: null,
+            error: String(err?.message || err),
+          }));
+      }
+    };
+    void read({ first: true });
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void read();
+    }, 10_000);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void read();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [page]);
 
   // One older page, appended. Paging stops on an error and says so rather than
@@ -2217,10 +2242,16 @@ function MintStatusCard({ mint }) {
                 )}
               </details>
             )}
+            {mint?.error ? (
+              <p className="nw-small" style={{ margin: '8px 0 0', color: 'var(--warn)' }}>
+                {`The last refresh did not answer (${mint.error}). The figures above are the last header read, not a frozen estimate.`}
+              </p>
+            ) : null}
             <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
               {`Read from the ledger header: totalCoins minus the fixed genesis supply of ${fmtGroup(GENESIS_SUPPLY.toString())} NSAT. `}
               One heartbeat is one finalized ledger; the mint is written during the close, so it is
-              not a transaction and never appears in a transfer list.
+              not a transaction and never appears in a transfer list. Re-read every 10 seconds
+              while this page is open, and again when you return to the tab.
             </p>
           </>
         )}
