@@ -27,6 +27,10 @@ Nothing here should be read as "accepted" — each item carries its owner/next s
 | R11 | CSP `connect-src 'self' https:` lets an injected script exfiltrate to any HTTPS host; CSP is a `<meta>` tag so `frame-ancestors` is unavailable | MEDIUM | Open — narrow allowlist + `frame-ancestors` header need a staged sign-in/Drive test and a Caddy config change | See `WALLET-WEB-REVIEW-2026-11-16.md` F6/F7 |
 | R12 | Keystore export (no password) carries names/addresses of wallets the current session hides | MEDIUM | Mitigated (explicit warning in the export toast); full filtering needs an owner decision because a filtered file is a smaller backup | `WALLET-WEB-REVIEW-2026-11-16.md` F5 |
 | R13 | Drive backup file contains wallet names and public addresses in readable form (seeds encrypted) | MEDIUM | Disclosed in the card and `/privacy/`; re-encrypting metadata is a format change and not done | `WALLET-WEB-REVIEW-2026-11-16.md` F4 |
+| R14 | Chat has no Double Ratchet: a leaked wallet seed decrypts stored envelopes (up to the 30-day retention) and there is no post-compromise recovery | MEDIUM | Open — deliberate (hand-rolled ratchet explicitly rejected); per-message ephemeral keys, 30-day retention, delete-on-read | `E2E-CHAT-DESIGN.md` "Cryptography honesty" |
+| R15 | Chat relay learns who talks to whom, when, and the message size | MEDIUM | Disclosed; hiding the social graph needs padding and cover traffic, not built | `E2E-CHAT-DESIGN.md` "What the relay learns" |
+| R16 | Chat is not enabled on the production gateway or web root; the relay exists and is tested, but no user can reach it | INFO | Open by choice — enabling restarts the wallet's read surface (`NSAT_CHAT_RELAY=1`) and needs operator approval | `E2E-CHAT-DESIGN.md` "Enabling it" |
+| R17 | Chat transcript is session-only: locking the wallet or closing the tab loses it, because nothing plaintext is written to storage | LOW | By design (shared-device trade-off); the relay deletes a message once it is read, so there is no second copy | `E2E-CHAT-DESIGN.md` "Client" |
 
 ## Explicit non-claims
 - No control above claims protection against host-root compromise.

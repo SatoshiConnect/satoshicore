@@ -26,6 +26,7 @@ import {
   removeBiometricUnlock, unlockWithBiometric,
 } from '../lib/biometricUnlock';
 import { backupSilently } from '../lib/driveBackup';
+import ChatPanel from './ChatPanel';
 import { seesMintStatus } from '../lib/mintVisibility';
 import {
   addNotice, buildTransferNotice, clearAllStoredNotices, isNewTransfer,
@@ -71,10 +72,10 @@ const PAGE_GLYPH = {
   overview: '◆', activity: '⚡', settings: '⚙',
 };
 // Pages reached from an action; the app bar shows Back instead of Receive.
-const SUB_PAGES = ['send', 'receive', 'shielded'];
+const SUB_PAGES = ['send', 'receive', 'shielded', 'chat'];
 const PAGE_TITLE = {
   overview: 'Overview', send: 'Send NSAT', receive: 'Receive NSAT',
-  shielded: 'Shielded NSAT', activity: 'Activity', settings: 'Settings',
+  shielded: 'Shielded NSAT', activity: 'Activity', settings: 'Settings', chat: 'Messages',
 };
 // One short line per section — context only, never an essay. Overview and
 // Settings need none: the cards say what they are.
@@ -85,6 +86,7 @@ const PAGE_LEAD = {
   shielded: 'Desktop only — the native prover is required.',
   activity: 'Every indexed transfer, with the ledger\'s verdict.',
   settings: null,
+  chat: 'End-to-end encrypted with the wallets you transacted with.',
 };
 
 // Founder Mint totals come from the ledger header, never from a rate applied
@@ -93,6 +95,16 @@ const PAGE_LEAD = {
 // exceed 2^53, which is why this is BigInt and never a Number.
 const GENESIS_SUPPLY = 2_100_000_000_000_000_000_000_000n;
 const HISTORY_PAGE = 100;
+
+// Encrypted chat needs a relay that stores ciphertext and nothing else. It is
+// off unless the deployment turns it on, so a build pointed at a gateway without
+// the relay says so instead of queueing messages that can never be delivered.
+const CHAT_RELAY_ENABLED = process.env.NEXT_PUBLIC_CHAT_RELAY === '1';
+const CHAT_RELAY_ORIGIN = !CHAT_RELAY_ENABLED
+  ? ''
+  : process.env.NEXT_PUBLIC_API_SAME_ORIGIN === '1'
+    ? ''
+    : (process.env.NEXT_PUBLIC_API_GATEWAY_URL || '').replace(/\/$/, '');
 
 function supplyAndMinted(totalCoins) {
   try {
@@ -461,6 +473,13 @@ export default function WalletPanel() {
   // Mint status belongs to the wallet the Founder Mint pays and to no other:
   // the unlocked wallet in view, or a linked watch-only address for it.
   const mintVisible = seesMintStatus(active?.pubkey || watchAddress);
+  // Chat contacts are the other side of transfers this address already has, so
+  // nobody can start a conversation with a wallet that never touched this one.
+  const chatContacts = Array.from(new Set((chainHistory.items || [])
+    .map((item) => String(item.counterparty || '').toUpperCase())
+    .filter((address) => /^G[A-Z0-9]{55}$/.test(address)
+      && address !== (active?.pubkey || watchAddress || '').toUpperCase())))
+    .slice(0, 20);
 
   useEffect(() => {
     if (active) {
@@ -1505,8 +1524,18 @@ export default function WalletPanel() {
               activeName={active?.name || (watchAddress ? `watch only · ${shortAddr(watchAddress, 6)}` : '')}
               chain={chainHistory}
               notices={notices}
+              onOpenChat={() => setPage('chat')}
+              chatEnabled={Boolean(CHAT_RELAY_ORIGIN) || CHAT_RELAY_ENABLED}
               onLoadOlder={loadOlderHistory}
               onRecheck={recheckTransfer} canRecheck={isIndexerConfigured()} />
+          )}
+
+          {page === 'chat' && (
+            <ChatPanel seed32={active?.seed32 || null}
+              address={active?.pubkey || watchAddress || ''}
+              contacts={chatContacts}
+              relayOrigin={CHAT_RELAY_ORIGIN}
+              onBack={() => setPage('activity')} />
           )}
 
           {page === 'settings' && (
@@ -2470,7 +2499,7 @@ function TransferNotices({ notices }) {
   );
 }
 
-function ActivityPage({ history, activeName, chain, notices, onLoadOlder, onRecheck, canRecheck }) {
+function ActivityPage({ history, activeName, chain, notices, chatEnabled, onOpenChat, onLoadOlder, onRecheck, canRecheck }) {
   // Anything the index already knows is shown from the index; the local list
   // keeps only what the chain has not reported yet (a transfer sent moments
   // ago, or one the node rejected before inclusion).
@@ -2496,6 +2525,12 @@ function ActivityPage({ history, activeName, chain, notices, onLoadOlder, onRech
           {activeName ? `On-chain activity — ${activeName}` : 'On-chain activity'}
           <span className="nw-badge info">from the chain index · read-only</span>
         </h2>
+        {chatEnabled && onOpenChat ? (
+          <button type="button" className="nw-chip-btn" style={{ marginTop: 10 }}
+            onClick={onOpenChat}>
+            ✉ Messages <span className="nw-badge ok">end-to-end encrypted</span>
+          </button>
+        ) : null}
         {chain?.phase === 'none' ? (
           <EmptyState text="No wallet selected." />
         ) : chain?.phase === 'loading' || chain?.phase === 'idle' ? (

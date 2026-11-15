@@ -129,7 +129,7 @@ function corsHeaders(req) {
       'Access-Control-Allow-Origin': origin,
       Vary: 'Origin',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Allow-Headers': 'Content-Type, X-NSAT-Address, X-NSAT-Ts, X-NSAT-Nonce, X-NSAT-Signature',
       'Access-Control-Max-Age': '600'
     };
   }
@@ -932,6 +932,65 @@ const ROUTES = {
   }
 };
 
+// --- encrypted chat relay (opt-in) -------------------------------------------
+// Off unless NSAT_CHAT_RELAY=1. Enabling it adds endpoints and a SQLite file,
+// which is an operator decision, not something a deploy turns on by accident
+// (docs/E2E-CHAT-DESIGN.md). The relay stores ciphertext only; the request
+// signature (wallet key) is the identity it checks.
+const CHAT_PREFIX = '/api/v1/chat/';
+const CHAT_ENABLED = process.env.NSAT_CHAT_RELAY === '1';
+let chatRelayPromise = null;
+
+function chatRelay() {
+  if (!chatRelayPromise) {
+    const dbPath = process.env.NSAT_CHAT_DB
+      || require('node:path').join(__dirname, 'data', 'chat.sqlite');
+    require('node:fs').mkdirSync(require('node:path').dirname(dbPath), { recursive: true });
+    chatRelayPromise = import('./chat-relay.mjs')
+      .then(({ createChatRelay }) => createChatRelay({ dbPath }))
+      .catch((error) => {
+        chatRelayPromise = null;
+        throw error;
+      });
+  }
+  return chatRelayPromise;
+}
+
+function handleChatRequest(req, res, pathname, searchParams) {
+  let body = Buffer.alloc(0);
+  let aborted = false;
+  req.on('data', (chunk) => {
+    if (aborted) return;
+    body = Buffer.concat([body, chunk]);
+    if (body.length > 16 * 1024) {
+      aborted = true;
+      if (req.pause) req.pause();
+      sendJson(res, 413, { error: 'body too large' }, req);
+      res.on('finish', () => { req.resume(); req.destroy(); });
+    }
+  });
+  req.on('error', () => {});
+  req.on('end', async () => {
+    if (aborted) return;
+    let parsed = null;
+    try { parsed = body.length ? JSON.parse(body.toString('utf8')) : null; } catch { parsed = null; }
+    try {
+      const relay = await chatRelay();
+      const result = relay.handle({
+        method: req.method,
+        path: pathname,
+        query: Object.fromEntries(searchParams.entries()),
+        headers: req.headers,
+        body: parsed,
+      });
+      return sendJson(res, result.status, result.body, req);
+    } catch (error) {
+      log('error', 'chat_relay_failed', { message: String(error && error.message) });
+      return sendJson(res, 500, { error: 'chat relay unavailable' }, req);
+    }
+  });
+}
+
 // --- server ------------------------------------------------------------------
 function createServer() {
   return http.createServer((req, res) => {
@@ -952,7 +1011,11 @@ function createServer() {
       return sendJson(res, 429, { error: 'rate limit exceeded' });
     }
 
-    const pathname = new URL(req.url, 'http://x').pathname;
+    const url = new URL(req.url, 'http://x');
+    const pathname = url.pathname;
+    if (CHAT_ENABLED && pathname.startsWith(CHAT_PREFIX)) {
+      return handleChatRequest(req, res, pathname, url.searchParams);
+    }
     const isIndexerRoute =
       pathname.startsWith(CONFIRMATION_PREFIX) ||
       pathname === '/v1/health' ||

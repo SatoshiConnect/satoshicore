@@ -1191,6 +1191,27 @@ body:has(.nw-root) .site-footer {
 .nw-notice.is-failed .nw-notice-dir { background: var(--warn-tint); color: var(--warn); }
 .nw-notice-title { color: var(--text); font-weight: 600; }
 
+/* Encrypted chat: bubbles are local to this device; the relay only ever holds
+ * ciphertext, so nothing here is rendered from a server-supplied string. */
+.nw-chat-thread { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.nw-chat-bubble {
+  align-self: flex-start; max-width: 86%;
+  background: var(--surface-2, rgba(255, 255, 255, 0.05));
+  border: 1px solid var(--row-border); border-radius: 14px;
+  padding: 8px 12px;
+}
+.nw-chat-bubble.is-own {
+  align-self: flex-end; background: var(--accent-tint); border-color: rgba(76, 111, 255, 0.28);
+}
+.nw-chat-text { color: var(--text); white-space: pre-wrap; word-break: break-word; }
+.nw-chat-input {
+  width: 100%; resize: vertical; min-height: 52px;
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  color: var(--text); border: 1px solid var(--border-input); border-radius: 12px;
+  padding: 10px 12px; font: inherit;
+}
+.nw-chat-input:disabled { opacity: 0.6; }
+
 .nw-txf { display: flex; flex-direction: column; gap: 10px; }
 .nw-row { display: flex; gap: 12px; align-items: center; }
 .nw-row > label { width: 150px; color: var(--text-dim); font-size: 13px; flex-shrink: 0; }
