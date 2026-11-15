@@ -1227,6 +1227,32 @@ body:has(.nw-root) .site-footer {
 }
 /* Amounts line up between rows, so two wallets read as a comparison. */
 .nw-acc-bal { color: var(--text); font-variant-numeric: tabular-nums; }
+.nw-chain-wallet-row { align-items: flex-start; }
+.nw-chain-minimum { color: var(--warn); margin-top: 3px; }
+.nw-wallet-manager-actions { display: grid; gap: 8px; margin: 14px 0 12px; }
+.nw-manager-action {
+  width: 100%; min-height: 54px; display: flex; align-items: center; gap: 12px;
+  padding: 10px 14px; border: 1px solid var(--border-soft); border-radius: 14px;
+  background: var(--card); color: var(--text); text-align: left; font: inherit;
+  cursor: pointer;
+}
+.nw-manager-action:hover { border-color: var(--accent); background: var(--hover); }
+.nw-manager-action-icon {
+  width: 30px; height: 30px; display: grid; place-items: center; flex: 0 0 auto;
+  border-radius: 50%; background: var(--accent); color: var(--on-accent); font-size: 20px;
+}
+.nw-wallet-gear {
+  width: 42px; height: 42px; flex: 0 0 42px; display: grid; place-items: center;
+  border: 1px solid var(--border-soft); border-radius: 50%; background: transparent;
+  color: var(--text-dim); cursor: pointer; font-size: 18px;
+}
+.nw-wallet-gear:hover { color: var(--text); background: var(--hover); }
+.nw-manager-back { margin: 12px 0; }
+.nw-wallet-details { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; }
+.nw-wallet-details-mark { width: 84px; height: 84px; display: grid; place-items: center; border-radius: 50%; background: var(--device-bezel); }
+.nw-wallet-details-mark .nw-coin-mark { width: 52px; height: 52px; }
+.nw-wallet-details .nw-mono { overflow-wrap: anywhere; }
+.nw-wallet-details .nw-small { max-width: 34rem; }
 .nw-send-recipient-list { margin: 6px 0 0; }
 /* The one block that explains a refused send instead of just disabling it. */
 .nw-send-warning { color: var(--warn); }

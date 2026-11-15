@@ -129,10 +129,14 @@ export default function WalletPanel() {
   // gesture as the iPhone build, where tapping the account name lists the
   // wallets on this device instead of jumping into Settings.
   const [accountsOpen, setAccountsOpen] = useState(false);
+  const [walletManagerView, setWalletManagerView] = useState('list');
+  const [walletDetails, setWalletDetails] = useState(null);
   const [switchName, setSwitchName] = useState('');
   const [switchPass, setSwitchPass] = useState('');
   // name -> { kind: 'loading' | 'exact' | 'missing' | 'unavailable', value }
   const [switchBalances, setSwitchBalances] = useState({});
+  // Read-only account existence/balance for every local wallet on the homepage.
+  const [overviewWalletStates, setOverviewWalletStates] = useState({});
   // public address -> balance state for linked wallet choices in Send
   const [sendRecipientBalances, setSendRecipientBalances] = useState({});
   const [dest, setDest] = useState('');
@@ -491,6 +495,8 @@ export default function WalletPanel() {
       // the same trust level as an explicit Unlock.
       activateWallet({ name: r.name, pubkey: r.pubkeyG, seed32 });
       setNewName(''); setNewPass(''); setImportSeed('');
+      setAccountsOpen(false);
+      setWalletManagerView('list');
       // A wallet created while signed in belongs to that account, so a later
       // account on this browser cannot adopt it.
       if (accountEmail) bindOwner(r.name, accountEmail);
@@ -521,6 +527,8 @@ export default function WalletPanel() {
       setWallets(keystoreList());
       activateWallet({ name: r.name, pubkey: r.pubkeyG, seed32 });
       setNewName(''); setNewPass(''); setImportSeed('');
+      setAccountsOpen(false);
+      setWalletManagerView('list');
       notify(`Wallet "${r.name}" imported.`, 'ok');
       void backupSilentlyAfterChange(r.name);
     } catch (err) { notify(String(err.message || err), 'err'); }
@@ -610,6 +618,34 @@ export default function WalletPanel() {
       setBusy(false);
     }
   }
+
+  // The homepage shows whether each local wallet has been created on-chain.
+  // Public account lookups need no unlock and never access key material.
+  useEffect(() => {
+    if (page !== 'overview' || wallets.length === 0) return undefined;
+    let cancelled = false;
+    setOverviewWalletStates((current) => {
+      const next = {};
+      for (const wallet of wallets) {
+        next[wallet.name] = current[wallet.name]?.pubkey === wallet.pubkey
+          ? current[wallet.name]
+          : { pubkey: wallet.pubkey, balance: { kind: 'loading', value: null } };
+      }
+      return next;
+    });
+    Promise.all(wallets.map(async (wallet) => {
+      let balanceState;
+      try { balanceState = readAccountBalance(await getAccount(wallet.pubkey)); }
+      catch { balanceState = { kind: 'unavailable', value: null }; }
+      if (!cancelled) {
+        setOverviewWalletStates((current) => ({
+          ...current,
+          [wallet.name]: { pubkey: wallet.pubkey, balance: balanceState },
+        }));
+      }
+    }));
+    return () => { cancelled = true; };
+  }, [page, wallets]);
 
   // Balances inside the switcher come from a read-only lookup of each public
   // address — no key involved — so a locked wallet can still show its amount
@@ -909,7 +945,13 @@ export default function WalletPanel() {
               aria-label="Show my address" title="Receive — show your address">▦</button>
           )}
           <button type="button" className="nw-account-pill"
-            onClick={() => { setAccountsOpen(true); setSwitchName(''); setSwitchPass(''); }}
+            onClick={() => {
+              setAccountsOpen(true);
+              setWalletManagerView('list');
+              setWalletDetails(null);
+              setSwitchName('');
+              setSwitchPass('');
+            }}
             aria-haspopup="dialog"
             title={`${netOk ? 'Connected' : net == null ? 'Connecting…' : 'Offline'} — switch wallet`}>
             <span className="nw-tokenlogo"><NsatCoinMark className="nw-coin-mark" /></span>
@@ -977,9 +1019,10 @@ export default function WalletPanel() {
 
           {page === 'overview' && !(watchAddress && !active && wallets.length === 0) && (
             <OverviewPage active={active} wallets={wallets} balance={balance} funded={funded}
+              walletChainStates={overviewWalletStates} baseReserve={reserve}
               bus={{ busy, doCreate, doImport, newName, setNewName, newPass, setNewPass,
                 importSeed, setImportSeed, accountEmail }}
-              net={{ net, netOk, ledger: liveLedger ?? ledger, fee, minted: policyMinted(liveLedger ?? ledger) }}
+              net={{ net, netOk, ledger: liveLedger ?? ledger, fee, reserve, minted: policyMinted(liveLedger ?? ledger) }}
               notify={notify}
               onSend={() => setPage('send')} onReceive={() => setPage('receive')}
               onActivity={() => setPage('activity')}
@@ -1100,79 +1143,166 @@ export default function WalletPanel() {
           onClick={(e) => { if (e.target === e.currentTarget && !busy) setAccountsOpen(false); }}>
           <div className="nw-modal" tabIndex={-1} autoFocus>
             <div className="nw-step">WALLETS ON THIS DEVICE</div>
-            <h3 id="nw-accounts-title" style={{ color: 'var(--text)' }}>Switch wallet</h3>
-            {wallets.length === 0 ? (
-              <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
-                No wallet is stored in this browser yet — create or import one to sign here.
-              </p>
-            ) : (
-              <ul className="nw-acc-list">
-                {wallets.map((w) => {
-                  const isActive = active?.name === w.name;
-                  return (
-                    <li key={w.name} className={'nw-acc-row' + (isActive ? ' is-active' : '')}>
-                      <button type="button" className="nw-acc-main"
-                        onClick={() => (isActive ? setAccountsOpen(false) : switchTo(w.name))}
-                        aria-current={isActive ? 'true' : undefined}>
-                        <span className="nw-acc-name">{w.name}</span>
-                        <span className="nw-acc-meta">
-                          <span className="nw-mono">{shortAddr(w.pubkey, 6)}</span>
-                          <span className="nw-acc-bal">
-                            {accountBalanceLine(switchBalances[w.name])}
-                          </span>
-                        </span>
+            <h3 id="nw-accounts-title" style={{ color: 'var(--text)' }}>
+              {walletManagerView === 'create' ? 'Create a New Wallet'
+                : walletManagerView === 'import' ? 'Import an Existing Wallet'
+                  : walletManagerView === 'details' ? 'Wallet details' : 'Wallets'}
+            </h3>
+
+            {walletManagerView === 'list' && (
+              <>
+                <div className="nw-wallet-manager-actions">
+                  <button type="button" className="nw-manager-action"
+                    onClick={() => { setSwitchName(''); setWalletManagerView('create'); }}>
+                    <span className="nw-manager-action-icon" aria-hidden>＋</span>
+                    Create a New Wallet
+                  </button>
+                  <button type="button" className="nw-manager-action"
+                    onClick={() => { setSwitchName(''); setWalletManagerView('import'); }}>
+                    <span className="nw-manager-action-icon" aria-hidden>↓</span>
+                    Import an Existing Wallet
+                  </button>
+                </div>
+                {wallets.length === 0 ? (
+                  <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
+                    No wallet is stored in this browser yet — create or import one to sign here.
+                  </p>
+                ) : (
+                  <ul className="nw-acc-list">
+                    {wallets.map((w) => {
+                      const isActive = active?.name === w.name;
+                      return (
+                        <li key={w.name} className={'nw-acc-row' + (isActive ? ' is-active' : '')}>
+                          <button type="button" className="nw-acc-main"
+                            onClick={() => (isActive ? setAccountsOpen(false) : switchTo(w.name))}
+                            aria-current={isActive ? 'true' : undefined}>
+                            <span className="nw-acc-name">{w.name}</span>
+                            <span className="nw-acc-meta">
+                              <span className="nw-mono">{shortAddr(w.pubkey, 6)}</span>
+                              <span className="nw-acc-bal">{accountBalanceLine(switchBalances[w.name])}</span>
+                            </span>
+                          </button>
+                          {isActive ? <span className="nw-badge ok">active</span> : null}
+                          <button type="button" className="nw-wallet-gear"
+                            aria-label={`Details for ${w.name}`}
+                            onClick={() => { setWalletDetails(w); setWalletManagerView('details'); }}>
+                            ⚙
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+
+                {switchName && (
+                  <form className="nw-unlock" onSubmit={doSwitchAccount} style={{ marginTop: 12 }}>
+                    <label className="nw-label" htmlFor="nw-switch-pass">
+                      {`Password for “${switchName}”`}
+                    </label>
+                    <input id="nw-switch-pass" type="password" placeholder="Password"
+                      value={switchPass} onChange={(e) => setSwitchPass(e.target.value)}
+                      autoComplete="current-password" autoFocus
+                      aria-label={`Password for ${switchName}`} />
+                    <button className="nw-send-btn" type="submit" disabled={busy || !switchPass}>
+                      {busy ? 'Unlocking…' : 'Unlock and switch'}
+                    </button>
+                    {biometricWallets.includes(switchName) ? (
+                      <button type="button" className="nw-chip-btn" disabled={busy}
+                        onClick={async () => {
+                          if (await unlockWithDevice(switchName)) {
+                            setSwitchName('');
+                            setAccountsOpen(false);
+                            setPage('overview');
+                          }
+                        }}>
+                        Unlock with this device
                       </button>
-                      {isActive ? (
-                        <span className="nw-badge ok">active</span>
-                      ) : (
-                        <button type="button" className="nw-chip-btn"
-                          onClick={() => switchTo(w.name)}>Switch</button>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
+                    ) : null}
+                  </form>
+                )}
+                <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
+                  Switching locks the current wallet first and asks for the selected wallet’s password.
+                </p>
+              </>
             )}
 
-            {switchName && (
-              <form className="nw-unlock" onSubmit={doSwitchAccount} style={{ marginTop: 12 }}>
-                <label className="nw-label" htmlFor="nw-switch-pass">
-                  {`Password for “${switchName}”`}
-                </label>
-                <input id="nw-switch-pass" type="password" placeholder="Password"
-                  value={switchPass} onChange={(e) => setSwitchPass(e.target.value)}
-                  autoComplete="current-password" autoFocus
-                  aria-label={`Password for ${switchName}`} />
-                <button className="nw-send-btn" type="submit" disabled={busy || !switchPass}>
-                  {busy ? 'Unlocking…' : 'Unlock and switch'}
-                </button>
-                {biometricWallets.includes(switchName) ? (
-                  <button type="button" className="nw-chip-btn" disabled={busy}
-                    onClick={async () => {
-                      if (await unlockWithDevice(switchName)) {
-                        setSwitchName('');
-                        setAccountsOpen(false);
-                        setPage('overview');
-                      }
-                    }}>
-                    Unlock with this device
+            {walletManagerView === 'create' && (
+              <>
+                <button type="button" className="nw-ghost-btn nw-manager-back"
+                  onClick={() => setWalletManagerView('list')}>← Wallets</button>
+                <form onSubmit={doCreate} className="nw-txf">
+                  <label className="nw-label" htmlFor="nw-manager-new-name">Wallet name</label>
+                  <input id="nw-manager-new-name" value={newName}
+                    onChange={(e) => setNewName(e.target.value)} placeholder="Personal wallet" required />
+                  <label className="nw-label" htmlFor="nw-manager-new-pass">
+                    Password (at least {MIN_PASSWORD_LENGTH} characters)
+                  </label>
+                  <input id="nw-manager-new-pass" type="password" value={newPass}
+                    onChange={(e) => setNewPass(e.target.value)} autoComplete="new-password"
+                    minLength={MIN_PASSWORD_LENGTH} required />
+                  <p className="nw-small nw-dim">Google sign-in cannot recover this password.</p>
+                  <button type="submit" className="nw-send-btn" disabled={busy}>
+                    {busy ? 'Creating…' : 'Create Wallet'}
                   </button>
-                ) : null}
-              </form>
+                </form>
+              </>
+            )}
+
+            {walletManagerView === 'import' && (
+              <>
+                <button type="button" className="nw-ghost-btn nw-manager-back"
+                  onClick={() => setWalletManagerView('list')}>← Wallets</button>
+                <form onSubmit={doImport} className="nw-txf">
+                  <label className="nw-label" htmlFor="nw-manager-import-name">Wallet name</label>
+                  <input id="nw-manager-import-name" value={newName}
+                    onChange={(e) => setNewName(e.target.value)} required />
+                  <label className="nw-label" htmlFor="nw-manager-import-seed">Secret seed (S…)</label>
+                  <input id="nw-manager-import-seed" type="password" spellCheck={false}
+                    autoComplete="off" value={importSeed}
+                    onChange={(e) => setImportSeed(e.target.value)} required />
+                  <label className="nw-label" htmlFor="nw-manager-import-pass">
+                    Password (at least {MIN_PASSWORD_LENGTH} characters)
+                  </label>
+                  <input id="nw-manager-import-pass" type="password" value={newPass}
+                    onChange={(e) => setNewPass(e.target.value)} autoComplete="new-password"
+                    minLength={MIN_PASSWORD_LENGTH} required />
+                  <button type="submit" className="nw-send-btn" disabled={busy}>
+                    {busy ? 'Importing…' : 'Import Wallet'}
+                  </button>
+                </form>
+              </>
+            )}
+
+            {walletManagerView === 'details' && walletDetails && (
+              <div className="nw-wallet-details">
+                <button type="button" className="nw-ghost-btn nw-manager-back"
+                  onClick={() => setWalletManagerView('list')}>← Wallets</button>
+                <div className="nw-wallet-details-mark" aria-hidden>
+                  <NsatCoinMark className="nw-coin-mark" />
+                </div>
+                <strong>{walletDetails.name}</strong>
+                <div className="nw-small nw-dim nw-mono">{walletDetails.pubkey}</div>
+                <button type="button" className="nw-chip-btn"
+                  onClick={async () => {
+                    await navigator.clipboard.writeText(walletDetails.pubkey);
+                    notify('Copied public address.');
+                  }}>Copy address</button>
+                {active?.name === walletDetails.name
+                  ? <span className="nw-badge ok">active</span>
+                  : <button type="button" className="nw-send-btn" onClick={() => {
+                    setWalletManagerView('list');
+                    switchTo(walletDetails.name);
+                  }}>Switch wallet</button>}
+                <p className="nw-small nw-dim">
+                  Private keys stay in the encrypted browser keystore and are never displayed here.
+                </p>
+              </div>
             )}
 
             <div className="nw-btn-row">
-              <button type="button" className="nw-chip-btn"
-                onClick={() => { setAccountsOpen(false); setSwitchName(''); setPage('settings'); }}>
-                Add or import
-              </button>
               <button type="button" className="nw-ghost-btn" disabled={busy}
                 onClick={() => setAccountsOpen(false)}>Close</button>
             </div>
-            <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
-              Switching locks the current wallet first — nothing can be signed here until the
-              wallet you pick is unlocked with its own password.
-            </p>
           </div>
         </div>
       )}
@@ -1252,8 +1382,65 @@ function WatchOnlyHome({ address, addresses = [], balance, funded, onSelect, onR
   );
 }
 
+/* ------------------------- On-chain wallet status ----------------------- */
+function WalletChainStatus({ wallets, states = {}, baseReserve, activeName = '' }) {
+  if (!wallets?.length) return null;
+  const reserveKnown = Number.isSafeInteger(baseReserve) && baseReserve > 0;
+  const minimum = reserveKnown ? (BigInt(baseReserve) * 2n).toString() : null;
+  const missing = wallets.filter((wallet) => states[wallet.name]?.balance?.kind === 'missing');
+
+  return (
+    <section className="nw-card nw-wallet-chain-status" aria-labelledby="nw-wallet-chain-title">
+      <h2 id="nw-wallet-chain-title" style={{ color: 'var(--text)' }}>
+        Wallet account status
+      </h2>
+      <p className="nw-small nw-dim" style={{ margin: '6px 0 10px' }}>
+        Each address is checked directly against the network; this does not unlock or use its key.
+      </p>
+      <ul className="nw-acc-list">
+        {wallets.map((wallet) => {
+          const entry = states[wallet.name]?.balance;
+          const notCreated = entry?.kind === 'missing';
+          const exists = entry?.kind === 'exact';
+          return (
+            <li key={wallet.name} className="nw-acc-row nw-chain-wallet-row">
+              <div className="nw-acc-main">
+                <span className="nw-acc-name">{wallet.name}{wallet.name === activeName ? ' · active' : ''}</span>
+                <span className="nw-acc-meta">
+                  <span className="nw-mono">{shortAddr(wallet.pubkey, 6)}</span>
+                  {exists ? (
+                    <span className="nw-acc-bal">on chain · {formatExactBalance(entry.value)} NSAT</span>
+                  ) : notCreated ? (
+                    <span className="nw-badge warn">no on-chain account yet</span>
+                  ) : entry?.kind === 'unavailable' ? (
+                    <span className="nw-badge info">status unavailable</span>
+                  ) : (
+                    <span className="nw-acc-bal">checking…</span>
+                  )}
+                </span>
+                {notCreated && (
+                  <span className="nw-small nw-chain-minimum">
+                    {minimum
+                      ? `Needs at least ${fmtGroup(minimum)} NSAT in its first deposit (2× live base reserve).`
+                      : 'Minimum first deposit unavailable — waiting for the live base reserve.'}
+                  </span>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      {missing.length > 0 && (
+        <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
+          Until a wallet receives its minimum first deposit, it has no account on-chain and cannot send.
+        </p>
+      )}
+    </section>
+  );
+}
+
 /* --------------------------------- Overview ------------------------------ */
-function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSend, onReceive, onActivity, onManage }) {
+function OverviewPage({ active, wallets, balance, funded, walletChainStates, baseReserve, bus, net, notify, onSend, onReceive, onActivity, onManage }) {
   // First run is one decision, not two competing forms: a phone wallet offers
   // Create or Import as a segmented control, then shows the chosen form.
   const [mode, setMode] = useState('create');
@@ -1264,6 +1451,9 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
   if (!active) {
     return (
       <div>
+        {wallets.length > 0 && (
+          <WalletChainStatus wallets={wallets} states={walletChainStates} baseReserve={baseReserve} />
+        )}
         {wallets.length > 0 && (
           <section className="nw-card" hidden={!hideSetup}>
             <h2 style={{ color: 'var(--text)' }}>Add another wallet</h2>
@@ -1370,6 +1560,10 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
           </button>
         </div>
       </section>
+
+      {wallets.length > 0 && (
+        <WalletChainStatus wallets={wallets} states={walletChainStates} baseReserve={baseReserve} activeName={active.name} />
+      )}
 
       {/* Money on this device with a stale Drive copy is the one failure the
        * wallet cannot undo, so it is raised here and recedes on its own. */}
