@@ -1201,6 +1201,28 @@ body:has(.nw-root) .site-footer {
   -webkit-overflow-scrolling: touch;
 }
 
+/* Account switcher (opened from the name pill): one row per wallet in this
+ * browser, the active one marked, the others switching through their own
+ * password. Tap target is the whole row, as in the iPhone build. */
+.nw-acc-list { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 8px; }
+.nw-acc-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border-radius: 14px;
+  background: var(--card); border: 1px solid var(--border-soft);
+}
+.nw-acc-row.is-active {
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+  background: var(--ok-tint);
+}
+.nw-acc-main {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  flex: 1 1 auto; min-width: 0;
+  background: none; border: 0; padding: 0; margin: 0;
+  color: var(--text); text-align: left; cursor: pointer; font: inherit;
+}
+.nw-acc-name { font-size: 15px; font-weight: 500; }
+.nw-acc-addr { font-size: 12px; color: var(--text-dim); }
+
 /* Linked wallets in Settings: one row per wallet, each removable on its own, so
  * a person with several wallets can see exactly what this account watches. */
 .nw-link-list { list-style: none; margin: 8px 0 0; padding: 0; }

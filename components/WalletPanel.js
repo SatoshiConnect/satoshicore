@@ -125,6 +125,12 @@ export default function WalletPanel() {
   const [importSeed, setImportSeed] = useState('');
   const [unlockName, setUnlockName] = useState('');
   const [unlockPass, setUnlockPass] = useState('');
+  // Account switcher, opened from the name pill in the app bar — the same
+  // gesture as the iPhone build, where tapping the account name lists the
+  // wallets on this device instead of jumping into Settings.
+  const [accountsOpen, setAccountsOpen] = useState(false);
+  const [switchName, setSwitchName] = useState('');
+  const [switchPass, setSwitchPass] = useState('');
   const [dest, setDest] = useState('');
   const [createDest, setCreateDest] = useState(false);
   const [amount, setAmount] = useState('');
@@ -488,25 +494,35 @@ export default function WalletPanel() {
   async function doUnlock(e) {
     e.preventDefault();
     if (!unlockName) return;
-    const operationEpoch = lockEpoch.current;
     const name = unlockName;
-    let password = unlockPass;
+    const password = unlockPass;
     setUnlockPass('');
+    const ok = await unlockWithPassword(name, password);
+    if (ok) setUnlockName('');
+  }
+
+  // One unlock path for both the sign-in card and the account switcher. The
+  // password is only ever held for the duration of the call; the session it
+  // produces replaces any previous one through activateWallet(), which wipes
+  // the previous seed first.
+  async function unlockWithPassword(name, password) {
+    const operationEpoch = lockEpoch.current;
     setBusy(true);
     try {
       const seed32 = await keystoreUnlock(name, password);
       if (operationEpoch !== lockEpoch.current) {
         zeroSeed(seed32);
-        return;
+        return false;
       }
       const list = keystoreList();
       const entry = list.find(w => w.name === name);
       activateWallet({ name, pubkey: entry?.pubkey, seed32 });
-      setUnlockName('');
       notify(`Wallet "${name}" unlocked.`, 'ok');
-    } catch (err) { notify(String(err.message || err), 'err'); }
-    finally {
-      password = '';
+      return true;
+    } catch (err) {
+      notify(String(err?.message || err), 'err');
+      return false;
+    } finally {
       setBusy(false);
     }
   }
@@ -515,7 +531,7 @@ export default function WalletPanel() {
     const entry = keystoreList().find((wallet) => wallet.name === name);
     if (!entry || !hasBiometricUnlock(name)) {
       notify('Device unlock is not set up for this wallet. Use its password.', 'err');
-      return;
+      return false;
     }
     const operationEpoch = lockEpoch.current;
     setBusy(true);
@@ -523,13 +539,15 @@ export default function WalletPanel() {
       const seed32 = await unlockWithBiometric(name, entry.pubkey);
       if (operationEpoch !== lockEpoch.current) {
         zeroSeed(seed32);
-        return;
+        return false;
       }
       activateWallet({ name, pubkey: entry.pubkey, seed32 });
       setUnlockName('');
       notify(`Wallet "${name}" unlocked on this device.`, 'ok');
+      return true;
     } catch (err) {
       notify(String(err.message || 'Device unlock failed. Use the wallet password.'), 'err');
+      return false;
     } finally {
       setBusy(false);
     }
@@ -578,10 +596,29 @@ export default function WalletPanel() {
   // and asks for THIS wallet's password, exactly like a fresh unlock. Nothing
   // is signed until that password is entered again.
   function switchTo(name) {
+    if (activeRef.current?.name === name) {
+      setAccountsOpen(false);
+      return;
+    }
+    setSwitchName(name);
+    setSwitchPass('');
+    setAccountsOpen(true);
+  }
+
+  async function doSwitchAccount(e) {
+    e.preventDefault();
+    const name = switchName;
+    const password = switchPass;
+    setSwitchPass('');
+    if (!name || !password) return;
+    // Lock first so the previous key cannot survive a failed unlock.
     if (activeRef.current) lockWallet();
-    setUnlockName(name);
-    setPage('overview');
-    notify(`Selected “${name}” — unlock it with its password to sign.`, 'ok');
+    const ok = await unlockWithPassword(name, password);
+    if (ok) {
+      setSwitchName('');
+      setAccountsOpen(false);
+      setPage('overview');
+    }
   }
 
   function doBackup() {
@@ -773,8 +810,10 @@ export default function WalletPanel() {
             <button type="button" className="nw-round-btn" onClick={() => setPage('receive')}
               aria-label="Show my address" title="Receive — show your address">▦</button>
           )}
-          <button type="button" className="nw-account-pill" onClick={() => setPage('settings')}
-            title={`${netOk ? 'Connected' : net == null ? 'Connecting…' : 'Offline'} — wallet settings`}>
+          <button type="button" className="nw-account-pill"
+            onClick={() => { setAccountsOpen(true); setSwitchName(''); setSwitchPass(''); }}
+            aria-haspopup="dialog"
+            title={`${netOk ? 'Connected' : net == null ? 'Connecting…' : 'Offline'} — switch wallet`}>
             <span className="nw-tokenlogo"><NsatCoinMark className="nw-coin-mark" /></span>
             <span className="nw-account-name">
               {active ? active.name : hasWallets ? 'Locked' : watchAddress ? 'Watch only' : 'NSAT Wallet'}
@@ -937,6 +976,88 @@ export default function WalletPanel() {
               <button className="nw-ghost-btn" onClick={() => setReview(null)}
                 disabled={busy}>Cancel</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Account switcher: the name pill opens this list, the way the iPhone
+       * build does. Picking another wallet locks the current key and asks for
+       * the chosen wallet's password — switching never carries a key over. */}
+      {accountsOpen && (
+        <div className="nw-modal-back" role="dialog" aria-modal="true"
+          aria-labelledby="nw-accounts-title"
+          onKeyDown={(e) => { if (e.key === 'Escape' && !busy) setAccountsOpen(false); }}
+          onClick={(e) => { if (e.target === e.currentTarget && !busy) setAccountsOpen(false); }}>
+          <div className="nw-modal" tabIndex={-1} autoFocus>
+            <div className="nw-step">WALLETS ON THIS DEVICE</div>
+            <h3 id="nw-accounts-title" style={{ color: 'var(--text)' }}>Switch wallet</h3>
+            {wallets.length === 0 ? (
+              <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
+                No wallet is stored in this browser yet — create or import one to sign here.
+              </p>
+            ) : (
+              <ul className="nw-acc-list">
+                {wallets.map((w) => {
+                  const isActive = active?.name === w.name;
+                  return (
+                    <li key={w.name} className={'nw-acc-row' + (isActive ? ' is-active' : '')}>
+                      <button type="button" className="nw-acc-main"
+                        onClick={() => (isActive ? setAccountsOpen(false) : switchTo(w.name))}
+                        aria-current={isActive ? 'true' : undefined}>
+                        <span className="nw-acc-name">{w.name}</span>
+                        <span className="nw-acc-addr nw-mono">{shortAddr(w.pubkey, 6)}</span>
+                      </button>
+                      {isActive ? (
+                        <span className="nw-badge ok">active</span>
+                      ) : (
+                        <button type="button" className="nw-chip-btn"
+                          onClick={() => switchTo(w.name)}>Switch</button>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+
+            {switchName && (
+              <form className="nw-unlock" onSubmit={doSwitchAccount} style={{ marginTop: 12 }}>
+                <label className="nw-label" htmlFor="nw-switch-pass">
+                  {`Password for “${switchName}”`}
+                </label>
+                <input id="nw-switch-pass" type="password" placeholder="Password"
+                  value={switchPass} onChange={(e) => setSwitchPass(e.target.value)}
+                  autoComplete="current-password" autoFocus
+                  aria-label={`Password for ${switchName}`} />
+                <button className="nw-send-btn" type="submit" disabled={busy || !switchPass}>
+                  {busy ? 'Unlocking…' : 'Unlock and switch'}
+                </button>
+                {biometricWallets.includes(switchName) ? (
+                  <button type="button" className="nw-chip-btn" disabled={busy}
+                    onClick={async () => {
+                      if (await unlockWithDevice(switchName)) {
+                        setSwitchName('');
+                        setAccountsOpen(false);
+                        setPage('overview');
+                      }
+                    }}>
+                    Unlock with this device
+                  </button>
+                ) : null}
+              </form>
+            )}
+
+            <div className="nw-btn-row">
+              <button type="button" className="nw-chip-btn"
+                onClick={() => { setAccountsOpen(false); setSwitchName(''); setPage('settings'); }}>
+                Add or import
+              </button>
+              <button type="button" className="nw-ghost-btn" disabled={busy}
+                onClick={() => setAccountsOpen(false)}>Close</button>
+            </div>
+            <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
+              Switching locks the current wallet first — nothing can be signed here until the
+              wallet you pick is unlocked with its own password.
+            </p>
           </div>
         </div>
       )}
