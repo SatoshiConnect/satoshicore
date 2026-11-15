@@ -509,9 +509,12 @@ export default function WalletPanel() {
   useEffect(() => {
     if (page !== 'activity' || !isIndexerConfigured()) return undefined;
     let cancelled = false;
+    let inFlight = false;
     const read = async ({ first = false } = {}) => {
+      if (inFlight) return;
+      inFlight = true;
       if (first) {
-        setMintStatus({ phase: 'loading', data: null, timeline: [], unattributed: null, error: '' });
+        setMintStatus({ phase: 'loading', data: null, timeline: [], unattributed: null, fetchedAt: null, error: '' });
       }
       try {
         const doc = await getMintStatus();
@@ -523,6 +526,7 @@ export default function WalletPanel() {
           // totalCoins deltas, plus the growth they cannot attribute.
           timeline: Array.isArray(doc?.timeline) ? doc.timeline : [],
           unattributed: doc?.timeline_unattributed ?? null,
+          fetchedAt: Date.now(),
           error: '',
         });
       } catch (err) {
@@ -533,14 +537,18 @@ export default function WalletPanel() {
           ? { ...cur, phase: 'ready', error: String(err?.message || err) }
           : {
             phase: 'unavailable', data: null, timeline: [], unattributed: null,
-            error: String(err?.message || err),
+            fetchedAt: null, error: String(err?.message || err),
           }));
+      } finally {
+        inFlight = false;
       }
     };
     void read({ first: true });
+    // The API is a live header read; avoid reusing the 5-second HTTP cache.
+    // Poll at that same cadence so normal ledger closes are reflected promptly.
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') void read();
-    }, 10_000);
+    }, 5_000);
     const onVisible = () => {
       if (document.visibilityState === 'visible') void read();
     };
@@ -2149,6 +2157,11 @@ function ShieldedGatePage() {
  * below the unlock form the page body renders. Every figure comes from that
  * header — never from a rate applied to the current height. */
 function MintStatusCard({ mint }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
   const chainTime = (seconds) => {
     const n = Number(seconds);
     return Number.isFinite(n) && n > 0 ? new Date(n * 1000).toLocaleString() : '';
@@ -2158,10 +2171,12 @@ function MintStatusCard({ mint }) {
   const { supply, minted } = supplyAndMinted(mintData?.total_coins);
   return (
     <section className="nw-card nw-mint-head" aria-labelledby="nw-mint-title">
-        <h2 id="nw-mint-title" style={{ color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          Founder Mint
-          <span className="nw-badge info">ledger header</span>
-        </h2>
+        <div className="nw-mint-compact-top">
+          <h2 id="nw-mint-title">Mint status</h2>
+          <span className={`nw-badge ${mint?.error ? 'warn' : mintData ? 'ok' : 'info'}`}>
+            {mint?.error ? 'stale' : mintData ? 'live' : 'loading'}
+          </span>
+        </div>
         {mint?.phase === 'loading' || mint?.phase === 'idle' ? (
           <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
             Reading the mint state from the ledger header…
@@ -2172,8 +2187,16 @@ function MintStatusCard({ mint }) {
           </p>
         ) : (
           <>
-            <div className="nw-mint-head-label">Minted since activation</div>
             <div className="nw-mint-head-value">{minted == null ? '—' : `${fmtGroup(minted)} NSAT`}</div>
+            <div className="nw-mint-live-meta">
+              {`Minted since activation · ledger ${fmtGroup(String(mintData.ledger))}`}
+              {` · heartbeat ${fmtGroup(String(mintData.heartbeat ?? 0))}`}
+              {mint?.fetchedAt
+                ? ` · updated ${Math.max(0, Math.floor((now - mint.fetchedAt) / 1000))}s ago`
+                : ''}
+            </div>
+            <details className="nw-mint-details">
+              <summary>More mint status</summary>
             <div className="nw-kv" style={{ marginTop: 6 }}>
               <span className="nw-k">Total supply on chain</span>
               <span className="nw-v">{supply == null ? '—' : `${fmtGroup(supply)} NSAT`}</span>
@@ -2250,9 +2273,10 @@ function MintStatusCard({ mint }) {
             <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
               {`Read from the ledger header: totalCoins minus the fixed genesis supply of ${fmtGroup(GENESIS_SUPPLY.toString())} NSAT. `}
               One heartbeat is one finalized ledger; the mint is written during the close, so it is
-              not a transaction and never appears in a transfer list. Re-read every 10 seconds
-              while this page is open, and again when you return to the tab.
+              not a transaction and never appears in a transfer list. Re-read every 5 seconds while
+              this page is open, and again when you return to the tab.
             </p>
+            </details>
           </>
         )}
       </section>
