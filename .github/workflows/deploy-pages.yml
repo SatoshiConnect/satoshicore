@@ -205,8 +205,15 @@ jobs:
       # (missing web app manifest, old landing page, wrong content type).
       # Advisory lines cover the gateway origin allowlist, which the owner
       # manages separately and which must never fail a site deploy.
+      # Verify the origin this build was configured for, not the URL GitHub
+      # Pages reports: that output is still the retired wallet.satoshicore.org
+      # hostname, which no longer resolves, so checking it failed every run
+      # regardless of the artifact. The production origin is the CNAME written
+      # above (satoshicore.org on main) or the dispatch input.
       - name: Verify deployed URLs
-        run: node scripts/verify-deployed-site.mjs "${{ needs.deploy.outputs.page_url }}"
+        env:
+          SITE_URL: ${{ inputs.custom_domain_name != '' && format('https://{0}', inputs.custom_domain_name) || 'https://satoshicore.org' }}
+        run: node scripts/verify-deployed-site.mjs "$SITE_URL"
 
       - name: Write verification summary
         if: always()
