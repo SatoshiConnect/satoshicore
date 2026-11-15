@@ -12,8 +12,8 @@ import assert from 'node:assert/strict';
 import nacl from 'tweetnacl';
 import {
   setWalletStorage,
-  keystoreCreate, keystoreUnlock, keystoreList, keystoreExport, keystoreRestore,
-  buildSignedTx, historyLoad, historyPush, historyPatch,
+  keystoreCreate, keystoreUnlock, keystoreList, keystoreExport, keystoreRestore, keystoreRemove,
+  buildSignedTx, historyLoad, historyClear, historyPush, historyPatch,
 } from '../lib/nsatWallet.js';
 import { ed25519Keypair, encodeG } from '../lib/nsatCodec.js';
 
@@ -172,6 +172,24 @@ test('backup restores the same key; a tampered keystore is refused', async () =>
     keystoreRestore(JSON.stringify(corrupted));
     await assert.rejects(() => keystoreUnlock(NAME, PASS), /wrong password/);
   });
+});
+
+test('remove deletes only the named encrypted wallet and leaves the other backup entries intact', async () => {
+  const storage = memoryStorage();
+  setWalletStorage(storage);
+  const first = await keystoreCreate('unused-wallet', PASS);
+  const second = await keystoreCreate('real-wallet', PASS);
+  historyPush('unused-wallet', { txhash: 'ab'.repeat(32), status: 'confirmed' });
+
+  assert.equal(keystoreRemove('unused-wallet'), true);
+  assert.deepEqual(keystoreList(), [{ name: 'real-wallet', pubkey: second.pubkeyG }]);
+  assert.equal(historyClear('unused-wallet'), true);
+  assert.deepEqual(historyLoad('unused-wallet'), []);
+  assert.equal(keystoreRemove('unused-wallet'), false);
+  assert.equal(storage.getItem('scw-web-history-real-wallet'), null);
+  const remaining = JSON.parse(keystoreExport());
+  assert.deepEqual(remaining.wallets.map((wallet) => wallet.name), ['real-wallet']);
+  assert.ok(!storage.raw().includes(first.seedS), 'the first plaintext seed must never be stored');
 });
 
 test('history records a transfer and patches it by transaction hash', async () => {

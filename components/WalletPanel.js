@@ -9,8 +9,8 @@ import {
 } from '../lib/nsatClient';
 import {
   keystoreCreate, keystoreImport, keystoreUnlock, keystoreList,
-  keystoreExport, keystoreRestore, zeroSeed, MIN_PASSWORD_LENGTH,
-  buildSignedTx, historyLoad, historyPush, historyPatch,
+  keystoreExport, keystoreRestore, keystoreRemove, zeroSeed, MIN_PASSWORD_LENGTH,
+  buildSignedTx, historyLoad, historyClear, historyPush, historyPatch,
 } from '../lib/nsatWallet';
 import { decodeSeed } from '../lib/nsatCodec';
 // Shared send gate (mirror of the desktop/prototype reason contract — one
@@ -24,7 +24,7 @@ import {
   removeBiometricUnlock, unlockWithBiometric,
 } from '../lib/biometricUnlock';
 import { backupSilently } from '../lib/driveBackup';
-import { bindOwner, walletNameForAccount } from '../lib/walletBinding';
+import { bindOwner, unbindOwner, walletNameForAccount } from '../lib/walletBinding';
 import GoogleAccount from './GoogleAccount';
 import DriveBackupCard from './DriveBackupCard';
 import BackupReminder from './BackupReminder';
@@ -131,6 +131,7 @@ export default function WalletPanel() {
   const [accountsOpen, setAccountsOpen] = useState(false);
   const [walletManagerView, setWalletManagerView] = useState('list');
   const [walletDetails, setWalletDetails] = useState(null);
+  const [walletRemoveState, setWalletRemoveState] = useState(null);
   const [switchName, setSwitchName] = useState('');
   const [switchPass, setSwitchPass] = useState('');
   // name -> { kind: 'loading' | 'exact' | 'missing' | 'unavailable', value }
@@ -713,6 +714,70 @@ export default function WalletPanel() {
     lockWallet('Wallet locked — signing key cleared from memory.');
   }
 
+  async function checkWalletRemoval(wallet) {
+    if (!wallet?.name || !wallet?.pubkey || wallet.name !== walletDetails?.name) return;
+    setBusy(true);
+    setWalletRemoveState({ phase: 'checking', message: 'Checking the live network…' });
+    try {
+      const identity = await verifyNetworkIdentity();
+      if (!identity.ok || identity.network !== EXPECTED_NETWORK_ID) {
+        throw new Error('Could not verify NSAT Mainnet. The wallet was not removed. Try again when the network is available.');
+      }
+      const account = await getAccount(wallet.pubkey);
+      if (account?.status !== 'not_found') {
+        throw new Error('This address has an on-chain account (or an unexpected response). It was not removed. Move any funds or retain the wallet safely.');
+      }
+      setWalletRemoveState({ phase: 'confirm', message: 'Mainnet confirms this address has no on-chain account. Confirm only if you have another backup or no longer need this key.' });
+    } catch (error) {
+      setWalletRemoveState({ phase: 'error', message: String(error?.message || 'Wallet was not removed.') });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmRemoveWallet(wallet) {
+    if (!wallet?.name || !wallet?.pubkey || wallet.name !== walletDetails?.name
+      || walletRemoveState?.phase !== 'confirm') return;
+    setBusy(true);
+    setWalletRemoveState({ phase: 'checking', message: 'Rechecking Mainnet before removal…' });
+    try {
+      const identity = await verifyNetworkIdentity();
+      if (!identity.ok || identity.network !== EXPECTED_NETWORK_ID) {
+        throw new Error('Could not verify NSAT Mainnet. The wallet was not removed.');
+      }
+      const account = await getAccount(wallet.pubkey);
+      if (account?.status !== 'not_found') {
+        throw new Error('The address now has an on-chain account or returned an unexpected response. The wallet was not removed.');
+      }
+      if (activeRef.current?.name === wallet.name) lockWallet();
+      const removed = keystoreRemove(wallet.name);
+      if (!removed) throw new Error('The wallet was not found in this device’s keystore.');
+      removeBiometricUnlock(wallet.name);
+      historyClear(wallet.name);
+      unbindOwner(wallet.name);
+      setWalletDetails(null);
+      setWalletManagerView('list');
+      setWallets(keystoreList());
+      setBiometricWallets(biometricWalletNames());
+      setOverviewWalletStates((current) => {
+        const next = { ...current };
+        delete next[wallet.name];
+        return next;
+      });
+      setSwitchBalances((current) => {
+        const next = { ...current };
+        delete next[wallet.name];
+        return next;
+      });
+      setWalletRemoveState(null);
+      notify(`“${wallet.name}” was removed from this device. Its Google Drive backup was left unchanged.`, 'ok');
+    } catch (error) {
+      setWalletRemoveState({ phase: 'error', message: String(error?.message || 'Wallet was not removed.') });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   // Account switching never reuses the previous key: it drops the active seed
   // and asks for THIS wallet's password, exactly like a fresh unlock. Nothing
   // is signed until that password is entered again.
@@ -1185,7 +1250,11 @@ export default function WalletPanel() {
                           {isActive ? <span className="nw-badge ok">active</span> : null}
                           <button type="button" className="nw-wallet-gear"
                             aria-label={`Details for ${w.name}`}
-                            onClick={() => { setWalletDetails(w); setWalletManagerView('details'); }}>
+                            onClick={() => {
+                              setWalletDetails(w);
+                              setWalletRemoveState(null);
+                              setWalletManagerView('details');
+                            }}>
                             ⚙
                           </button>
                         </li>
@@ -1296,6 +1365,39 @@ export default function WalletPanel() {
                 <p className="nw-small nw-dim">
                   Private keys stay in the encrypted browser keystore and are never displayed here.
                 </p>
+                <p className="nw-small nw-dim">
+                  Remove deletes only this device&apos;s encrypted key and local history. A Google Drive backup is not changed. Removal is available only after Mainnet confirms the address has no on-chain account.
+                </p>
+                {walletRemoveState?.phase === 'checking' && (
+                  <p className="nw-small nw-dim" role="status">{walletRemoveState.message}</p>
+                )}
+                {walletRemoveState?.phase === 'error' && (
+                  <p className="nw-small nw-google-error" role="alert">{walletRemoveState.message}</p>
+                )}
+                {walletRemoveState?.phase === 'confirm' ? (
+                  <div className="nw-remove-confirm" role="alert">
+                    <p className="nw-small">{walletRemoveState.message}</p>
+                    <p className="nw-small nw-dim">
+                      This permanently removes the encrypted key, device-unlock entry, and local history from this browser. It does not delete the Google Drive backup.
+                    </p>
+                    <div className="nw-btn-row">
+                      <button type="button" className="nw-danger-btn" disabled={busy}
+                        onClick={() => void confirmRemoveWallet(walletDetails)}>
+                        Confirm remove
+                      </button>
+                      <button type="button" className="nw-ghost-btn" disabled={busy}
+                        onClick={() => setWalletRemoveState(null)}>
+                        Keep wallet
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button type="button" className="nw-danger-btn nw-remove-wallet"
+                    disabled={busy}
+                    onClick={() => void checkWalletRemoval(walletDetails)}>
+                    {busy ? 'Checking…' : 'Check before removing'}
+                  </button>
+                )}
               </div>
             )}
 
