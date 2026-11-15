@@ -107,8 +107,11 @@ export default function DriveBackupCard({ onKeystoreChanged } = {}) {
       const saved = await uploadBackup(token, JSON.stringify(envelope));
       for (const wallet of keystoreList()) bindOwner(wallet.name, email);
       setWallets(keystoreList());
-      // The home screen reads this to decide when the copy is too old to trust.
-      recordDriveBackup(email, saved.modifiedTime ? new Date(saved.modifiedTime) : new Date());
+      // The home screen reads this to decide when the copy is too old to trust,
+      // and which wallets it actually carried.
+      recordDriveBackup(email, saved.modifiedTime ? new Date(saved.modifiedTime) : new Date(), {
+        wallets: keystoreList().map((wallet) => wallet.pubkey),
+      });
       setNote(`${saved.existed ? 'Updated' : 'Saved'} the encrypted backup in Google Drive at ${new Date(saved.modifiedTime).toLocaleString()}. Opening it still needs the wallet password.`);
     } catch (err) {
       setError(String(err?.message || 'The Drive backup did not complete.'));

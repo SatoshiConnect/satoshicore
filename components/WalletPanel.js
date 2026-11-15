@@ -473,8 +473,11 @@ export default function WalletPanel() {
       const result = await backupSilently(keystoreExport());
       if (result.backedUp && result.email) {
         bindOwner(name, result.email);
-        // A silent upload counts: the copy in Drive is current again.
-        recordDriveBackup(result.email, result.modifiedTime ? new Date(result.modifiedTime) : new Date());
+        // A silent upload counts: the copy in Drive is current again, and it
+        // covers the wallet that was just added.
+        recordDriveBackup(result.email, result.modifiedTime ? new Date(result.modifiedTime) : new Date(), {
+          wallets: keystoreList().map((wallet) => wallet.pubkey),
+        });
         setWallets(keystoreList());
       }
     } catch { /* no session, no Drive grant, or offline: manual backup remains */ }
