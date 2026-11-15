@@ -700,6 +700,12 @@ export default function WalletPanel() {
   // ---------------- wallet actions (logic unchanged from the audited build) ----
   async function doCreate(e) {
     e.preventDefault();
+    // A form submitted without a real user click can skip the browser's
+    // `required` check, and an unnamed wallet is a blank row nobody can pick.
+    if (!newName.trim()) {
+      notify('Give the wallet a name first.', 'err');
+      return;
+    }
     const operationEpoch = lockEpoch.current;
     setBusy(true);
     try {
@@ -734,6 +740,10 @@ export default function WalletPanel() {
 
   async function doImport(e) {
     e.preventDefault();
+    if (!newName.trim()) {
+      notify('Give the wallet a name first.', 'err');
+      return;
+    }
     const operationEpoch = lockEpoch.current;
     setBusy(true);
     try {
@@ -1325,8 +1335,10 @@ export default function WalletPanel() {
               {hiddenWallets > 0 && (
                 <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
                   {`${hiddenWallets} wallet${hiddenWallets === 1 ? '' : 's'} on this device `
-                    + 'belong to a Google account that is not signed in on this browser, and stay hidden '
-                    + 'until it signs in. Nothing was deleted.'}
+                    + `${hiddenWallets === 1 ? 'belongs' : 'belong'} to a Google account that is not `
+                    + 'signed in on this browser, and '
+                    + `${hiddenWallets === 1 ? 'stays' : 'stay'} hidden until it signs in. `
+                    + 'Nothing was deleted.'}
                 </p>
               )}
               {unlockName && biometricWallets.includes(unlockName) ? (
