@@ -2137,30 +2137,102 @@ function ActivityPage({ history, activeName, chain, mint, onLoadOlder, onRecheck
   const { supply, minted } = supplyAndMinted(mintData?.total_coins);
   return (
     <div>
-      {/* The mint is close-level accounting, not a transfer, so it can never be
-       * a row in the list below — and its detailed card sits after every row.
-       * On a phone that put the one number people open Activity for thousands
-       * of pixels down, so the headline is repeated here, above the list. */}
-      <section className="nw-card nw-mint-head">
-        <div className="nw-mint-head-label">Founder Mint</div>
-        {minted != null ? (
-          <>
-            <div className="nw-mint-head-value">{`${fmtGroup(minted)} NSAT`}</div>
-            <div className="nw-small nw-dim">
-              {`minted since activation${mintData?.ledger != null
-                ? ` · as of ledger ${fmtGroup(String(mintData.ledger))}` : ''}`}
-              {mintData?.activation_ledger != null
-                ? ` · from ledger ${fmtGroup(String(mintData.activation_ledger))}` : ''}
-            </div>
-          </>
-        ) : mint?.phase === 'loading' || mint?.phase === 'idle' ? (
-          <div className="nw-small nw-dim" style={{ marginTop: 4 }}>
+      {/* Mint status first. The mint is close-level accounting carried in the
+       * ledger header, so it can never be a row in the transfer list — and
+       * keeping the full status below every row buried the one number people
+       * open Activity for. Every figure comes from that header, never from a
+       * rate applied to the current height. */}
+      <section className="nw-card nw-mint-head" aria-labelledby="nw-mint-title">
+        <h2 id="nw-mint-title" style={{ color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          Founder Mint
+          <span className="nw-badge info">ledger header</span>
+        </h2>
+        {mint?.phase === 'loading' || mint?.phase === 'idle' ? (
+          <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
             Reading the mint state from the ledger header…
-          </div>
+          </p>
+        ) : !mintData ? (
+          <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
+            {`No indexed ledger header carries the Founder Mint extension yet${mint?.error ? ` (${mint.error})` : ''}. No minted total is shown rather than an estimate.`}
+          </p>
         ) : (
-          <div className="nw-small nw-dim" style={{ marginTop: 4 }}>
-            {`No indexed ledger header carries the Founder Mint extension yet${mint?.error ? ` (${mint.error})` : ''} — no minted total is shown rather than an estimate.`}
-          </div>
+          <>
+            <div className="nw-mint-head-label">Minted since activation</div>
+            <div className="nw-mint-head-value">{minted == null ? '—' : `${fmtGroup(minted)} NSAT`}</div>
+            <div className="nw-kv" style={{ marginTop: 6 }}>
+              <span className="nw-k">Total supply on chain</span>
+              <span className="nw-v">{supply == null ? '—' : `${fmtGroup(supply)} NSAT`}</span>
+            </div>
+            <div className="nw-kv">
+              <span className="nw-k">Heartbeats counted</span>
+              <span className="nw-v">{fmtGroup(String(mintData.heartbeat ?? 0))}</span>
+            </div>
+            <div className="nw-kv">
+              <span className="nw-k">Pending escrow</span>
+              <span className="nw-v">{String(mintData.escrow ?? '0') === '0'
+                ? 'none — fully delivered'
+                : `${fmtGroup(String(mintData.escrow))} NSAT`}</span>
+            </div>
+            <div className="nw-kv">
+              <span className="nw-k">As of ledger</span>
+              <span className="nw-v">{`${fmtGroup(String(mintData.ledger))}${chainTime(mintData.close_time) ? ` · ${chainTime(mintData.close_time)}` : ''}`}</span>
+            </div>
+            {mintData.activation_ledger != null && (
+              <div className="nw-kv">
+                <span className="nw-k">Activation ledger</span>
+                <span className="nw-v">{fmtGroup(String(mintData.activation_ledger))}</span>
+              </div>
+            )}
+            {eras.length > 0 && (
+              <details className="nw-mint-eras">
+                <summary>
+                  <span>{`Issuance eras · ${eras.length}`}</span>
+                  <span className="nw-dim">
+                    {`${fmtGroup(String(eras.reduce((sum, era) => sum + Number(era.ledgers || 0), 0)))} ledgers`}
+                  </span>
+                </summary>
+                <p className="nw-small nw-dim" style={{ margin: '6px 0 0' }}>
+                  Each era is a run of finalized ledgers whose header supply (totalCoins) grew by the
+                  same exact amount at every close, read from the headers themselves.
+                </p>
+                <ul className="nw-tx-list" style={{ marginTop: 8 }}>
+                  {eras.map((era) => (
+                    <li key={`${era.from_ledger}-${era.to_ledger}`} className="nw-tx-row"
+                      style={{ alignItems: 'flex-start' }}>
+                      <div style={{ flex: 1 }}>
+                        <div>
+                          {`Ledger ${fmtGroup(String(era.from_ledger))}–${fmtGroup(String(era.to_ledger))}`}{' '}
+                          <span className="nw-badge info">{`${fmtGroup(String(era.ledgers))} ledgers`}</span>
+                        </div>
+                        <div className="nw-small nw-dim">
+                          {`heartbeats ${fmtGroup(String(era.heartbeat_from))}–${fmtGroup(String(era.heartbeat_to))}`}
+                          {chainTime(era.opened_at) ? ` · ${chainTime(era.opened_at)}` : ''}
+                        </div>
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        {era.per_ledger == null
+                          ? <span className="nw-badge warn">rate unknown</span>
+                          : `${fmtGroup(String(era.per_ledger))} / ledger`}
+                        <div className="nw-small nw-dim">
+                          {`${fmtGroup(String(era.minted))} NSAT${era.complete ? '' : ' · partial'}`}
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+                {mint?.unattributed != null && mint.unattributed !== '0' && (
+                  <p className="nw-small" style={{ margin: '8px 0 0', color: 'var(--warn)' }}>
+                    {`${fmtGroup(String(mint.unattributed))} NSAT of header supply growth is not attributable to an era: this index is missing ledgers inside that range.`}
+                  </p>
+                )}
+              </details>
+            )}
+            <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
+              {`Read from the ledger header: totalCoins minus the fixed genesis supply of ${fmtGroup(GENESIS_SUPPLY.toString())} NSAT. `}
+              One heartbeat is one finalized ledger; the mint is written during the close, so it is
+              not a transaction and never appears in a transfer list.
+            </p>
+          </>
         )}
       </section>
 
@@ -2285,97 +2357,6 @@ function ActivityPage({ history, activeName, chain, mint, onLoadOlder, onRecheck
         )}
       </section>
 
-      {/* Founder Mint is a credit written into the ledger header, not a
-       * transfer, so it can never be a row above. Every figure here is read
-       * from that header — never a rate applied to the current height. */}
-      <section className="nw-card">
-        <h2 style={{ color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          Founder Mint
-          <span className="nw-badge info">ledger header</span>
-        </h2>
-        {mint?.phase === 'loading' || mint?.phase === 'idle' ? (
-          <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>Reading the mint state from the index…</p>
-        ) : !mintData ? (
-          <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
-            {`No indexed ledger header carries the Founder Mint extension yet${mint?.error ? ` (${mint.error})` : ''}. No minted total is shown rather than an estimate.`}
-          </p>
-        ) : (
-          <>
-            <div className="nw-kv" style={{ marginTop: 8 }}>
-              <span className="nw-k">Minted since activation</span>
-              <span className="nw-v">{minted == null ? '—' : `${fmtGroup(minted)} NSAT`}</span>
-            </div>
-            <div className="nw-kv">
-              <span className="nw-k">Total supply on chain</span>
-              <span className="nw-v">{supply == null ? '—' : `${fmtGroup(supply)} NSAT`}</span>
-            </div>
-            <div className="nw-kv">
-              <span className="nw-k">Heartbeats counted</span>
-              <span className="nw-v">{fmtGroup(String(mintData.heartbeat ?? 0))}</span>
-            </div>
-            <div className="nw-kv">
-              <span className="nw-k">Pending escrow</span>
-              <span className="nw-v">{String(mintData.escrow ?? '0') === '0'
-                ? 'none — fully delivered'
-                : `${fmtGroup(String(mintData.escrow))} NSAT`}</span>
-            </div>
-            <div className="nw-kv">
-              <span className="nw-k">As of ledger</span>
-              <span className="nw-v">{`${mintData.ledger}${chainTime(mintData.close_time) ? ` · ${chainTime(mintData.close_time)}` : ''}`}</span>
-            </div>
-            {mintData.activation_ledger != null && (
-              <div className="nw-kv">
-                <span className="nw-k">Activation ledger</span>
-                <span className="nw-v">{fmtGroup(String(mintData.activation_ledger))}</span>
-              </div>
-            )}
-            {eras.length > 0 && (
-              <>
-                <h3 style={{ color: 'var(--text)', margin: '14px 0 0', fontSize: 14 }}>Issuance eras</h3>
-                <p className="nw-small nw-dim" style={{ margin: '4px 0 0' }}>
-                  Each era is a run of finalized ledgers whose header supply (totalCoins) grew by the
-                  same exact amount at every close, read from the headers themselves.
-                </p>
-                <ul className="nw-tx-list" style={{ marginTop: 8 }}>
-                  {eras.map((era) => (
-                    <li key={`${era.from_ledger}-${era.to_ledger}`} className="nw-tx-row"
-                      style={{ alignItems: 'flex-start' }}>
-                      <div style={{ flex: 1 }}>
-                        <div>
-                          {`Ledger ${fmtGroup(String(era.from_ledger))}–${fmtGroup(String(era.to_ledger))}`}{' '}
-                          <span className="nw-badge info">{`${fmtGroup(String(era.ledgers))} ledgers`}</span>
-                        </div>
-                        <div className="nw-small nw-dim">
-                          {`heartbeats ${fmtGroup(String(era.heartbeat_from))}–${fmtGroup(String(era.heartbeat_to))}`}
-                          {chainTime(era.opened_at) ? ` · ${chainTime(era.opened_at)}` : ''}
-                        </div>
-                      </div>
-                      <div style={{ textAlign: 'right' }}>
-                        {era.per_ledger == null
-                          ? <span className="nw-badge warn">rate unknown</span>
-                          : `${fmtGroup(String(era.per_ledger))} / ledger`}
-                        <div className="nw-small nw-dim">
-                          {`${fmtGroup(String(era.minted))} NSAT${era.complete ? '' : ' · partial'}`}
-                        </div>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-                {mint?.unattributed != null && mint.unattributed !== '0' && (
-                  <p className="nw-small" style={{ margin: '8px 0 0', color: 'var(--warn)' }}>
-                    {`${fmtGroup(String(mint.unattributed))} NSAT of header supply growth is not attributable to an era: this index is missing ledgers inside that range.`}
-                  </p>
-                )}
-              </>
-            )}
-            <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
-              {`Read from the ledger header: totalCoins minus the fixed genesis supply of ${fmtGroup(GENESIS_SUPPLY.toString())} NSAT. `}
-              One heartbeat is one finalized ledger; the mint is written during the close, so it is
-              not a transaction and never appears in a transfer list.
-            </p>
-          </>
-        )}
-      </section>
     </div>
   );
 }

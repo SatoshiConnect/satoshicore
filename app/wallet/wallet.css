@@ -1215,6 +1215,35 @@ body:has(.nw-root) .site-footer {
 }
 .nw-mint-head + .nw-card { margin-top: 12px; }
 
+/* The issuance-era breakdown is long (one row per era), so it folds away under
+ * a one-line summary: the status card stays scannable and the detail is one tap
+ * away on the same screen. */
+.nw-mint-eras {
+  margin-top: 12px;
+  border-top: 1px solid var(--row-border);
+  padding-top: 10px;
+}
+.nw-mint-eras > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  list-style: none;
+  min-height: 32px;
+}
+.nw-mint-eras > summary::-webkit-details-marker { display: none; }
+.nw-mint-eras > summary::after {
+  content: '⌄';
+  color: var(--text-dim);
+  font-weight: 500;
+}
+.nw-mint-eras[open] > summary::after { content: '⌃'; }
+.nw-mint-eras .nw-tx-row:last-child { border-bottom: none; }
+
 /* The sign-in gate: the only thing on screen when signed out, so it sits near
  * the top of the empty wallet rather than pretending to be a populated page. */
 .nw-gate { max-width: 420px; margin: 10vh auto 0; }
