@@ -22,7 +22,12 @@
 /* Only the wallet's own column is full-bleed. This used to target every
    .container on the page, which also widened .header-inner — that is why the
    logo jumped to the window edge on this route and nowhere else. */
+/* The wallet owns the space between the shared header and footer, so the
+ * device can be centred in it on every window size instead of sitting at the
+ * top of a tall page. */
 body:has(.nw-root) .site-main.container {
+  display: flex;
+  flex-direction: column;
   max-width: none;
   padding: 0;
 }
@@ -112,6 +117,9 @@ body:has(.nw-root) .site-main.container {
   --device-glow: rgba(96, 132, 255, 0.26);
   --device-floor: rgba(0, 0, 0, 0.45);
   --device-button: rgba(255, 255, 255, 0.28);
+  /* One source of truth for the simulated device height: the phone and the
+   * side buttons placed beside it both read it. */
+  --phone-h: clamp(420px, calc(100dvh - 210px), 780px);
 
   --radius: 16px;
   --radius-sm: 12px;
@@ -196,10 +204,13 @@ body:has(.nw-root) .site-main.container {
  * to edge. */
 .nw-root {
   position: relative;
-  padding: 1.75rem var(--gutter, 1.25rem) 3rem;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 1.75rem var(--gutter, 1.25rem);
   display: flex;
   justify-content: center;
-  align-items: flex-start;
+  /* Centred both ways: the phone is the page, wherever the window sits. */
+  align-items: center;
   /* A pool of light above and a floor shadow below, so the phone reads as an
      object on a surface instead of a card floating in empty space. */
   background:
@@ -222,14 +233,15 @@ body:has(.nw-root) .site-main.container {
 }
 
 .nw-root::before {
-  top: calc(1.75rem + 148px);
+  /* Anchored to the device, which is centred, not to the page. */
+  top: calc(50% - var(--phone-h) / 2 + 148px);
   left: calc(50% - 222px);
   /* Second bump: the pair of volume keys, drawn with one element. */
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45), 0 58px 0 0 var(--device-button);
 }
 
 .nw-root::after {
-  top: calc(1.75rem + 196px);
+  top: calc(50% - var(--phone-h) / 2 + 196px);
   right: calc(50% - 218px);
   height: 78px;
 }
@@ -240,9 +252,11 @@ body:has(.nw-root) .site-main.container {
   display: flex;
   flex-direction: column;
   /* A phone screen, not a page: the shell keeps its height and only the
-   * content scrolls, so the tab bar is always reachable at the bottom. */
-  height: min(780px, calc(100vh - 180px));
-  min-height: 480px;
+   * content scrolls, so the tab bar is always reachable at the bottom. The
+   * height follows the space actually available (dvh, so mobile browser
+   * chrome cannot push it off-screen) and never exceeds it. */
+  height: var(--phone-h);
+  max-height: 100%;
   background: var(--bg);
   /* The device: a 12px bezel, with titanium rails drawn as rings outside it. */
   border: 12px solid var(--device-bezel);
