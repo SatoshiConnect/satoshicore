@@ -13,7 +13,7 @@ import { pullLinkedAddressesForUser } from '../lib/walletLinks';
 import {
   PROFILE_ID_MAX, PROFILE_ID_MIN, createProfileForUser, deleteProfileForUser,
   describeProfileFailure, describeProfileIdProblem, normalizeProfileId,
-  profileLabel, readMyProfile, setPrimaryWalletForUser,
+  profileLabel, readMyProfile, renameProfileIdForUser, setPrimaryWalletForUser,
 } from '../lib/profile';
 
 const configured = isFirebaseWebConfigured();
@@ -33,6 +33,9 @@ export default function ProfileCard() {
   const [linked, setLinked] = useState([]);
   const [idInput, setIdInput] = useState('');
   const [primaryPick, setPrimaryPick] = useState('');
+  // Renaming is a separate field so the current ID stays visible while a new
+  // one is typed; a typo is the usual reason to change it.
+  const [renameInput, setRenameInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const [problem, setProblem] = useState(null);          // describeProfileFailure result
@@ -115,6 +118,28 @@ export default function ProfileCard() {
       } else {
         setProblem(describeProfileFailure(error, { action: 'save', projectId: getFirebaseWebConfig().projectId }));
       }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function rename() {
+    setBusy(true);
+    setNote('');
+    setProblem(null);
+    try {
+      const id = normalizeProfileId(renameInput);
+      if (!id) {
+        setNote(describeProfileIdProblem(renameInput));
+        return;
+      }
+      const doc = await renameProfileIdForUser(id);
+      setProfile(doc);
+      setRenameInput('');
+      announceProfileChanged();
+      setNote(`Profile ID is now ${profileLabel(doc.profileId)} — the old ID was released.`);
+    } catch (error) {
+      setProblem(describeProfileFailure(error, { action: 'save', projectId: getFirebaseWebConfig().projectId }));
     } finally {
       setBusy(false);
     }
@@ -223,30 +248,49 @@ export default function ProfileCard() {
                   account already links.
                 </p>
               ) : (
-                <>
-                  <div className="nw-kv" style={{ marginTop: 8 }}>
-                    <span className="nw-k">Choose primary</span>
-                    <span className="nw-v">
-                      <select aria-label="Primary wallet" value={primaryPick}
-                        onChange={(event) => setPrimaryPick(event.target.value)}>
-                        <option value="">— none —</option>
-                        {primaryOptions.map((address) => (
-                          <option key={address} value={address}>{shortAddress(address)}</option>
-                        ))}
-                      </select>
-                    </span>
-                  </div>
-                  <div className="nw-btn-row" style={{ margin: '8px 0 0' }}>
-                    <button type="button" className="nw-chip-btn" onClick={savePrimary}
-                      disabled={busy}>
-                      {busy ? 'Saving…' : 'Save primary wallet'}
-                    </button>
-                    <button type="button" className="nw-chip-btn" onClick={remove} disabled={busy}>
-                      Delete profile
-                    </button>
-                  </div>
-                </>
+                <div className="nw-kv" style={{ marginTop: 8 }}>
+                  <span className="nw-k">Choose primary</span>
+                  <span className="nw-v">
+                    <select aria-label="Primary wallet" value={primaryPick}
+                      onChange={(event) => setPrimaryPick(event.target.value)}>
+                      <option value="">— none —</option>
+                      {primaryOptions.map((address) => (
+                        <option key={address} value={address}>{shortAddress(address)}</option>
+                      ))}
+                    </select>
+                  </span>
+                </div>
               )}
+              {/* Delete stays available with no linked wallet: a profile that
+                * names no primary wallet must still be removable. */}
+              <div className="nw-btn-row" style={{ margin: '8px 0 0' }}>
+                {linked.length > 0 ? (
+                  <button type="button" className="nw-chip-btn" onClick={savePrimary}
+                    disabled={busy}>
+                    {busy ? 'Saving…' : 'Save primary wallet'}
+                  </button>
+                ) : null}
+                <button type="button" className="nw-chip-btn" onClick={remove} disabled={busy}>
+                  Delete profile
+                </button>
+              </div>
+              <div className="nw-profile-rename">
+                <label className="nw-label" htmlFor="nw-profile-rename">Change ID</label>
+                <input id="nw-profile-rename" value={renameInput} spellCheck={false}
+                  autoComplete="off" placeholder={profile.profileId} disabled={busy}
+                  onChange={(event) => setRenameInput(event.target.value)} />
+                <div className="nw-btn-row" style={{ margin: '8px 0 0' }}>
+                  <button type="button" className="nw-chip-btn" onClick={rename}
+                    disabled={busy || !normalizeProfileId(renameInput)
+                      || normalizeProfileId(renameInput) === profile.profileId}>
+                    {busy ? 'Saving…' : 'Change ID'}
+                  </button>
+                </div>
+                <p className="nw-small nw-dim" style={{ margin: '6px 0 0' }}>
+                  The new ID must be free. Your primary wallet choice is kept, and the old ID is
+                  released only after the new one is saved.
+                </p>
+              </div>
             </div>
           ) : (
             <div className="nw-profile-body">
@@ -255,7 +299,7 @@ export default function ProfileCard() {
                 placeholder="e.g. somchai" disabled={busy || !account.emailVerified}
                 onChange={(event) => setIdInput(event.target.value)} />
               <p className="nw-small nw-dim" style={{ margin: '6px 0 0' }}>
-                {`${PROFILE_ID_MIN}–${PROFILE_ID_MAX} characters: lowercase letters, digits, “-” and “_”. IDs are unique and cannot be changed later — delete the profile to release it.`}
+                {`${PROFILE_ID_MIN}–${PROFILE_ID_MAX} characters: lowercase letters, digits, “-” and “_”. IDs are unique; you can change yours later under Change ID.`}
               </p>
               {idProblem ? (
                 <p className="nw-small" style={{ margin: '6px 0 0', color: 'var(--warn)' }}>

@@ -47,6 +47,11 @@ requirement is normally satisfied by signing in.
 - **Taken ID**: reported as taken, before and after the race. A concurrent claim
   loses at the rules (`create` only), and that refusal is reported as "taken",
   not as a generic error.
+- **Change the ID**: a typo is the usual reason, so it is a first-class action
+  instead of delete-and-recreate. The new claim is taken first, the profile is
+  written, and only then is the old claim released — so a failure in between
+  leaves the account holding its existing ID and frees the new one again. The
+  primary wallet choice survives.
 - **Change primary wallet**: allowed only to one of the linked addresses; the
   select lists those, and the rules re-check the link.
 - **Delete**: removes `profiles/{uid}` and the claim it holds, freeing the ID.
@@ -55,6 +60,11 @@ requirement is normally satisfied by signing in.
 The wallet screen opens on the account's primary wallet when it is still linked,
 so the choice has a visible effect rather than being a label nobody reads. It
 only chooses which linked address opens first; it grants nothing.
+
+When a profile exists, the wallet home also shows the `@id` next to the address
+(a copy button with the tooltip “a handle, not a payment address”), so the name
+the person chose is visible where they use the wallet rather than buried in
+Settings. It is display only and is not resolvable to an address yet.
 
 ## Provisioning (one-time, Firebase console)
 
@@ -70,10 +80,11 @@ only chooses which linked address opens first; it grants nothing.
 
 ## What is verified, and what is not
 
-- `npm test` includes `tests/profile.test.mjs` (10 checks): ID validation and
+- `npm test` includes `tests/profile.test.mjs` (12 checks): ID validation and
   wording, the exact two-field document, claim/race handling, the round trip
-  (create → primary → delete → release), the Firestore store writing one address
-  and one claim document, refusal wording, and assertions on the rules file
+  (create → primary → delete → release), changing an ID (new claim first, old
+  released after, failed rename gives the new ID back), the Firestore store
+  writing one profile and one claim document, refusal wording, and assertions on the rules file
   (verified-email requirement, `hasOnly` shapes, claim/`walletLinks` linkage,
   no `list`, no `update`, deny-all fallback, no `if true`).
 - The card was rendered in a local build and shows, for a signed-out visitor,

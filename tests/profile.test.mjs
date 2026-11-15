@@ -13,6 +13,7 @@ import {
   PROFILES_COLLECTION,
   claimProfileIdIn,
   createFirestoreProfileStore,
+  renameProfileIdIn,
   describeProfileFailure,
   describeProfileIdProblem,
   normalizeProfile,
@@ -133,6 +134,41 @@ test('profile round trip: create, change primary wallet, delete and release', as
   assert.deepEqual(store.state.releases, ['alice']);
   assert.deepEqual(store.state.claims, {});
   assert.equal(await readProfileFrom(store), null);
+});
+
+test('changing an ID claims the new one first and releases the old one after', async () => {
+  const store = fakeStore({ profile: { profileId: 'alice', primaryAddress: ADDRESS }, claims: { alice: UID } });
+  const renamed = await renameProfileIdIn(store, 'Alice-2');
+  assert.deepEqual(renamed, { profileId: 'alice-2', primaryAddress: ADDRESS },
+    'the primary wallet survives the rename');
+  assert.deepEqual(store.state.claims, { 'alice-2': UID }, 'old claim released, new one held');
+  assert.deepEqual(store.state.releases, ['alice']);
+
+  // Same ID is a no-op, not claim and write churn.
+  const writes = store.state.writes.length;
+  const again = await renameProfileIdIn(store, 'alice-2');
+  assert.equal(again.profileId, 'alice-2');
+  assert.equal(store.state.writes.length, writes);
+
+  await assert.rejects(() => renameProfileIdIn(store, 'no'), /profile id/);
+  const empty = fakeStore();
+  await assert.rejects(() => renameProfileIdIn(empty, 'bob'), /create a profile first/);
+});
+
+// A failed rename must leave the account exactly as it was: still holding the
+// old ID and its profile, with the unclaimed new ID free for anyone.
+test('a failed rename gives the new ID back and keeps the old profile', async () => {
+  const store = fakeStore({ profile: { profileId: 'alice', primaryAddress: ADDRESS }, claims: { alice: UID } });
+  store.write = async () => { throw Object.assign(new Error('denied'), { code: 'permission-denied' }); };
+  await assert.rejects(() => renameProfileIdIn(store, 'bob'), /denied/);
+  assert.deepEqual(store.state.claims, { alice: UID }, 'the new claim is released again');
+  assert.deepEqual(store.state.profile, { profileId: 'alice', primaryAddress: ADDRESS });
+
+  // And a rename onto an ID somebody else holds is refused before any write.
+  const taken = fakeStore({ profile: { profileId: 'alice', primaryAddress: '' }, claims: { alice: UID, bob: 'uid-2' } });
+  await assert.rejects(() => renameProfileIdIn(taken, 'bob'), (error) => error.code === 'ID_TAKEN');
+  assert.equal(taken.state.writes.length, 0);
+  assert.deepEqual(taken.state.claims, { alice: UID, bob: 'uid-2' });
 });
 
 test('the Firestore store keeps the claim and the profile in separate documents', async () => {

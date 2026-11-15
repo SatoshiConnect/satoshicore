@@ -1220,6 +1220,7 @@ body:has(.nw-root) .site-footer {
   border-radius: 10px; background: var(--surface-2, rgba(255, 255, 255, 0.04));
 }
 .nw-profile-problem a { display: inline-block; margin-top: 6px; color: var(--accent); }
+.nw-profile-rename { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--row-border); }
 
 .nw-txf { display: flex; flex-direction: column; gap: 10px; }
 .nw-row { display: flex; gap: 12px; align-items: center; }

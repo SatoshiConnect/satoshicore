@@ -165,6 +165,9 @@ export default function WalletPanel() {
   // which linked wallet opens first; it grants nothing, and a primary address
   // that is no longer linked is ignored rather than shown.
   const [primaryAddress, setPrimaryAddress] = useState('');
+  // The profile ID, shown on the wallet screen so a handle the person chose is
+  // visible where they use it. Display only: it grants no spending power.
+  const [profileId, setProfileId] = useState('');
   // ui
   const [page, setPage] = useState('overview');
   const [busy, setBusy] = useState(false);
@@ -292,6 +295,8 @@ export default function WalletPanel() {
     setSwitchName(''); setSwitchPass('');
     setSwitchBalances({});
     setOverviewWalletStates({});
+    setPrimaryAddress('');
+    setProfileId('');
     setSendRecipientBalances({});
     setToast(null);
     setPage('overview');
@@ -528,11 +533,13 @@ export default function WalletPanel() {
   // Which linked wallet this account calls primary. Read with the list so the
   // two cannot disagree, and re-read when Settings changes either one.
   useEffect(() => {
-    if (!accountUid) { setPrimaryAddress(''); return undefined; }
+    if (!accountUid) { setPrimaryAddress(''); setProfileId(''); return undefined; }
     let alive = true;
     const reload = () => {
       readMyProfile().then((doc) => {
-        if (alive) setPrimaryAddress(doc?.primaryAddress || '');
+        if (!alive) return;
+        setPrimaryAddress(doc?.primaryAddress || '');
+        setProfileId(doc?.profileId || '');
       }).catch(() => { /* no profile yet, or no database: no preference */ });
     };
     reload();
@@ -1518,6 +1525,7 @@ export default function WalletPanel() {
               bus={{ busy, doCreate, doImport, newName, setNewName, newPass, setNewPass,
                 importSeed, setImportSeed, accountEmail }}
               net={{ net, netOk, ledger: liveLedger ?? ledger, fee, reserve }}
+              profileId={profileId}
               notify={notify}
               onSend={() => setPage('send')} onReceive={() => setPage('receive')}
               onActivity={() => setPage('activity')}
@@ -2007,7 +2015,7 @@ function WalletChainStatus({ wallets, states = {}, baseReserve, activeName = '' 
 }
 
 /* --------------------------------- Overview ------------------------------ */
-function OverviewPage({ active, wallets, balance, funded, walletChainStates, baseReserve, bus, net, notify, onSend, onReceive, onActivity, onManage }) {
+function OverviewPage({ active, wallets, balance, funded, walletChainStates, baseReserve, bus, net, profileId, notify, onSend, onReceive, onActivity, onManage }) {
   // First run is one decision, not two competing forms: a phone wallet offers
   // Create or Import as a segmented control, then shows the chosen form.
   const [mode, setMode] = useState('create');
@@ -2125,6 +2133,16 @@ function OverviewPage({ active, wallets, balance, funded, walletChainStates, bas
             }}>
             {shortAddr(active.pubkey, 8)}
           </button>
+          {profileId ? (
+            <button type="button" className="nw-chip-btn nw-mono"
+              title="Copy your profile ID — a handle, not a payment address"
+              onClick={async () => {
+                await navigator.clipboard.writeText(`@${profileId}`);
+                notify('📋 Copied: profile ID');
+              }}>
+              @{profileId}
+            </button>
+          ) : null}
         </div>
       </section>
 
