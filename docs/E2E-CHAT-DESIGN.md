@@ -1,6 +1,7 @@
 # Encrypted chat (E2E) — design, guarantees, deployment
 
-Status: implemented and tested locally; **not enabled on the production gateway**.
+Status: implemented, tested, **enabled on the production gateway and web root
+(2026-11-16)** — see "Enabling it" for the exact steps and the rollback.
 Turning it on is one operator action, listed at the end.
 
 ## What this is
@@ -63,7 +64,7 @@ the size limit is a client rule, not a surprise at the relay.
 
 `services/api-gateway/chat-relay.mjs`, mounted by `server.js` under
 `/api/v1/chat/*` **only when `NSAT_CHAT_RELAY=1`**. With the flag off the routes
-do not exist (verified: 404, and no database file is created).
+do not exist (verified on production: 404, and no database file is created).
 
 | Route | Auth | Purpose |
 | --- | --- | --- |
@@ -132,18 +133,56 @@ because a plaintext chat left on a shared device is worse than a lost one.
 
 ## Enabling it
 
-Nothing below has been done on production yet.
+**Enabled on production 2026-11-16** (`ccd24cd` gateway code, web built from
+`75af7cb`). The steps below are what was actually run, kept as the procedure for
+re-enabling after a rollback.
 
-1. Gateway: set `NSAT_CHAT_RELAY=1` (and, if wanted, `NSAT_CHAT_DB`) in the
-   launchd wrapper `~/nsat-ops/gateway-launch-wrapper.sh`, copy the new
-   `services/api-gateway/chat-relay.mjs` next to `server.js`, restart the
-   gateway service. This restarts the read surface the wallet uses, so it is an
-   operator decision.
-2. Web: build with `NEXT_PUBLIC_CHAT_RELAY=1` (and the usual
-   `NEXT_PUBLIC_API_SAME_ORIGIN=1`) and deploy the static root as usual. Without
-   the flag the Messages entry is absent.
-3. Rollback: unset `NSAT_CHAT_RELAY` and restart the gateway (routes disappear,
-   data stays); rebuild the web root without the flag.
+1. Gateway. The flag lives in the launchd job, not the wrapper, so it survives a
+   wrapper edit and is visible in one place:
+
+   ```
+   /usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:NSAT_CHAT_RELAY string 1" \
+     ~/Library/LaunchAgents/org.satoshicore.gateway.plist
+   /usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:NSAT_CHAT_DB string \
+     /Users/migssa-ngakhaonu/nsat-ops/gateway/data/chat.sqlite" \
+     ~/Library/LaunchAgents/org.satoshicore.gateway.plist
+   launchctl bootout gui/$(id -u)/org.satoshicore.gateway
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.satoshicore.gateway.plist
+   ```
+
+   `server.js` and `chat-relay.mjs` are copied from the reviewed commit
+   (`install -m 0644`, or `git show HEAD:services/api-gateway/…`), never edited in
+   place. The relay loads `chat-relay.mjs` from its own directory and creates the
+   SQLite file on first use.
+2. Web: build with `NEXT_PUBLIC_CHAT_RELAY=1` **and** `NEXT_PUBLIC_API_SAME_ORIGIN=1`
+   and deploy the static root as usual. Without the flag the Messages entry is
+   absent (`chatEnabled:!1` in the bundle). Caddy already proxies `/api/*` on
+   satoshicore.org to the gateway, so the browser talks to its own origin and no
+   CORS preflight is involved; `gateway.satoshicore.org` also works because the
+   server now allows the `X-NSAT-*` headers.
+3. Check, in order: gateway `200` on `/api/v1/network/status`, `/v1/health`, and
+   `/api/v1/chain/info`; `400 address required` on `/api/v1/chat/keys`; `401
+   signature required` on an unsigned `POST /api/v1/chat/messages`; then the
+   ephemeral round trip (`publish → send → inbox → ack`) against the public
+   origin. A smoke test writes one key row and one message and deletes both.
+4. Rollback, in this order (so the UI never shows a button that cannot work):
+
+   ```
+   # web first: rebuild/deploy the previous webroot without the flag
+   ln -sfn satoshicore-webroot-profile-ccd24cd ~/nsat-ops/satoshicore-webroot
+   # then the gateway: remove the two keys and restart
+   /usr/libexec/PlistBuddy -c "Delete :EnvironmentVariables:NSAT_CHAT_RELAY" \
+     ~/Library/LaunchAgents/org.satoshicore.gateway.plist
+   /usr/libexec/PlistBuddy -c "Delete :EnvironmentVariables:NSAT_CHAT_DB" \
+     ~/Library/LaunchAgents/org.satoshicore.gateway.plist
+   launchctl bootout gui/$(id -u)/org.satoshicore.gateway
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.satoshicore.gateway.plist
+   ```
+
+   Routes disappear (404) and `~/nsat-ops/gateway/data/chat.sqlite` is left in
+   place: undelivered ciphertext survives, so a re-enable does not lose pending
+   messages. To also drop the data, move the file aside; nothing else references
+   it.
 
 The gateway stores no key material, so enabling or disabling the relay never puts
 a seed or a wallet file on the server.

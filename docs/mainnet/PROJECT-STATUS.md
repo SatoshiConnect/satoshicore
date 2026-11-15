@@ -293,9 +293,27 @@ browser 430×932 (/  local)                    gate มีสองปุ่ม,
 
 | รายการ | สถานะ | หลักฐาน / หมายเหตุ |
 |---|---|---|
-| แชท E2E ระหว่างกระเป๋า | **IMPLEMENTED + TESTED (local), NOT ENABLED** | `lib/e2eChat.js` (คีย์จาก seed = libsodium `crypto_sign_ed25519_sk_to_curve25519`, อ้าง vector จาก PyNaCl), `services/api-gateway/chat-relay.mjs` (เก็บเฉพาะ ciphertext, auth ด้วยลายเซ็นกระเป๋า), `lib/chatClient.js`, `components/ChatPanel.js`; `tests/e2e-chat.test.mjs` 6/6, `chat-relay` 5/5, `chat-client` 5/5; สาธิตจริง: UI ส่ง → relay 200 → seed ผู้รับถอดได้ข้อความเดิม, `strings` บน DB ไม่พบ plaintext; **ปิดอยู่** เพราะ relay ต้อง `NSAT_CHAT_RELAY=1` + restart gateway (ยังไม่อนุมัติ) — web build นี้ไม่ตั้ง `NEXT_PUBLIC_CHAT_RELAY` จึงไม่มีปุ่ม Messages |
+| แชท E2E ระหว่างกระเป๋า | **ENABLED ON PRODUCTION (2026-11-16)** | `lib/e2eChat.js` (คีย์จาก seed = libsodium `crypto_sign_ed25519_sk_to_curve25519`, อ้าง vector จาก PyNaCl), `services/api-gateway/chat-relay.mjs` (เก็บเฉพาะ ciphertext, auth ด้วยลายเซ็นกระเป๋า), `lib/chatClient.js`, `components/ChatPanel.js`; `tests/e2e-chat.test.mjs` 6/6, `chat-relay` 5/5, `chat-client` 5/5; สาธิตจริง: UI ส่ง → relay 200 → seed ผู้รับถอดได้ข้อความเดิม, `strings` บน DB ไม่พบ plaintext; เปิดใช้จริงแล้ว: gateway launchd มี `NSAT_CHAT_RELAY=1` + `NSAT_CHAT_DB=~/nsat-ops/gateway/data/chat.sqlite`, `server.js`/`chat-relay.mjs` คัดจาก `ccd24cd`; web build `75af7cb` ด้วย `NEXT_PUBLIC_CHAT_RELAY=1` (chunk ที่ live มี `chatEnabled:!0`); ทดสอบบน production ด้วยคู่กุญแจชั่วคราว (ไม่ใช้เงิน/ไม่มีธุรกรรม): publishKey → send → inbox ถอดได้ข้อความเดิม → ack เหลือ 0, แล้วลบแถวคีย์ทดสอบออก (0 keys/0 messages) และ `strings` บน db+wal ไม่พบ plaintext; rollback: ถอด 2 key ใน plist + `launchctl bootout/bootstrap` (route กลับเป็น 404, DB คงอยู่) + สลับ webroot กลับ `satoshicore-webroot-profile-ccd24cd` |
 | โปรไฟล์: ID ของตัวเอง + อีเมล verified + กระเป๋าหลัก | **DEPLOYED (UI), BLOCKED ON RULES** | `lib/profile.js`, `components/ProfileCard.js`, `firestore.rules` (`profiles/{uid}`, `profileIds/{id}`); `tests/profile.test.mjs` 12/12; build นี้ live ที่ `d06138d` — ทดสอบบน production ด้วยบัญชีจริงแล้ว: การ์ดขึ้นอีเมล `verified`, มี ID + primary wallet ให้เลือก, และเมื่อกดสร้าง **rules ที่ publish อยู่ปฏิเสธ** (`permission-denied` → ข้อความ "The database refused this change") ไม่มีอะไรถูกเขียน — ต้อง publish `firestore.rules` ฉบับใหม่ใน Firebase console ก่อนใช้งานจริง |
 | เปลี่ยน ID / แสดง `@id` บนหน้ากระเป๋า | **DEPLOYED** (`ccd24cd`) | ID เก็บ `@` เป็นส่วนของค่า (`@somchai`) ไม่ใช่เติมตอนแสดง — label, ฟิลด์ `profileId` และเอกสาร claim `profileIds/@id` เป็นสตริงเดียวกัน; ชื่อที่ไม่มี `@` ถูกปฏิเสธ (ไม่แปลงเงียบ ๆ) การ์ดเป็นโหมดดู/แก้: `Edit profile` → แก้ ID + primary wallet → `Save changes` / `Cancel` โดยเขียนทั้งคู่ในครั้งเดียว (`saveProfileIn()`) จอง ID ใหม่ → เขียน → คืน ID เก่า; ล้มเหลว = คืน ID ใหม่และคงของเดิม; ปุ่ม `@id` ข้าง address คัดลอกค่าจริง; เทสต์ `tests/profile.test.mjs` 13/13 |
+
+```
+รอบเปิดแชท E2E บน production (2026-11-16)
+node --test tests/e2e-chat.test.mjs tests/chat-relay.test.mjs tests/chat-client.test.mjs  ✓ 16/16
+node --test services/api-gateway/tests/gateway.test.js                            ✓ 15/15
+pre-flight บนพอร์ตแยก (8795 flag off / 8796 flag on, core ชี้ :1)                ✓ off=404, on=400/401, CORS allow X-NSAT-*
+gateway backup: server.js.bak-20261116-063417-pre-chat (sha256 2f6ad316…), plist backup เก็บที่ ~/nsat-ops/
+restart ด้วย server.js ใหม่โดย flag off                                             ✓ 3 endpoints 200, chat 404
+gateway plist + NSAT_CHAT_RELAY=1 (NSAT_CHAT_DB=…/gateway/data/chat.sqlite)          ✓ gateway up 1s
+public: /api/v1/chat/keys 400 address required · POST messages 401 signature required
+public CORS preflight จาก https://satoshicore.org                                    ✓ allow-origin + X-NSAT-Address/Ts/Nonce/Signature
+production smoke (คู่กุญแจชั่วคราว, ไม่มีธุรกรรม): publishKey→send→inbox(ถอดได้)→ack  ✓ เหลือ 0
+web build 75af7cb: NEXT_PUBLIC_API_SAME_ORIGIN=1 NEXT_PUBLIC_CHAT_RELAY=1           ✓ exit 0, chatEnabled:!0
+live index.html sha256 = a98e0ce6…341eef · 10 routes 200 · verify-deployed 8 passed / 0 failed
+webroot: ~/nsat-ops/satoshicore-webroot → satoshicore-webroot-chat-75af7cb
+rollback web: ln -sfn satoshicore-webroot-profile-ccd24cd ~/nsat-ops/satoshicore-webroot
+rollback gateway: PlistBuddy Delete NSAT_CHAT_RELAY/NSAT_CHAT_DB + bootout/bootstrap
+```
 
 ```
 รอบ @id + Edit/Save (2026-11-16, `ccd24cd`)
