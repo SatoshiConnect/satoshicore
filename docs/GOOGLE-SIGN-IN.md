@@ -34,7 +34,17 @@ NEXT_PUBLIC_FIREBASE_APP_ID=...
 
 The app uses Firebase Authentication for the optional website identity only.
 The sign-in UI remains disabled when these variables are missing; the
-non-custodial wallet stays usable. Session persistence defaults to session-only;
+non-custodial wallet stays usable.
+
+## Opening the wallet without Google
+
+The wallet's gate offers two ways in: **Continue with Google**, or **Use without
+an account**. The second one is memory-only — a reload, a sign-out or a new tab
+returns to the gate — and it lists only wallets that are not linked to a website
+account, so a shared browser does not reveal the previous person's wallet names.
+Wallets linked to an account stay encrypted on the device; signing in as that
+account brings them back. Neither choice unlocks a wallet: the wallet password
+is still required, and a Drive backup still needs a signed-in session. Session persistence defaults to session-only;
 Remember this device is a separate opt-in and affects Firebase sign-in only.
 Firebase config is compiled into static assets at build time, so configure the
 production build environment before deploying.

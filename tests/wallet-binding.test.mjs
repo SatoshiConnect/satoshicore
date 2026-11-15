@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 
 import {
   bindOwner, normalizeAccount, ownerOf, unbindOwner, walletNameForAccount,
+  walletsForAccount,
 } from '../lib/walletBinding.js';
 
 function memoryStorage() {
@@ -38,6 +39,21 @@ test('binding records the account for one wallet and can be removed', () => {
   assert.equal(ownerOf('Other'), '');
   unbindOwner('Primary');
   assert.equal(ownerOf('Primary'), '');
+});
+
+test('standalone mode never lists a wallet that belongs to another account', () => {
+  globalThis.localStorage = memoryStorage();
+  bindOwner('Mine', 'me@example.com');
+  bindOwner('Theirs', 'other@example.com');
+  const wallets = [{ name: 'Mine' }, { name: 'Theirs' }, { name: 'Loose' }];
+
+  // Signed out, with Google available: only the unbound wallet.
+  assert.deepEqual(walletsForAccount(wallets, '', { signInRequired: true }).map((w) => w.name), ['Loose']);
+  // Signed in: own wallet plus unbound, never the other account's.
+  assert.deepEqual(walletsForAccount(wallets, 'ME@example.com', { signInRequired: true }).map((w) => w.name), ['Mine', 'Loose']);
+  // A build with no Google sign-in has no accounts to hide.
+  assert.deepEqual(walletsForAccount(wallets, '', { signInRequired: false }).map((w) => w.name), ['Mine', 'Theirs', 'Loose']);
+  assert.deepEqual(walletsForAccount(null, '', { signInRequired: true }), []);
 });
 
 test('an empty account or name is never bound', () => {

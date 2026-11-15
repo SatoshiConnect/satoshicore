@@ -33,7 +33,7 @@ const shortAddress = (address) => (address ? `${address.slice(0, 6)}…${address
 // `variant="row"` is the wallet-screen entry point: one line with the account
 // state and its single action, so signing in does not require Settings.
 // The full card stays in Settings, where there is room to explain each choice.
-export default function GoogleAccount({ variant = 'card' } = {}) {
+export default function GoogleAccount({ variant = 'card', onUseStandalone } = {}) {
   const [user, setUser] = useState(null);
   const [ready, setReady] = useState(!configured);
   const [busy, setBusy] = useState(false);
@@ -270,19 +270,22 @@ export default function GoogleAccount({ variant = 'card' } = {}) {
   }
 
   // The gate is the wallet's front door: a browser that is not signed in shows
-  // this instead of the wallet screen, so starting to use the wallet is exactly
-  // a Google sign-in and nothing else is reachable before it.
+  // this instead of the wallet screen. A Google account is one of two ways in —
+  // the directive requires that a visitor who does not want Google can still
+  // use the standalone wallet — so the card offers both choices and says what
+  // each one reveals on a shared device.
   if (variant === 'gate') {
     return (
       <section className="nw-card nw-gate" aria-labelledby="nw-gate-title">
-        <h2 id="nw-gate-title" style={{ color: 'var(--text)' }}>Sign in to start</h2>
+        <h2 id="nw-gate-title" style={{ color: 'var(--text)' }}>Open your wallet</h2>
         <p className="nw-small nw-dim" style={{ margin: '8px 0 14px' }}>
-          The wallet opens with your Google account. Signing out locks it and clears this
-          session, so the next person on this device starts here instead of in your wallet.
+          Sign in with Google to identify your website session, or use the wallets on this
+          device without an account. Signing out locks the wallet and clears this session,
+          so the next person on this device starts here instead of in your wallet.
         </p>
         {!configured ? (
           <p className="nw-small nw-dim" role="status">
-            Google sign-in is not configured in this build, so the wallet cannot open.
+            Google sign-in is not configured in this build, so the wallet opens without it.
           </p>
         ) : !ready ? (
           <p className="nw-small nw-dim" role="status">Checking sign-in session…</p>
@@ -308,6 +311,19 @@ export default function GoogleAccount({ variant = 'card' } = {}) {
           </>
         )}
         {error ? <p className="nw-small nw-google-error" role="alert">{error}</p> : null}
+        {onUseStandalone ? (
+          <>
+            <button type="button" className="nw-ghost-btn nw-gate-skip"
+              onClick={onUseStandalone} disabled={busy}>
+              Use without an account
+            </button>
+            <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
+              Without an account, only wallets that are not linked to a website account are
+              listed here. A wallet that belongs to a Google account stays hidden, not deleted,
+              until that account signs in.
+            </p>
+          </>
+        ) : null}
         <p className="nw-small nw-dim" style={{ margin: '12px 0 0' }}>
           Your encrypted wallet stays on this device and is never uploaded; the Google account
           only identifies the session. Signing out deletes no wallet.

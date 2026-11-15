@@ -27,7 +27,7 @@ import {
 } from '../lib/biometricUnlock';
 import { backupSilently } from '../lib/driveBackup';
 import {
-  bindOwner, normalizeAccount, ownerOf, unbindOwner, walletNameForAccount,
+  bindOwner, unbindOwner, walletNameForAccount, walletsForAccount,
 } from '../lib/walletBinding';
 import GoogleAccount from './GoogleAccount';
 import DriveBackupCard from './DriveBackupCard';
@@ -153,11 +153,14 @@ export default function WalletPanel() {
   // sign-up creates a wallet without typing one; the password stays the user's.
   const [accountEmail, setAccountEmail] = useState('');
   const [accountUid, setAccountUid] = useState('');
-  // Signing in with Google is the start of a session and signing out is its
-  // end: without an account there is nothing to open, so the panel shows only
-  // the gate. `accountReady` keeps the wallet from flashing while the first
-  // auth-state callback is still in flight.
+  // The gate asks who is using the wallet, but Google is optional (UNIVERSAL
+  // WALLET DIRECTIVE §9): a visitor may open this device's wallet without a
+  // website account. That choice lives in memory only, so a reload or a
+  // sign-out puts the gate back instead of leaving a shared browser in the
+  // previous person's standalone session. `accountReady` keeps the wallet from
+  // flashing while the first auth-state callback is still in flight.
   const signInRequired = SHOW_GOOGLE_ACCOUNT && isFirebaseWebConfigured();
+  const [standalone, setStandalone] = useState(false);
   const [accountReady, setAccountReady] = useState(!signInRequired);
   const [importSeed, setImportSeed] = useState('');
   const [unlockName, setUnlockName] = useState('');
@@ -250,10 +253,19 @@ export default function WalletPanel() {
     setSendRecipientBalances({});
     setToast(null);
     setPage('overview');
+    // Signing out also leaves standalone mode: the gate is the starting point
+    // for whoever uses this browser next, with or without an account.
+    setStandalone(false);
     // A sign-out must not leave the panel busy: the same component instance is
     // still mounted behind the gate and serves the next sign-in.
     setBusy(false);
   }, [lockWallet]);
+
+  // A real account session supersedes standalone mode, so the two can never
+  // both be active and the gate cannot be skipped by a stale in-memory flag.
+  useEffect(() => {
+    if (accountUid) setStandalone(false);
+  }, [accountUid]);
 
   // A sign-out — from Settings, from the account switcher, or from another tab
   // — ends the whole session, not just the Google identity.
@@ -352,20 +364,16 @@ export default function WalletPanel() {
     return r;
   }, [configured]);
 
-  // What this browser may list for the account signed in now. A wallet bound to
+  // What this browser may list for the session in progress. A wallet bound to
   // another account stays encrypted on disk — nothing is deleted — but its name
   // is not shown, so a shared browser does not hand the next person the
-  // previous person's wallet list. Signing back in as the bound account brings
-  // it back.
-  const visibleWallets = useCallback(() => {
-    const all = keystoreList();
-    if (!accountEmail) return all;
-    const mine = normalizeAccount(accountEmail);
-    return all.filter((wallet) => {
-      const owner = normalizeAccount(ownerOf(wallet.name));
-      return !owner || owner === mine;
-    });
-  }, [accountEmail]);
+  // previous person's wallet list. That includes standalone mode on a device
+  // that offers Google: without the bound account, only wallets that belong to
+  // no account are listed. Signing back in as the bound account brings the rest
+  // back.
+  const visibleWallets = useCallback(() => (
+    walletsForAccount(keystoreList(), accountEmail, { signInRequired })
+  ), [accountEmail, signInRequired]);
 
   const refreshWallets = useCallback(() => {
     const listed = visibleWallets();
@@ -1210,18 +1218,19 @@ export default function WalletPanel() {
 
   const ledger = net?.ledger ?? null;
 
-  // Signed out: the gate is the whole screen. Nothing of the wallet — address,
-  // balance, wallet names, history or the tab bar — is reachable before signing
-  // in, which is what makes "sign out" a real end of use. The gate card renders
-  // immediately, including in the static HTML; it reports the in-flight session
-  // check itself instead of the page looking empty.
-  if (signInRequired && (!accountReady || !accountUid)) {
+  // Signed out and not in standalone mode: the gate is the whole screen. Nothing
+  // of the wallet — address, balance, wallet names, history or the tab bar — is
+  // reachable before that choice, which is what makes "sign out" a real end of
+  // use. The gate card renders immediately, including in the static HTML; it
+  // reports the in-flight session check itself instead of the page looking
+  // empty.
+  if (!standalone && (!accountReady || (signInRequired && !accountUid))) {
     return (
       <div className="nw-root">
         <div className="nw-phone">
           <main className="nw-content">
             <h1 className="nw-visually-hidden">NSAT Wallet</h1>
-            <GoogleAccount variant="gate" />
+            <GoogleAccount variant="gate" onUseStandalone={() => setStandalone(true)} />
           </main>
         </div>
       </div>

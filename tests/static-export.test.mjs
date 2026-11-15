@@ -174,7 +174,8 @@ test('security, terms and privacy pages ship and are linked from the footer', ()
 
 test('Google sign-in disclosures, setup UI, and targeted CSP ship in the static export', () => {
   const privacy = readFileSync(join(OUT, 'privacy/index.html'), 'utf8');
-  assert.match(privacy, /Google sign-in is required to open the wallet/);
+  assert.match(privacy, /Google sign-in is optional/);
+  assert.match(privacy, /the wallet also opens without a website account/);
   assert.match(privacy, /Signing out ends that session/);
   assert.match(privacy, /does not request Gmail mailbox access/);
   // Sign-in itself sends no wallet data; a public address is stored only when
@@ -223,13 +224,14 @@ test('the homepage IS the wallet, not a landing page', () => {
   const home = readFileSync(join(OUT, 'index.html'), 'utf8');
 
   // The wallet shell renders at "/" itself. A signed-out browser gets the
-  // wallet's own sign-in gate, not a marketing page: using the wallet starts
-  // with a Google sign-in, so the create/import forms exist in the bundle but
-  // must not be prerendered for a visitor who has not signed in.
+  // wallet's own gate, not a marketing page: it offers Google sign-in or the
+  // standalone wallet, so the create/import forms exist in the bundle but must
+  // not be prerendered for a visitor who has not chosen either.
   assert.match(home, /nw-root/, 'homepage does not render the wallet shell');
-  assert.match(home, /Sign in to start/, 'signed-out homepage does not offer the sign-in gate');
-  // The button itself is client-side (the gate reports the in-flight session
-  // check in the static HTML), so it is asserted in the bundle below.
+  assert.match(home, /nw-gate/, 'signed-out homepage does not offer the wallet gate');
+  assert.match(home, /Open your wallet/, 'the gate must name what it does');
+  // The buttons themselves are client-side (the gate reports the in-flight
+  // session check in the static HTML), so they are asserted in the bundle below.
   assert.match(home, /Checking sign-in session/, 'the gate must say it is reading the session');
   assert.doesNotMatch(home, /Create a New Wallet/, 'wallet forms must not render before sign-in');
   assert.doesNotMatch(home, /Import Existing Wallet/, 'wallet import must not render before sign-in');
@@ -241,6 +243,7 @@ test('the homepage IS the wallet, not a landing page', () => {
     .map((f) => readFileSync(f, 'utf8'))
     .join('\n');
   assert.match(walletBundle, /Continue with Google/, 'wallet bundle cannot start a session');
+  assert.match(walletBundle, /Use without an account/, 'wallet bundle cannot open without Google');
   assert.match(walletBundle, /Create a New Wallet/, 'wallet bundle lost its create action');
   assert.match(walletBundle, /Import Existing Wallet/, 'wallet bundle lost its import action');
 

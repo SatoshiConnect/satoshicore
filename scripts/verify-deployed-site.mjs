@@ -102,10 +102,10 @@ async function main() {
     assert(status === 200, `GET / returned HTTP ${status}`);
     assert(isHtml(type), `GET / served ${type || 'no content-type'} instead of HTML`);
     assert(body.includes('nw-root'), 'homepage does not render the wallet shell');
-    // Using the wallet starts with a Google sign-in, so a signed-out visitor
-    // gets the wallet's own gate. The create/import forms are client-side and
-    // must not be served to a browser that has not signed in.
-    assert(body.includes('Sign in to start'), 'signed-out homepage is missing the sign-in gate');
+    // A visitor who has chosen neither Google nor standalone gets the wallet's
+    // own gate. The create/import forms are client-side and must not be served
+    // before that choice.
+    assert(body.includes('nw-gate'), 'signed-out homepage is missing the wallet gate');
     assert(!body.includes('Create a New Wallet'), 'wallet forms are served before sign-in');
     assert(!body.includes('Import Existing Wallet'), 'wallet import is served before sign-in');
     assert(/href="[^"]*\/download\/?"/.test(body), 'homepage has no extension download action');

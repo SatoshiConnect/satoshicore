@@ -1292,6 +1292,8 @@ body:has(.nw-root) .site-footer {
  * the top of the empty wallet rather than pretending to be a populated page. */
 .nw-gate { max-width: 420px; margin: 10vh auto 0; }
 .nw-gate-btn { width: 100%; }
+/* The second way in: opening this device's wallet without a Google account. */
+.nw-gate-skip { width: 100%; margin-top: 10px; }
 
 .nw-toast {
   position: fixed; bottom: 14px; right: 14px;
