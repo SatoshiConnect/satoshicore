@@ -1235,6 +1235,11 @@ export default function WalletPanel() {
             </div>
           )}
 
+          {/* Activity opens on the mint status: read-only ledger-header
+           * accounting, so it does not need an unlocked wallet and must not be
+           * pushed below the unlock form. */}
+          {page === 'activity' ? <MintStatusCard mint={mintStatus} /> : null}
+
           {/* Locked state: unlocking is the only thing that matters, so it is
            * a card in the flow instead of a control in a toolbar. */}
           {!active && hasWallets && (
@@ -1310,7 +1315,6 @@ export default function WalletPanel() {
             <ActivityPage history={history}
               activeName={active?.name || (watchAddress ? `watch only · ${shortAddr(watchAddress, 6)}` : '')}
               chain={chainHistory}
-              mint={mintStatus}
               onLoadOlder={loadOlderHistory}
               onRecheck={recheckTransfer} canRecheck={isIndexerConfigured()} />
           )}
@@ -2114,35 +2118,21 @@ function ShieldedGatePage() {
 }
 
 /* -------------------------------- Activity ------------------------------- */
-function ActivityPage({ history, activeName, chain, mint, onLoadOlder, onRecheck, canRecheck }) {
-  // Anything the index already knows is shown from the index; the local list
-  // keeps only what the chain has not reported yet (a transfer sent moments
-  // ago, or one the node rejected before inclusion).
-  const chainItems = chain?.items || [];
-  const onChainHashes = new Set(chainItems.map((item) => String(item.hash || '').toLowerCase()));
-  const localOnly = (history || []).filter(
-    (entry) => !onChainHashes.has(String(entry.txhash || '').toLowerCase()),
-  );
+/* Mint status card. It is the first thing Activity shows: the mint is
+ * close-level accounting carried in the ledger header, so it can never be a row
+ * in the transfer list, it needs no unlocked wallet to read, and it must not sit
+ * below the unlock form the page body renders. Every figure comes from that
+ * header — never from a rate applied to the current height. */
+function MintStatusCard({ mint }) {
   const chainTime = (seconds) => {
     const n = Number(seconds);
     return Number.isFinite(n) && n > 0 ? new Date(n * 1000).toLocaleString() : '';
   };
-  const coverage = chain?.coverage;
-  const total = chain?.total;
-  const shown = chainItems.length;
-  const sent = chainItems.filter((item) => item.direction === 'out').length;
-  const received = chainItems.filter((item) => item.direction !== 'out').length;
   const mintData = mint?.data;
   const eras = Array.isArray(mint?.timeline) ? mint.timeline : [];
   const { supply, minted } = supplyAndMinted(mintData?.total_coins);
   return (
-    <div>
-      {/* Mint status first. The mint is close-level accounting carried in the
-       * ledger header, so it can never be a row in the transfer list — and
-       * keeping the full status below every row buried the one number people
-       * open Activity for. Every figure comes from that header, never from a
-       * rate applied to the current height. */}
-      <section className="nw-card nw-mint-head" aria-labelledby="nw-mint-title">
+    <section className="nw-card nw-mint-head" aria-labelledby="nw-mint-title">
         <h2 id="nw-mint-title" style={{ color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           Founder Mint
           <span className="nw-badge info">ledger header</span>
@@ -2236,6 +2226,32 @@ function ActivityPage({ history, activeName, chain, mint, onLoadOlder, onRecheck
         )}
       </section>
 
+  );
+}
+
+function ActivityPage({ history, activeName, chain, onLoadOlder, onRecheck, canRecheck }) {
+  // Anything the index already knows is shown from the index; the local list
+  // keeps only what the chain has not reported yet (a transfer sent moments
+  // ago, or one the node rejected before inclusion).
+  const chainItems = chain?.items || [];
+  const onChainHashes = new Set(chainItems.map((item) => String(item.hash || '').toLowerCase()));
+  const localOnly = (history || []).filter(
+    (entry) => !onChainHashes.has(String(entry.txhash || '').toLowerCase()),
+  );
+  const chainTime = (seconds) => {
+    const n = Number(seconds);
+    return Number.isFinite(n) && n > 0 ? new Date(n * 1000).toLocaleString() : '';
+  };
+  const coverage = chain?.coverage;
+  const total = chain?.total;
+  const shown = chainItems.length;
+  const sent = chainItems.filter((item) => item.direction === 'out').length;
+  const received = chainItems.filter((item) => item.direction !== 'out').length;
+  const mintData = mint?.data;
+  const eras = Array.isArray(mint?.timeline) ? mint.timeline : [];
+  const { supply, minted } = supplyAndMinted(mintData?.total_coins);
+  return (
+    <div>
       <section className="nw-card">
         <h2 style={{ color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           {activeName ? `On-chain activity — ${activeName}` : 'On-chain activity'}
