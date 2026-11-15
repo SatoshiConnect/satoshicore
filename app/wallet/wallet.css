@@ -787,7 +787,10 @@ body:has(.nw-root) .site-footer {
   /* Messages sit above the floating tab bar instead of behind it, and stay a
    * narrow chip on the right: a full-width banner hid the content underneath
    * for the whole six seconds it was on screen. */
-  .nw-toast {
+  /* `.nw-root` is not decoration: the base rule further down the file sets
+   * `bottom`/`right` too, so without it these values lose the cascade and the
+   * chip drops onto the floating tab bar it is meant to clear. */
+  .nw-root .nw-toast {
     left: auto;
     right: 12px;
     bottom: calc(84px + env(safe-area-inset-bottom, 0px));
