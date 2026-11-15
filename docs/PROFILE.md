@@ -78,13 +78,24 @@ When a profile exists, the wallet home also shows the `@id` next to the address
 the person chose is visible where they use the wallet rather than buried in
 Settings. It is display only and is not resolvable to an address yet.
 
-## Provisioning (one-time, Firebase console)
+## Provisioning (one-time)
 
-1. Firestore Database → Rules → paste `satoshicore-web/firestore.rules` and
-   publish. The `profiles` and `profileIds` blocks must go out with the existing
-   `websitePreferences` and `walletLinks` blocks; publishing only part of the file
-   makes the profile card report a rules refusal (the wallet itself is
-   unaffected).
+1. Publish the rules **from the CLI, not by pasting a fragment** — the
+   `profiles` and `profileIds` blocks must go out with the existing
+   `websitePreferences` and `walletLinks` blocks, and a partial paste makes the
+   profile card report a rules refusal (the wallet itself is unaffected):
+
+   ```
+   npm i -D firebase-tools          # once; already a devDependency
+   npx firebase login               # appmigs@gmail.com, project owner
+   npx firebase deploy --only firestore:rules --project nsat-wallet-login
+   ```
+
+   `firebase.json` points at `firestore.rules` and `.firebaserc` names the
+   project, so the command needs no other arguments. It compiles the file first
+   and refuses to release it if compilation fails. Deployed to
+   `nsat-wallet-login` on 2026-11-16 (`cloud.firestore: released rules
+   firestore.rules`, compilation clean).
 2. Keep the same authorized domains; no extra OAuth scope is needed.
 3. Sign-in method: Google (already required for the account features). Email
    verification comes from the provider and needs no extra setting for Google
@@ -101,9 +112,19 @@ Settings. It is display only and is not resolvable to an address yet.
   claim document, refusal wording, and assertions on the rules file
   (verified-email requirement, `hasOnly` shapes, claim/`walletLinks` linkage,
   no `list`, no `update`, deny-all fallback, no `if true`).
-- The card was rendered in a local build and shows, for a signed-out visitor,
-  "Sign in above to create a profile." — wiring only.
-- **Not verified**: the actual write path against a live database, because that
-  needs a signed-in Google account and the rules published in the project. The
-  401s in a local dev console come from pointing the dev build at a chat relay
-  that is not the gateway, and are unrelated to the profile.
+- The live write path was exercised on `https://satoshicore.org/wallet/` with
+  the published rules and a real signed-in account (appmigs@gmail.com, verified),
+  2026-11-16:
+  1. create → the card reported `Profile @appmigs created.` and switched to the
+     view mode with ID `@appmigs` and the chosen linked wallet as primary;
+  2. reloading the page read the profile back from Firestore (`@appmigs`,
+     primary wallet intact), so the document and its claim are really stored;
+  3. `Edit profile` → change primary wallet → `Save changes` reported
+     `Profile changes saved.` and the card showed the new address.
+
+  The same flow was refused before the rules deploy (`The database refused this
+  change`), so the two results bracket the change.
+- The console on that page showed only `429` from the gateway's 120 requests/min
+  per-IP limit (several tabs polling), which also made the wallet status rows say
+  "status unavailable". Nothing in the profile path logs anything, and the
+  profile writes do not go through the gateway.
