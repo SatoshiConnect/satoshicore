@@ -33,6 +33,17 @@ Commit ล่าสุดของรอบนี้: `e013e06` (ก่อน tr
 | ไม่ได้แตะ | Mainnet/genesis/ledger/validator/คีย์จริง, DNS, Caddy config, ไม่มีธุรกรรมใด ๆ |
 | ยังไม่ deploy | `6f2e7cd` (session idle limit 30 วัน) — รออนุมัติแยก |
 
+### Deploy 2026-11-16 (รอบสอง) — รวม fix จากการตรวจความปลอดภัย (commit `741b2c7`)
+
+| รายการ | ค่า |
+|---|---|
+| Commit ที่ build | `741b2c7` — build จาก git worktree สะอาดของ commit นั้น |
+| รวมอะไรบ้าง | `44b9cbe` (standalone gate) + `6f2e7cd` (session idle limit) + `8468a47` (deploy log) + `3759193` (ตรวจสิทธิ์ก่อนถอดรหัส) + `be27a35` (ชื่อว่าง/ข้อความ) + `741b2c7` (restore merge + disclosure) |
+| Caddy root | `satoshicore-webroot-wallet-security-741b2c7` |
+| Rollback | symlink กลับไป `satoshicore-webroot-standalone-44b9cbe` หรือ `satoshicore-webroot-fixedscreen-aca6e34` (ทั้งคู่ยังอยู่ครบ) |
+| หลักฐาน | `index.html` sha256 `139203c255412fe922d8255bfc920816586ca223beb35d5206cd68ab2db4e459` และ `cmp` ตรงกับไฟล์ที่เสิร์ฟ; `verify:deployed` 8 passed / 0 failed / 2 advisory; 12 routes 200; incognito 430×932: gate 2 ทาง, standalone เข้าหน้าตัว wallet, reload กลับ gate, console ว่าง, `localStorage` ว่างก่อนใช้งาน; privacy แสดงหัวข้อ Drive backup และ "sign-in is optional"; แท็บที่ลงชื่ออยู่ยังเปิด wallet ได้ (ไม่ถูกบังคับ sign-out) และมี key `nsat-web-session-v1` ตามนโยบายใหม่ |
+| ไม่ได้แตะ | Mainnet/genesis/ledger/validator/คีย์จริง, DNS, Caddy config, ไม่มีธุรกรรมใด ๆ |
+
 ## 1. ผลตรวจสภาพปัจจุบัน (§3)
 
 | # | หัวข้อ | สถานะ | หลักฐาน / หมายเหตุ |
@@ -237,7 +248,9 @@ Chrome 157.0.8103.52 (โปรไฟล์ใหม่, ไม่ headless) ก
 | การมองเห็น wallet ตอนไม่มีบัญชี | **VERIFIED (unit test)** | `walletsForAccount()` ใน `lib/walletBinding.js`: ไม่มีบัญชี → เห็นเฉพาะ wallet ที่ไม่ผูกบัญชี; wallet ที่ผูกบัญชีอื่นยังเข้ารหัสบนเครื่อง ไม่ถูกลบ; เทสต์ `standalone mode never lists a wallet that belongs to another account` |
 | ข้อความ legal/docs | **IMPLEMENTED** | `/privacy/` `/security/` `/terms/` เลิกเขียนว่า sign-in "required"; `docs/GOOGLE-SIGN-IN.md` เพิ่มหัวข้อ "Opening the wallet without Google" |
 | นโยบายหมดอายุ session ที่จำไว้บนเครื่อง | **IMPLEMENTED + VERIFIED (unit test)** | `lib/sessionPolicy.js`: เก็บเฉพาะ `{uid, lastSeenAt}`; ไม่ได้ใช้ 30 วัน → จบ session บนเบราว์เซอร์นี้และแจ้งที่ gate (อ่านซ้ำได้ ไม่หายตอน mount ซ้อน) แล้วล้างเมื่อ sign-in สำเร็จ; record ที่อ่านไม่ได้/หายไป **ไม่**ทำให้ถูกบังคับ sign-in; เทสต์ `tests/session-policy.test.mjs` 8/8 |
-| ลำดับการตรวจสิทธิ์ก่อนถอดรหัส keystore | **FIXED (local) — ยังไม่ deploy** | พบว่า `unlockWithPassword()` ถอดรหัสก่อนแล้วค่อยหา entry ในรายการที่มองเห็น และไม่ปฏิเสธเมื่อไม่พบ (คอมเมนต์อ้างว่าปฏิเสธ) → ย้ายการตรวจไปที่ `visibleWalletNamed()` **ก่อน** `keystoreUnlock()`; เทสต์ `an unlock request resolves only wallets this session may see`; **production ที่ deploy อยู่ (`44b9cbe`) ยังมีลำดับเดิม** — การเซ็นถูกกันไว้เพราะ `active.pubkey` เป็น undefined แต่ต้อง deploy fix หลังอนุมัติ |
+| ลำดับการตรวจสิทธิ์ก่อนถอดรหัส keystore | **FIXED + DEPLOYED (2026-11-16, `741b2c7`)** | พบว่า `unlockWithPassword()` ถอดรหัสก่อนแล้วค่อยหา entry และไม่ปฏิเสธเมื่อไม่พบ → ย้ายไปที่ `visibleWalletNamed()` **ก่อน** `keystoreUnlock()`; เทสต์ `an unlock request resolves only wallets this session may see` |
+| Restore keystore ต้องไม่ทำกุญแจหาย | **FIXED + DEPLOYED (`741b2c7`)** | เดิม `keystoreRestore()` เขียนทับทั้ง keystore ทำให้ wallet ที่สร้างหลัง backup หายถาวร → เปลี่ยนเป็น merge (เพิ่ม/ใช้ entry เมื่อกุญแจเดียวกัน/รายงาน conflict เมื่อชื่อซ้ำแต่กุญแจต่าง); เทสต์ใน `tests/keystore.test.mjs` (13/13) และเพิ่มไฟล์นี้เข้า `npm test` |
+| Disclosure ของ Google Drive backup / export | **FIXED + DEPLOYED (`741b2c7`)** | การ์ดและ `/privacy/` ระบุว่าไฟล์มีชื่อ wallet + public address อ่านได้ (seed เป็น ciphertext); toast ของ export บอกจำนวน wallet ที่ซ่อนอยู่ในไฟล์ |
 | ข้อจำกัด: wallet ที่ผูกบัญชีแล้วใช้งานแบบไม่มีบัญชีไม่ได้ | **KNOWN LIMITATION (by design)** | เมื่อผูกบัญชีแล้วและบัญชีไม่ได้ลงชื่อบนเบราว์เซอร์นี้ wallet จะถูกซ่อนจนกว่าจะลงชื่อกลับ (ไม่มี UI ปลด binding นอกจากลบ wallet) — ปลอดภัยกับเครื่องร่วม แต่ต้องแจ้งเจ้าของว่าเป็นพฤติกรรมที่ตั้งใจ |
 | การเพิกถอน session ของเครื่องที่หายไปจากระยะไกล | **BLOCKED (ไม่มี backend)** | Firebase client SDK ทำไม่ได้; ต้องมี Admin SDK/identity-provider session API + deploy target + quota ซึ่งยังไม่อยู่ในขอบเขตที่อนุมัติ → บันทึกเป็นข้อจำกัดใน docs ไม่ประกาศว่ามี |
 | เคลียร์สถานะเมื่อ signing key ไม่ได้อยู่บนเครื่อง | **VERIFIED (ของเดิม)** | watch-only view + ข้อความ "sending still needs the wallet password and key on the device that signs"; ไม่มีปุ่ม Send บน address ที่ดูอย่างเดียว |
@@ -249,4 +262,4 @@ npm run verify:deployed -- https://satoshicore.org   8 passed / 0 failed, 2 advi
 browser 430×932 (/  local)                    gate มีสองปุ่ม, standalone เข้าหน้าตัว wallet, reload กลับ gate
 ```
 
-หมายเหตุ: ยัง**ไม่ deploy production** รอบนี้ (รออนุมัติ), ยังไม่ทดสอบ Google OAuth จริง, และยังไม่ได้ทดสอบ account switching ด้วยกระเป๋าจริงสองใบ
+หมายเหตุ: รอบนี้ **deploy ขึ้น production แล้ว** (2026-11-16, `741b2c7`); ยังไม่ทดสอบ Google OAuth จริง (sign-in/sign-out round trip), ยังไม่ได้ทดสอบ account switching ด้วยกระเป๋าจริงสองใบ และยังไม่ได้คลิก restore ผ่าน UI (ยืนยันด้วย unit test)
