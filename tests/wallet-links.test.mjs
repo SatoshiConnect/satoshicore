@@ -23,6 +23,7 @@ import {
   normalizeAddresses,
   readLinksFrom,
   removeLinkFrom,
+  removeLinkedAddressForUser,
 } from '../lib/walletLinks.js';
 import { DB_TIMEOUT_MS, withTimeout } from '../lib/withTimeout.js';
 
@@ -187,6 +188,28 @@ test('reading and writing keep every linked wallet, one removal at a time', asyn
   assert.equal(store.state.cleared, 1);
   assert.deepEqual(await readLinksFrom(store), []);
   await assert.rejects(() => removeLinkFrom(store, 'nope'), /wallet address must be a 56-character/);
+});
+
+test('removing one wallet reads the list once and cannot fail after the delete', async () => {
+  // A second read after the delete used to turn a successful removal into an
+  // error message, and it cost a round trip for a value we already had.
+  const state = [ADDRESS, OTHER];
+  let reads = 0;
+  const store = {
+    list: async () => {
+      reads += 1;
+      if (reads > 1) throw new Error('the site database did not answer');
+      return [...state];
+    },
+    add: async () => {},
+    remove: async (address) => { state.splice(state.indexOf(address), 1); },
+    removeAll: async () => {},
+  };
+  const remaining = await removeLinkedAddressForUser('', ADDRESS, { store });
+  assert.deepEqual(remaining, [OTHER]);
+  assert.deepEqual(state, [OTHER]);
+  assert.equal(reads, 1);
+  await assert.rejects(() => removeLinkedAddressForUser('', 'nope', { store }), /56-character/);
 });
 
 test('a document that is not a public address never reaches the app', async () => {
