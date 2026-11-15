@@ -14,6 +14,7 @@ import {
   addLinkTo,
   addressDocument,
   clearLinksFrom,
+  classifyLinkFailure,
   createFirestoreLinkStore,
   describeLinkFailure,
   diagnoseFirestoreProblem,
@@ -78,9 +79,30 @@ test('an answering database or an offline probe keeps the timeout wording', asyn
 
 test('unlinking says unlinking, so the popup never misdescribes the action', () => {
   const unlink = describeLinkFailure('FIRESTORE_API_DISABLED', { action: 'unlink', projectId: 'p' });
-  assert.match(unlink.message, /remove the linked address/i);
+  assert.match(unlink.message, /remove that link/i);
   const link = describeLinkFailure('FIRESTORE_API_DISABLED', { action: 'link', projectId: 'p' });
   assert.match(link.message, /save this address/i);
+});
+
+// Seen on the deployed site: once the rules are owner-only, the anonymous probe
+// always gets "permission denied", so using it first reported a rules denial for
+// unrelated timeouts. The SDK's own code has to win.
+test('the write error outranks the anonymous probe', () => {
+  const denied = Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' });
+  assert.equal(classifyLinkFailure(denied, 'FIRESTORE_API_DISABLED'), 'FIRESTORE_REFUSED');
+
+  const timedOut = new Error('saving the address did not complete');
+  // No SDK code and a probe that can only say "permission denied": not a verdict.
+  assert.equal(classifyLinkFailure(timedOut, 'FIRESTORE_REFUSED'), '');
+  // A definite API answer still upgrades a deadline, because it explains it.
+  assert.equal(classifyLinkFailure(timedOut, 'FIRESTORE_API_DISABLED'), 'FIRESTORE_API_DISABLED');
+  assert.equal(classifyLinkFailure(timedOut, 'FIRESTORE_NO_DATABASE'), 'FIRESTORE_NO_DATABASE');
+
+  const offline = Object.assign(new Error('unavailable'), { code: 'unavailable' });
+  assert.equal(classifyLinkFailure(offline, ''), 'NETWORK');
+  const network = describeLinkFailure('NETWORK', { action: 'link' });
+  assert.match(network.message, /could not reach the database/i);
+  assert.equal(network.fix, undefined);
 });
 
 // Two addresses, two documents: the store is a collection of wallets, not one
