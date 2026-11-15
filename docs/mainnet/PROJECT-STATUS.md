@@ -20,6 +20,19 @@ Commit ล่าสุดของรอบนี้: `e013e06` (ก่อน tr
 | หลักฐาน | `verify-deployed-site` 8 passed / 0 failed; `index.html` sha256 ตรงระหว่าง `out/` กับ root ที่เสิร์ฟ; security scan 45 ไฟล์สะอาด; mainnet identity 4 chunks |
 | ไม่ได้แตะ | DNS, Caddy config, mainnet/genesis/mint, ไม่มีธุรกรรมใด ๆ |
 
+### Deploy 2026-11-16 — standalone gate (commit `44b9cbe`)
+
+| รายการ | ค่า |
+|---|---|
+| เวลาที่ deploy | 2026-11-16 00:26 (local) |
+| Commit ที่ build | `44b9cbe` — build จาก git worktree สะอาดของ commit นั้น (ไม่ได้ build จาก working tree ที่มีไฟล์ค้าง) |
+| โหมด build | `NEXT_PUBLIC_API_SAME_ORIGIN=1` |
+| Caddy root | `/Users/migssa-ngakhaonu/nsat-ops/satoshicore-webroot` → `satoshicore-webroot-standalone-44b9cbe` |
+| Rollback | symlink กลับไป `satoshicore-webroot-fixedscreen-aca6e34` (โฟลเดอร์เดิมยังอยู่ครบ) |
+| หลักฐาน | `index.html` sha256 `d2b6030e055d24b16c9dffb7eec415733e6d54d3558afb45f59a3d69fb8a6ddd`; `verify:deployed` 8 passed / 0 failed / 2 advisory; incognito 430×932: gate มีสองปุ่ม, `Use without an account` เข้าหน้าตัว wallet ได้, reload กลับมาที่ gate; `/privacy/` `/security/` `/terms/` แสดงข้อความ optional; console ว่าง |
+| ไม่ได้แตะ | Mainnet/genesis/ledger/validator/คีย์จริง, DNS, Caddy config, ไม่มีธุรกรรมใด ๆ |
+| ยังไม่ deploy | `6f2e7cd` (session idle limit 30 วัน) — รออนุมัติแยก |
+
 ## 1. ผลตรวจสภาพปัจจุบัน (§3)
 
 | # | หัวข้อ | สถานะ | หลักฐาน / หมายเหตุ |
