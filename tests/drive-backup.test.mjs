@@ -6,8 +6,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 import {
-  BACKUP_APP, BACKUP_FILENAME, BACKUP_VERSION, buildBackup, downloadBackup,
-  parseBackup, sha256Hex, uploadBackup,
+  BACKUP_APP, BACKUP_FILENAME, BACKUP_VERSION, buildBackup, describeDriveFailure,
+  downloadBackup, parseBackup, sha256Hex, uploadBackup,
 } from '../lib/driveBackup.js';
 
 const KEYSTORE = JSON.stringify({
@@ -105,6 +105,51 @@ test('Drive access re-authenticates the user, not the Auth instance', async () =
   const source = await readFile(new URL('../lib/driveBackup.js', import.meta.url), 'utf8');
   assert.match(source, /reauthenticateWithPopup\(user, provider\)/);
   assert.doesNotMatch(source, /reauthenticateWithPopup\(auth,/);
+});
+
+// Every failure the user can hit must produce a popup that says what happened
+// and, where the user can fix it, the page that fixes it.
+test('failures map to a popup with a title and, when fixable, a link', () => {
+  const apiOff = describeDriveFailure(Object.assign(new Error('x'), { code: 'DRIVE_API_DISABLED' }));
+  assert.match(apiOff.title, /Drive API/i);
+  assert.match(apiOff.fix.url, /console\.cloud\.google\.com\/apis\/library\/drive\.googleapis\.com/);
+  assert.equal(apiOff.tone, 'err');
+
+  const refused = describeDriveFailure(Object.assign(new Error('x'), { code: 'DRIVE_REFUSED' }));
+  assert.match(refused.title, /refused/i);
+  assert.match(refused.fix.url, /apis\/credentials\/consent/);
+
+  const expired = describeDriveFailure(Object.assign(new Error('x'), { code: 'TOKEN_EXPIRED' }));
+  assert.match(expired.message, /again/i);
+  assert.equal(expired.fix, undefined);
+
+  const noBackup = describeDriveFailure(Object.assign(new Error('x'), { code: 'NO_BACKUP' }));
+  assert.match(noBackup.title, /Nothing to restore/i);
+  assert.equal(noBackup.tone, 'warn');
+
+  const mismatch = describeDriveFailure(Object.assign(new Error('belongs to b@c'), { code: 'ACCOUNT_MISMATCH' }));
+  assert.match(mismatch.title, /another account/i);
+  assert.match(mismatch.message, /belongs to b@c/);
+
+  const unknown = describeDriveFailure(new Error('boom'));
+  assert.equal(unknown.tone, 'err');
+  assert.match(unknown.message, /boom/);
+
+  // Raw Firebase text must never reach the screen unreworded.
+  const blocked = describeDriveFailure(new Error('Firebase: Error (auth/popup-blocked).'));
+  assert.match(blocked.title, /blocked the Google window/i);
+  assert.doesNotMatch(blocked.message, /Firebase:/);
+
+  const closed = describeDriveFailure(Object.assign(new Error('x'), { code: 'auth/popup-closed-by-user' }));
+  assert.match(closed.title, /closed/i);
+  assert.equal(closed.tone, 'warn');
+
+  // A Drive 403 raised inside the Google popup arrives as a Firebase code.
+  const buried = describeDriveFailure(new Error(
+    'Firebase: Error (auth/google-drive-api-has-not-been-used-in-project-947843190791-before-or-it-is-disabled.).',
+  ));
+  assert.match(buried.title, /Drive API/i);
+  assert.match(buried.fix.url, /drive\.googleapis\.com/);
 });
 
 function driveStub(files) {

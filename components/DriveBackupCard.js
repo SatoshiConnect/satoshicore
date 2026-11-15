@@ -8,6 +8,7 @@
 // restore on another device still asks for the wallet password. The Drive
 // token lives in memory for the page load only.
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   isFirebaseWebConfigured, loadGoogleAuth,
 } from '../lib/firebaseAuth';
@@ -15,7 +16,8 @@ import {
   keystoreExport, keystoreList, keystoreRestore,
 } from '../lib/nsatWallet';
 import {
-  buildBackup, downloadBackup, getDriveToken, parseBackup, uploadBackup,
+  buildBackup, describeDriveFailure, downloadBackup, getDriveToken, parseBackup,
+  uploadBackup,
 } from '../lib/driveBackup';
 import {
   bindOwner, normalizeAccount, ownerOf,
@@ -32,6 +34,10 @@ export default function DriveBackupCard({ onKeystoreChanged } = {}) {
   // A download that would replace wallets already on this device needs a
   // second, explicit click: overwriting the local keystore cannot be undone.
   const [pendingRestore, setPendingRestore] = useState(null);
+  // Anything that stops a backup or restore opens this dialog instead of a
+  // quiet line: it states what failed and, when the user can act, links to the
+  // exact page that fixes it.
+  const [dialog, setDialog] = useState(null);
 
   useEffect(() => {
     setWallets(keystoreList());
@@ -64,13 +70,41 @@ export default function DriveBackupCard({ onKeystoreChanged } = {}) {
     onKeystoreChanged?.();
   }
 
+  // The always-available escape hatch: the same encrypted keystore, saved as a
+  // file, needs no Google API at all.
+  function downloadEncryptedBackup() {
+    const blob = keystoreExport();
+    if (!blob) {
+      setDialog(describeDriveFailure({ code: 'NO_KEYSTORE', message: 'There is no wallet on this device to export yet.' }));
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([blob], { type: 'application/json' }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'scw-web-backup.json';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    setDialog(null);
+    setNote('Saved the encrypted keystore file to this device. Opening it still needs your wallet password.');
+  }
+
+  function failWith(code, message) {
+    setError(message);
+    setDialog(describeDriveFailure({ code, message }));
+  }
+
   async function backupNow() {
     setBusy(true);
     setError('');
     setNote('');
     try {
       if (boundElsewhere.length) {
-        throw new Error(`“${boundElsewhere[0].name}” on this device is bound to ${ownerOf(boundElsewhere[0].name)}. Sign in with that account to back it up.`);
+        throw Object.assign(
+          new Error(`“${boundElsewhere[0].name}” on this device is bound to ${ownerOf(boundElsewhere[0].name)}. Sign in with that account to back it up.`),
+          { code: 'ACCOUNT_MISMATCH' },
+        );
       }
       const token = await getDriveToken();
       const envelope = await buildBackup(keystoreExport(), { email });
@@ -80,6 +114,7 @@ export default function DriveBackupCard({ onKeystoreChanged } = {}) {
       setNote(`${saved.existed ? 'Updated' : 'Saved'} the encrypted backup in Google Drive at ${new Date(saved.modifiedTime).toLocaleString()}. Opening it still needs the wallet password.`);
     } catch (err) {
       setError(String(err?.message || 'The Drive backup did not complete.'));
+      setDialog(describeDriveFailure(err));
     } finally {
       setBusy(false);
     }
@@ -104,7 +139,9 @@ export default function DriveBackupCard({ onKeystoreChanged } = {}) {
       setNote('');
       const token = await getDriveToken();
       const found = await downloadBackup(token);
-      if (!found) throw new Error('This account has no wallet backup in Google Drive yet.');
+      if (!found) {
+        throw Object.assign(new Error('This account has no wallet backup in Google Drive yet.'), { code: 'NO_BACKUP' });
+      }
       const parsed = await parseBackup(found.text, { email });
       if (keystoreList().length === 0) {
         await installBackup(parsed);
@@ -114,6 +151,7 @@ export default function DriveBackupCard({ onKeystoreChanged } = {}) {
       }
     } catch (err) {
       setError(String(err?.message || 'The restore did not complete.'));
+      setDialog(describeDriveFailure(err));
     } finally {
       setBusy(false);
     }
@@ -171,6 +209,47 @@ export default function DriveBackupCard({ onKeystoreChanged } = {}) {
       </div>
       {note ? <p className="nw-small nw-dim" role="status" style={{ margin: '8px 0 0' }}>{note}</p> : null}
       {error ? <p className="nw-small nw-google-error" role="alert" style={{ margin: '8px 0 0' }}>{error}</p> : null}
+      {!busy && wallets.length && email ? (
+        <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
+          No Google Drive? You can still{' '}
+          <button type="button" className="nw-linklike" onClick={downloadEncryptedBackup}>
+            save the encrypted backup as a file
+          </button>
+          {' '}and keep it somewhere safe.
+        </p>
+      ) : null}
+
+      {dialog && typeof document !== 'undefined' ? createPortal(
+        // Portal to <body>: the phone frame is transformed, which would make a
+        // fixed-position dialog position against the frame instead of the
+        // screen and land off-view on a tall page.
+        <div className="nw-modal-back" role="presentation"
+          onClick={(e) => { if (e.target === e.currentTarget) setDialog(null); }}>
+          <div className="nw-modal nw-modal-alert" role="alertdialog" aria-modal="true"
+            aria-labelledby="nw-drive-dialog-title" tabIndex={-1} autoFocus
+            onKeyDown={(e) => { if (e.key === 'Escape') setDialog(null); }}>
+            <div className="nw-step">WALLET BACKUP · GOOGLE DRIVE</div>
+            <h3 id="nw-drive-dialog-title" style={{ color: 'var(--text)' }}>{dialog.title}</h3>
+            <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>{dialog.message}</p>
+            <div className="nw-btn-row" style={{ margin: '14px 0 0' }}>
+              {dialog.fix ? (
+                <a className="nw-chip-btn" href={dialog.fix.url} target="_blank" rel="noreferrer">
+                  {dialog.fix.label}
+                </a>
+              ) : null}
+              {wallets.length ? (
+                <button type="button" className="nw-chip-btn" onClick={downloadEncryptedBackup}>
+                  Download backup file
+                </button>
+              ) : null}
+              <button type="button" className="nw-send-btn" onClick={() => setDialog(null)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
     </section>
   );
 }

@@ -1174,6 +1174,21 @@ body:has(.nw-root) .site-main.container {
   -webkit-overflow-scrolling: touch;
 }
 
+/* A dialog that reports a failure, not one that asks for confirmation. */
+.nw-modal-alert { border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+
+/* An action that sits inside a sentence: it reads as a link, behaves as a
+ * button, and never renders as a chip that breaks the line. */
+.nw-linklike {
+  background: none; border: 0; padding: 0; margin: 0;
+  color: var(--link); font: inherit; text-decoration: underline;
+  text-underline-offset: 2px; cursor: pointer;
+}
+.nw-linklike:hover { color: var(--accent); }
+
+/* An anchor styled as a chip needs the chip's box: anchors are inline. */
+a.nw-chip-btn { display: inline-flex; align-items: center; text-decoration: none; }
+
 .nw-step { color: var(--text-dim); font-size: 12px; letter-spacing: 0.08em; margin-bottom: 12px; text-transform: uppercase; }
 .nw-onboard-card { width: min(460px, 92vw); }
 .nw-onboard h1 { font-size: 26px; }
