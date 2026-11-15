@@ -24,7 +24,7 @@ import {
   removeBiometricUnlock, unlockWithBiometric,
 } from '../lib/biometricUnlock';
 import { backupSilently } from '../lib/driveBackup';
-import { bindOwner } from '../lib/walletBinding';
+import { bindOwner, walletNameForAccount } from '../lib/walletBinding';
 import GoogleAccount from './GoogleAccount';
 import DriveBackupCard from './DriveBackupCard';
 
@@ -112,6 +112,9 @@ export default function WalletPanel() {
   // forms
   const [newName, setNewName] = useState('');
   const [newPass, setNewPass] = useState('');
+  // Signed-in website account, if any. It seeds the wallet name so a Google
+  // sign-up creates a wallet without typing one; the password stays the user's.
+  const [accountEmail, setAccountEmail] = useState('');
   const [importSeed, setImportSeed] = useState('');
   const [unlockName, setUnlockName] = useState('');
   const [unlockPass, setUnlockPass] = useState('');
@@ -236,6 +239,14 @@ export default function WalletPanel() {
     setBiometricWallets(biometricWalletNames());
   }, []);
 
+  // Signing in with Google pre-fills the wallet name, so a first wallet needs
+  // one thing typed — the password — instead of a form. Only ever fills an
+  // empty field, never overwrites what the user already typed.
+  useEffect(() => {
+    if (!accountEmail) return;
+    setNewName((current) => current || walletNameForAccount(accountEmail));
+  }, [accountEmail]);
+
   const refreshBalance = useCallback(async (pubkey) => {
     // A brand-new (unfunded) account reads as HTTP 404 from the gateway —
     // desktop parity: show exact 0 with a NOT-FUNDED badge, never "…".
@@ -302,6 +313,7 @@ export default function WalletPanel() {
       if (!alive) return;
       unsubscribe = authSdk.onAuthStateChanged(auth, (user) => {
         const uid = user?.uid || '';
+        if (alive) setAccountEmail(user?.email || '');
         if (!uid) { if (alive) setWatch(null); return; }
         pullLinkedAddressForUser(uid).then((address) => {
           if (!alive) return;
@@ -392,6 +404,9 @@ export default function WalletPanel() {
       // the same trust level as an explicit Unlock.
       activateWallet({ name: r.name, pubkey: r.pubkeyG, seed32 });
       setNewName(''); setNewPass(''); setImportSeed('');
+      // A wallet created while signed in belongs to that account, so a later
+      // account on this browser cannot adopt it.
+      if (accountEmail) bindOwner(r.name, accountEmail);
       notify(`Wallet "${r.name}" created. Export the encrypted backup NOW (Settings) and store it privately — it is the only copy.`, 'ok');
       // Only refreshes a Drive backup this session already has access to; it
       // never opens a Google window on its own.
@@ -797,7 +812,7 @@ export default function WalletPanel() {
           {page === 'overview' && !(watch && !active && wallets.length === 0) && (
             <OverviewPage active={active} wallets={wallets} balance={balance} funded={funded}
               bus={{ busy, doCreate, doImport, newName, setNewName, newPass, setNewPass,
-                importSeed, setImportSeed }}
+                importSeed, setImportSeed, accountEmail }}
               net={{ net, netOk, ledger: liveLedger ?? ledger, fee, minted: policyMinted(liveLedger ?? ledger) }}
               notify={notify}
               onSend={() => setPage('send')} onReceive={() => setPage('receive')}
@@ -999,7 +1014,11 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
          * and Import is one tap away instead of a page away. */}
         <section className="nw-card" hidden={mode !== 'create'}>
           <h2 style={{ color: 'var(--text)' }}>Create a New Wallet</h2>
-          <p className="nw-small nw-dim">Generated and encrypted in this browser. Use a unique passphrase of at least {MIN_PASSWORD_LENGTH} characters.</p>
+          <p className="nw-small nw-dim">
+            {bus.accountEmail
+              ? `Signed in as ${bus.accountEmail}. The wallet name is already filled in — set a password and it is ready. Keys are generated and encrypted in this browser.`
+              : `Generated and encrypted in this browser. Use a unique passphrase of at least ${MIN_PASSWORD_LENGTH} characters.`}
+          </p>
           <form onSubmit={bus.doCreate} className="nw-txf" style={{ marginTop: 10 }}>
             <label className="nw-label" htmlFor="nw-new-name">Wallet name</label>
             <input id="nw-new-name" value={bus.newName}
