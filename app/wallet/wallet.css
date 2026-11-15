@@ -1195,6 +1195,26 @@ body:has(.nw-root) .site-footer {
 .nw-empty { text-align: center; padding: 34px 10px; color: var(--text-dim); }
 .nw-empty .nw-empty-big { font-size: 28px; margin-bottom: 8px; }
 
+/* The mint headline at the top of Activity: the minted total at balance scale,
+ * above the transfer list, with the issuance eras further down the page. */
+.nw-mint-head { padding: 16px; }
+.nw-mint-head-label {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.nw-mint-head-value {
+  margin: 4px 0 2px;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.nw-mint-head + .nw-card { margin-top: 12px; }
+
 /* The sign-in gate: the only thing on screen when signed out, so it sits near
  * the top of the empty wallet rather than pretending to be a populated page. */
 .nw-gate { max-width: 420px; margin: 10vh auto 0; }

@@ -2137,6 +2137,33 @@ function ActivityPage({ history, activeName, chain, mint, onLoadOlder, onRecheck
   const { supply, minted } = supplyAndMinted(mintData?.total_coins);
   return (
     <div>
+      {/* The mint is close-level accounting, not a transfer, so it can never be
+       * a row in the list below — and its detailed card sits after every row.
+       * On a phone that put the one number people open Activity for thousands
+       * of pixels down, so the headline is repeated here, above the list. */}
+      <section className="nw-card nw-mint-head">
+        <div className="nw-mint-head-label">Founder Mint</div>
+        {minted != null ? (
+          <>
+            <div className="nw-mint-head-value">{`${fmtGroup(minted)} NSAT`}</div>
+            <div className="nw-small nw-dim">
+              {`minted since activation${mintData?.ledger != null
+                ? ` · as of ledger ${fmtGroup(String(mintData.ledger))}` : ''}`}
+              {mintData?.activation_ledger != null
+                ? ` · from ledger ${fmtGroup(String(mintData.activation_ledger))}` : ''}
+            </div>
+          </>
+        ) : mint?.phase === 'loading' || mint?.phase === 'idle' ? (
+          <div className="nw-small nw-dim" style={{ marginTop: 4 }}>
+            Reading the mint state from the ledger header…
+          </div>
+        ) : (
+          <div className="nw-small nw-dim" style={{ marginTop: 4 }}>
+            {`No indexed ledger header carries the Founder Mint extension yet${mint?.error ? ` (${mint.error})` : ''} — no minted total is shown rather than an estimate.`}
+          </div>
+        )}
+      </section>
+
       <section className="nw-card">
         <h2 style={{ color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           {activeName ? `On-chain activity — ${activeName}` : 'On-chain activity'}
