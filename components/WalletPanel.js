@@ -26,6 +26,7 @@ import {
   removeBiometricUnlock, unlockWithBiometric,
 } from '../lib/biometricUnlock';
 import { backupSilently } from '../lib/driveBackup';
+import { seesMintStatus } from '../lib/mintVisibility';
 import {
   bindOwner, unbindOwner, visibleWalletNamed, walletNameForAccount, walletsForAccount,
 } from '../lib/walletBinding';
@@ -434,6 +435,9 @@ export default function WalletPanel() {
   // A picked address wins only while it is still linked; otherwise the first
   // linked wallet is the one shown.
   const watchAddress = watchAddresses.includes(watchPick) ? watchPick : (watchAddresses[0] || '');
+  // Mint status belongs to the wallet the Founder Mint pays and to no other:
+  // the unlocked wallet in view, or a linked watch-only address for it.
+  const mintVisible = seesMintStatus(active?.pubkey || watchAddress);
 
   useEffect(() => {
     if (active) {
@@ -525,6 +529,8 @@ export default function WalletPanel() {
 
   // Founder Mint is close-level accounting carried in the ledger header. Read it
   // from the index (the header itself), never recomputed from a policy rate.
+  // It is read only when the wallet in view is the one the mint pays: other
+  // wallets are not involved in it, so neither the read nor the card is for them.
   //
   // Every ledger close writes a new heartbeat and grows totalCoins, so a single
   // read freezes the figure the moment Activity opens. While the page is on
@@ -532,7 +538,7 @@ export default function WalletPanel() {
   // visible — the card therefore shows the latest indexed header, not the one
   // that happened to be current at the first click.
   useEffect(() => {
-    if (page !== 'activity' || !isIndexerConfigured()) return undefined;
+    if (page !== 'activity' || !mintVisible || !isIndexerConfigured()) return undefined;
     let cancelled = false;
     let inFlight = false;
     const read = async ({ first = false } = {}) => {
@@ -583,7 +589,7 @@ export default function WalletPanel() {
       window.clearInterval(timer);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [page]);
+  }, [page, mintVisible]);
 
   // One older page, appended. Paging stops on an error and says so rather than
   // silently ending the list as if it were complete.
@@ -1327,10 +1333,11 @@ export default function WalletPanel() {
             </div>
           )}
 
-          {/* Activity opens on the mint status: read-only ledger-header
-           * accounting, so it does not need an unlocked wallet and must not be
-           * pushed below the unlock form. */}
-          {page === 'activity' ? <MintStatusCard mint={mintStatus} /> : null}
+          {/* Activity opens on the mint status for the wallet the mint pays:
+           * read-only ledger-header accounting, so it does not need an unlocked
+           * wallet and must not be pushed below the unlock form. Wallets the
+           * mint does not pay do not show it at all. */}
+          {page === 'activity' && mintVisible ? <MintStatusCard mint={mintStatus} /> : null}
 
           {/* Locked state: unlocking is the only thing that matters, so it is
            * a card in the flow instead of a control in a toolbar. */}
