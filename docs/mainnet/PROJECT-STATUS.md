@@ -215,3 +215,23 @@ Chrome 157.0.8103.52 (โปรไฟล์ใหม่, ไม่ headless) ก
 3. ตัดสินใจเรื่อง `www` + `wallet.satoshicore.org` (redirect หรือคงไว้) — ยังไม่มี DNS record ทั้งคู่
 4. เริ่ม security review ของ website-connection (dApp provider) ก่อนเปิดเป็นฟีเจอร์; ระหว่างนี้หน้า `/security/` ประกาศว่าไม่มี provider
 5. ทดสอบ offline shell แบบตัดเน็ตจริง (ระบุไว้ใน risks — ยังไม่ได้ทำ)
+
+## 8. Tranche 2026-11-15 — standalone wallet + นโยบาย session
+
+| รายการ | สถานะ | หลักฐาน / หมายเหตุ |
+|---|---|---|
+| ใช้ wallet ได้โดยไม่ต้องมี Google (directive §9) | **IMPLEMENTED + VERIFIED (local)** | หน้า gate มีสองทาง: `Continue with Google` และ `Use without an account`; โหมดไม่มีบัญชีเป็น state ในหน่วยความจำ (reload/sign-out กลับไป gate, account session จริงยกเลิกโหมดนี้) |
+| การมองเห็น wallet ตอนไม่มีบัญชี | **VERIFIED (unit test)** | `walletsForAccount()` ใน `lib/walletBinding.js`: ไม่มีบัญชี → เห็นเฉพาะ wallet ที่ไม่ผูกบัญชี; wallet ที่ผูกบัญชีอื่นยังเข้ารหัสบนเครื่อง ไม่ถูกลบ; เทสต์ `standalone mode never lists a wallet that belongs to another account` |
+| ข้อความ legal/docs | **IMPLEMENTED** | `/privacy/` `/security/` `/terms/` เลิกเขียนว่า sign-in "required"; `docs/GOOGLE-SIGN-IN.md` เพิ่มหัวข้อ "Opening the wallet without Google" |
+| นโยบายหมดอายุ session ที่จำไว้บนเครื่อง | **IMPLEMENTED + VERIFIED (unit test)** | `lib/sessionPolicy.js`: เก็บเฉพาะ `{uid, lastSeenAt}`; ไม่ได้ใช้ 30 วัน → จบ session บนเบราว์เซอร์นี้และแจ้งที่ gate ครั้งเดียว; record ที่อ่านไม่ได้/หายไป **ไม่**ทำให้ถูกบังคับ sign-in; เทสต์ `tests/session-policy.test.mjs` 7/7 |
+| การเพิกถอน session ของเครื่องที่หายไปจากระยะไกล | **BLOCKED (ไม่มี backend)** | Firebase client SDK ทำไม่ได้; ต้องมี Admin SDK/identity-provider session API + deploy target + quota ซึ่งยังไม่อยู่ในขอบเขตที่อนุมัติ → บันทึกเป็นข้อจำกัดใน docs ไม่ประกาศว่ามี |
+| เคลียร์สถานะเมื่อ signing key ไม่ได้อยู่บนเครื่อง | **VERIFIED (ของเดิม)** | watch-only view + ข้อความ "sending still needs the wallet password and key on the device that signs"; ไม่มีปุ่ม Send บน address ที่ดูอย่างเดียว |
+
+```
+NEXT_PUBLIC_API_SAME_ORIGIN=1 npm run build   ✓ exit 0
+npm test                                      ✓ exit 0, 0 failing (มี session-policy + wallet-binding + static-export)
+npm run verify:deployed -- https://satoshicore.org   8 passed / 0 failed, 2 advisory (ยังเป็น build เดิมที่ live)
+browser 430×932 (/  local)                    gate มีสองปุ่ม, standalone เข้าหน้าตัว wallet, reload กลับ gate
+```
+
+หมายเหตุ: ยัง**ไม่ deploy production** รอบนี้ (รออนุมัติ), ยังไม่ทดสอบ Google OAuth จริง, และยังไม่ได้ทดสอบ account switching ด้วยกระเป๋าจริงสองใบ

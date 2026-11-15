@@ -7,6 +7,10 @@ import {
   signOutGoogleSession,
 } from '../lib/firebaseAuth';
 import {
+  clearSessionExpired, describeSessionPolicy, markSessionExpired, readSessionExpired,
+  readSessionRecord, sessionIsStale, touchSessionRecord,
+} from '../lib/sessionPolicy';
+import {
   currentTheme, disableThemeSync, enableThemeSync, pullThemeForUser,
   syncEnabledFor,
 } from '../lib/themeSync';
@@ -52,6 +56,14 @@ export default function GoogleAccount({ variant = 'card', onUseStandalone } = {}
   const [linkTarget, setLinkTarget] = useState('');
   const [linkNote, setLinkNote] = useState('');
   const [localWallets, setLocalWallets] = useState([]);
+  // A saved sign-in this browser ended because it went unused too long. Reading
+  // the flag does not clear it, so a second mount of the gate still shows the
+  // explanation; signing in again is what clears it.
+  const [sessionExpiredNotice, setSessionExpiredNotice] = useState(false);
+
+  useEffect(() => {
+    setSessionExpiredNotice(readSessionExpired() > 0);
+  }, []);
 
   useEffect(() => {
     setLocalWallets(keystoreList());
@@ -93,6 +105,22 @@ export default function GoogleAccount({ variant = 'card', onUseStandalone } = {}
         setSyncOn(syncEnabledFor(uid));
         setRememberDevice(shouldRememberGoogleSession());
         setReady(true);
+        if (uid) {
+          // A remembered sign-in unused for the policy window is ended here
+          // rather than opened. This touches only the website session: every
+          // wallet stays encrypted on the device, and the gate says why a
+          // sign-in is needed again. Unknown or unreadable records are never
+          // expired, so blocked storage cannot lock a visitor out.
+          if (sessionIsStale(readSessionRecord(), { now: Date.now() })) {
+            markSessionExpired();
+            void signOutGoogleSession().catch(() => {});
+            return;
+          }
+          touchSessionRecord(uid);
+          // The visitor is signed in again, so the expired-session explanation
+          // is no longer true for this browser.
+          clearSessionExpired();
+        }
         // An opted-in account brings its theme to this device. A miss just
         // leaves the local theme as it is.
         if (uid) void pullThemeForUser(uid).catch(() => {});
@@ -283,6 +311,12 @@ export default function GoogleAccount({ variant = 'card', onUseStandalone } = {}
           device without an account. Signing out locks the wallet and clears this session,
           so the next person on this device starts here instead of in your wallet.
         </p>
+        {sessionExpiredNotice ? (
+          <p className="nw-small nw-dim" role="status" style={{ margin: '0 0 12px' }}>
+            The saved sign-in on this browser ended after 30 days without use. Sign in again to
+            reopen it — your wallet, its password and its balances are unchanged.
+          </p>
+        ) : null}
         {!configured ? (
           <p className="nw-small nw-dim" role="status">
             Google sign-in is not configured in this build, so the wallet opens without it.
@@ -409,9 +443,7 @@ export default function GoogleAccount({ variant = 'card', onUseStandalone } = {}
             </span>
           </label>
           <p className="nw-small nw-dim" style={{ margin: '6px 0 0' }}>
-            {rememberDevice
-              ? 'Remembered on this browser. Sign out to remove the saved session.'
-              : 'Off — Google sign-in ends when this browser session closes.'}
+            {describeSessionPolicy({ remembered: rememberDevice })}
           </p>
         </div>
       ) : null}

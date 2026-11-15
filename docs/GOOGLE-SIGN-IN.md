@@ -60,6 +60,30 @@ it does not transfer sign-in to a different device. Do not enable it on a shared
 or public computer. Signing out removes the Firebase session and resets the
 choice to off.
 
+### 30-day idle limit on a remembered sign-in
+
+`lib/sessionPolicy.js` records one thing locally: the signed-in uid and the last
+time this browser used the session (`nsat-web-session-v1`). No token, wallet
+name, address, seed or password is stored. If a remembered sign-in goes unused
+for 30 days, the site ends it on this browser and the gate says so; signing in
+again restores the website session, and every wallet stays encrypted on the
+device, unchanged. A missing or unreadable record is never treated as expired,
+so blocked browser storage cannot lock anyone out. This is a browser-local
+convenience rule, not a security control: clearing site data also clears the
+record, and it does not limit a session on any other device.
+
+### What this site cannot do: remote revocation
+
+A static site holding only Firebase's client SDK cannot end another device's
+remembered session. Signing out, and the 30-day rule, act on the browser in use.
+Revoking a lost device needs a privileged backend (Firebase Admin SDK or an
+identity-provider session API) plus a deploy target and quota for it; that is not
+part of this project today and must not be claimed. Until such a backend is
+reviewed and approved, the honest guidance for a lost device is: change the
+Google account password (which revokes its sessions), then sign out on any
+remaining device. Wallet keys are unaffected either way — they were never
+stored in the account, and no Google session can decrypt them.
+
 This persists only the website identity session. It does not unlock the wallet,
 remember its password, sync a signing key, or grant permission to sign. Even on
 a remembered device, signing still requires the local encrypted keystore to be
