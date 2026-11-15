@@ -1061,7 +1061,14 @@ export default function WalletPanel() {
       a.href = url; a.download = 'scw-web-backup.json'; a.click();
       URL.revokeObjectURL(url);
     }
-    notify('Encrypted keystore downloaded. Keep it private.', 'ok');
+    // The file is the whole keystore, which is what makes it a backup — but in a
+    // session that hides other accounts' wallets it still carries their names and
+    // public addresses (the seeds stay encrypted). Say so instead of letting the
+    // export look like it contained only what is on screen.
+    const hiddenInFile = Math.max(0, keystoreList().length - wallets.length);
+    notify(hiddenInFile
+      ? `Encrypted keystore downloaded. It also carries ${hiddenInFile} wallet${hiddenInFile === 1 ? '' : 's'} this session does not show — names and public addresses included, seeds still encrypted. Keep it private.`
+      : 'Encrypted keystore downloaded. Keep it private.', 'ok');
   }
 
   async function doRestore(e) {
@@ -1070,9 +1077,17 @@ export default function WalletPanel() {
     try {
       const backup = await f.text();
       lockWallet();
-      keystoreRestore(backup);
+      // Restore adds to what is here; it never replaces the device's wallets.
+      const restored = keystoreRestore(backup);
       refreshWallets();
-      notify('Keystore restored. Unlock a wallet to sign.', 'ok');
+      const summary = `${restored.added} wallet${restored.added === 1 ? '' : 's'} added`
+        + `${restored.updated ? `, ${restored.updated} updated` : ''}`;
+      if (restored.conflicts.length) {
+        notify(`Keystore restored: ${summary}. ${restored.conflicts.length} name${restored.conflicts.length === 1 ? '' : 's'} `
+          + `already belong to a different wallet here and were left unchanged: ${restored.conflicts.join(', ')}.`, 'err');
+      } else {
+        notify(`Keystore restored: ${summary}. Wallets already on this device were kept — unlock one to sign.`, 'ok');
+      }
     } catch (err) { notify(`restore failed: ${err.message}`, 'err'); }
   }
 

@@ -40,6 +40,11 @@ const STORED = [
     detail: 'The public address you choose to link to your website account, so another device can show its balance and receive screen after Google sign-in. An address is public and confers no spending power — sending still needs the wallet password and key on the device that signs. No balance, history, wallet name, seed or password is stored with it, and unlinking deletes it.'
   },
   {
+    what: 'Google Drive backup (optional)',
+    where: 'your own Google Drive, app-private folder · only if you press Backup to Drive',
+    detail: 'The encrypted keystore file. Each seed is AES-GCM ciphertext under that wallet’s password, so Google and this site cannot open one; the same file necessarily holds wallet names, public addresses, KDF salt and nonce in readable form so the wallets can be listed again. Signing in alone uploads nothing, and the file is written only to the drive.appdata folder of the account you chose.'
+  },
+  {
     what: 'Device-unlock copy (optional)',
     where: 'this browser only',
     detail: 'If you enable supported WebAuthn device unlock, a second AES-GCM encrypted copy of the seed is stored locally. It can be opened only with the enrolled device authenticator (which may use face, fingerprint, security key or device PIN). The site gets no biometric image/template and the PRF-derived unlock key is not stored or sent. Removing browser data or the authenticator may remove this unlock option; the original password and encrypted backup remain the recovery path.'

@@ -32,8 +32,9 @@ export default function DriveBackupCard({ onKeystoreChanged } = {}) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
-  // A download that would replace wallets already on this device needs a
-  // second, explicit click: overwriting the local keystore cannot be undone.
+  // Adding a downloaded backup to a device that already holds wallets asks for
+  // a second, explicit click: it is a change to this device's wallet set, even
+  // though it now merges rather than overwrites.
   const [pendingRestore, setPendingRestore] = useState(null);
   // Anything that stops a backup or restore opens this dialog instead of a
   // quiet line: it states what failed and, when the user can act, links to the
@@ -122,11 +123,25 @@ export default function DriveBackupCard({ onKeystoreChanged } = {}) {
   }
 
   async function installBackup(parsed) {
-    keystoreRestore(parsed.keystore);
-    for (const wallet of keystoreList()) bindOwner(wallet.name, email);
+    const restored = keystoreRestore(parsed.keystore);
+    // Only the wallets this backup actually carries may take this account's
+    // label. Binding every wallet on the device would hand a signed-in account
+    // the names of wallets that belong to another one.
+    const restoredNames = new Set(
+      JSON.parse(parsed.keystore).wallets.map((wallet) => wallet.name));
+    for (const wallet of keystoreList()) {
+      if (!restoredNames.has(wallet.name)) continue;
+      const owner = ownerOf(wallet.name);
+      if (owner && normalizeAccount(owner) !== normalizeAccount(email)) continue;
+      bindOwner(wallet.name, email);
+    }
     refreshWallets();
     setPendingRestore(null);
-    setNote(`Restored ${parsed.wallets} wallet(s) from Google Drive — unlock with its password.`);
+    const conflictNote = restored.conflicts.length
+      ? ` ${restored.conflicts.length} name(s) already belong to a different wallet here and were left unchanged: ${restored.conflicts.join(', ')}.`
+      : '';
+    setNote(`Restored ${restored.added} wallet(s) from Google Drive`
+      + `${restored.updated ? ` and updated ${restored.updated}` : ''} — nothing already on this device was removed.${conflictNote}`);
   }
 
   async function restoreNow() {
@@ -148,7 +163,7 @@ export default function DriveBackupCard({ onKeystoreChanged } = {}) {
         await installBackup(parsed);
       } else {
         setPendingRestore(parsed);
-        setNote(`Found a backup with ${parsed.wallets} wallet(s)${parsed.savedAt ? ` saved ${new Date(parsed.savedAt).toLocaleString()}` : ''}. Replacing this device’s wallets cannot be undone — press “Replace with this backup” to continue.`);
+        setNote(`Found a backup with ${parsed.wallets} wallet(s)${parsed.savedAt ? ` saved ${new Date(parsed.savedAt).toLocaleString()}` : ''}. Restoring adds them to this device and keeps the wallets already here; a name that belongs to a different wallet is left unchanged. Press “Restore this backup” to continue.`);
       }
     } catch (err) {
       setError(String(err?.message || 'The restore did not complete.'));
@@ -164,9 +179,11 @@ export default function DriveBackupCard({ onKeystoreChanged } = {}) {
       <p className="nw-small nw-dim" style={{ margin: '8px 0 12px' }}>
         {'Signing in with Google above identifies your session only; this backup is a separate, '
           + 'optional step. It keeps this device’s wallets in a private app folder of your own '
-          + 'Google Drive, already encrypted with each wallet’s password. Google and this site '
-          + 'cannot open it, and restoring on another device still asks for that password — so an '
-          + 'email login alone can never move funds.'}
+          + 'Google Drive. Every seed is encrypted with its wallet’s password before upload, so '
+          + 'Google and this site cannot open one, and restoring on another device still asks for '
+          + 'that password — an email login alone can never move funds. The same file also holds '
+          + 'each wallet’s name and public address in readable form so the wallets can be listed '
+          + 'again after a restore.'}
       </p>
       {!configured ? (
         <p className="nw-small nw-dim" role="status">Google sign-in is not configured in this build.</p>
@@ -199,7 +216,7 @@ export default function DriveBackupCard({ onKeystoreChanged } = {}) {
         </button>
         <button type="button" className="nw-chip-btn" onClick={restoreNow}
           disabled={busy || !email}>
-          {pendingRestore ? 'Replace with this backup' : 'Restore from Drive'}
+          {pendingRestore ? 'Restore this backup' : 'Restore from Drive'}
         </button>
         {pendingRestore ? (
           <button type="button" className="nw-chip-btn" disabled={busy}

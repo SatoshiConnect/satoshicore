@@ -24,6 +24,9 @@ Nothing here should be read as "accepted" — each item carries its owner/next s
 | R8 | E2E suite skip-by-default without disposable devnet env | LOW | By design (no Mainnet txs from the CI/E2E path) | Keep; document in release manifest as deliberately skipped |
 | R9 | Production artifact stale vs latest wallet lib edits | LOW | **FIXED (2026-11-14)** — rebuild deployed to the Caddy webroot from commit `5f4eaa0`; `npm run verify:deployed` passed 8/8 (2 advisory) | Keep the deploy step and `verify:deployed` in every wallet release |
 | R10 | Browser runtime compromise (malicious extension/exploit) is OUT of scope of every control here | Acknowledged | Standing assumption | Threat model: minimize seed lifetime; no effective software guarantee possible |
+| R11 | CSP `connect-src 'self' https:` lets an injected script exfiltrate to any HTTPS host; CSP is a `<meta>` tag so `frame-ancestors` is unavailable | MEDIUM | Open — narrow allowlist + `frame-ancestors` header need a staged sign-in/Drive test and a Caddy config change | See `WALLET-WEB-REVIEW-2026-11-16.md` F6/F7 |
+| R12 | Keystore export (no password) carries names/addresses of wallets the current session hides | MEDIUM | Mitigated (explicit warning in the export toast); full filtering needs an owner decision because a filtered file is a smaller backup | `WALLET-WEB-REVIEW-2026-11-16.md` F5 |
+| R13 | Drive backup file contains wallet names and public addresses in readable form (seeds encrypted) | MEDIUM | Disclosed in the card and `/privacy/`; re-encrypting metadata is a format change and not done | `WALLET-WEB-REVIEW-2026-11-16.md` F4 |
 
 ## Explicit non-claims
 - No control above claims protection against host-root compromise.
