@@ -221,11 +221,27 @@ test('Google sign-in disclosures, setup UI, and targeted CSP ship in the static 
 test('the homepage IS the wallet, not a landing page', () => {
   const home = readFileSync(join(OUT, 'index.html'), 'utf8');
 
-  // The wallet shell and its first-time onboarding render at "/" itself.
+  // The wallet shell renders at "/" itself. A signed-out browser gets the
+  // wallet's own sign-in gate, not a marketing page: using the wallet starts
+  // with a Google sign-in, so the create/import forms exist in the bundle but
+  // must not be prerendered for a visitor who has not signed in.
   assert.match(home, /nw-root/, 'homepage does not render the wallet shell');
-  assert.match(home, /Create a New Wallet/, 'homepage has no create-wallet action');
-  assert.match(home, /Import Existing Wallet/, 'homepage has no import action');
+  assert.match(home, /Sign in to start/, 'signed-out homepage does not offer the sign-in gate');
+  // The button itself is client-side (the gate reports the in-flight session
+  // check in the static HTML), so it is asserted in the bundle below.
+  assert.match(home, /Checking sign-in session/, 'the gate must say it is reading the session');
+  assert.doesNotMatch(home, /Create a New Wallet/, 'wallet forms must not render before sign-in');
+  assert.doesNotMatch(home, /Import Existing Wallet/, 'wallet import must not render before sign-in');
   assert.match(home, /href="\/download\/?"/, 'homepage has no browser-extension action');
+
+  // The actions still ship in the client bundle, so signing in needs no reload.
+  const walletBundle = files
+    .filter((f) => f.endsWith('.js'))
+    .map((f) => readFileSync(f, 'utf8'))
+    .join('\n');
+  assert.match(walletBundle, /Continue with Google/, 'wallet bundle cannot start a session');
+  assert.match(walletBundle, /Create a New Wallet/, 'wallet bundle lost its create action');
+  assert.match(walletBundle, /Import Existing Wallet/, 'wallet bundle lost its import action');
 
   // No intermediate marketing/entry page may sit in front of the wallet.
   assert.doesNotMatch(home, /Open NSAT Wallet/, 'the old landing CTA is still on the homepage');

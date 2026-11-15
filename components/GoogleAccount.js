@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import {
   getFirebaseWebConfig, isFirebaseWebConfigured, loadGoogleAuth,
   setGoogleSessionPersistence, setRememberGoogleSession, shouldRememberGoogleSession,
+  signOutGoogleSession,
 } from '../lib/firebaseAuth';
 import {
   currentTheme, disableThemeSync, enableThemeSync, pullThemeForUser,
@@ -166,13 +167,9 @@ export default function GoogleAccount({ variant = 'card' } = {}) {
     setBusy(true);
     setError('');
     try {
-      const { auth, authSdk } = await loadGoogleAuth();
-      // Switch this user back to session-only before signing out, so an
-      // explicit sign-out never leaves Firebase's persistent auth record.
-      try { await authSdk.setPersistence(auth, authSdk.browserSessionPersistence); }
-      catch { /* sign out still removes the existing persisted Firebase session */ }
-      await authSdk.signOut(auth);
-      setRememberGoogleSession(false);
+      // The shared helper announces the sign-out before it reaches Firebase, so
+      // the wallet locks and wipes its session immediately.
+      await signOutGoogleSession();
       setRememberDevice(false);
     } catch {
       setError('Could not sign out. Please try again.');
@@ -270,6 +267,53 @@ export default function GoogleAccount({ variant = 'card' } = {}) {
     } finally {
       setBusy(false);
     }
+  }
+
+  // The gate is the wallet's front door: a browser that is not signed in shows
+  // this instead of the wallet screen, so starting to use the wallet is exactly
+  // a Google sign-in and nothing else is reachable before it.
+  if (variant === 'gate') {
+    return (
+      <section className="nw-card nw-gate" aria-labelledby="nw-gate-title">
+        <h2 id="nw-gate-title" style={{ color: 'var(--text)' }}>Sign in to start</h2>
+        <p className="nw-small nw-dim" style={{ margin: '8px 0 14px' }}>
+          The wallet opens with your Google account. Signing out locks it and clears this
+          session, so the next person on this device starts here instead of in your wallet.
+        </p>
+        {!configured ? (
+          <p className="nw-small nw-dim" role="status">
+            Google sign-in is not configured in this build, so the wallet cannot open.
+          </p>
+        ) : !ready ? (
+          <p className="nw-small nw-dim" role="status">Checking sign-in session…</p>
+        ) : user ? (
+          <p className="nw-small nw-dim" role="status">
+            {`Signed in as ${user.email || 'your Google account'}. Opening your wallet…`}
+          </p>
+        ) : (
+          <>
+            <button type="button" className="nw-send-btn nw-gate-btn"
+              onClick={signIn} disabled={busy}>
+              {busy ? 'Opening Google…' : 'Continue with Google'}
+            </button>
+            <label className="nw-small" style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 12 }}>
+              <input type="checkbox" checked={rememberDevice} disabled={busy}
+                onChange={(e) => setRememberDevice(e.target.checked)}
+                style={{ marginTop: 2, width: 'auto' }} />
+              <span>
+                <strong>Remember this device</strong>
+                <span className="nw-dim"> — stay signed in on this browser. Do not use on a shared device. This does not remember the wallet password or unlock the wallet.</span>
+              </span>
+            </label>
+          </>
+        )}
+        {error ? <p className="nw-small nw-google-error" role="alert">{error}</p> : null}
+        <p className="nw-small nw-dim" style={{ margin: '12px 0 0' }}>
+          Your encrypted wallet stays on this device and is never uploaded; the Google account
+          only identifies the session. Signing out deletes no wallet.
+        </p>
+      </section>
+    );
   }
 
   if (variant === 'row') {

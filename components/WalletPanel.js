@@ -17,14 +17,18 @@ import { decodeSeed } from '../lib/nsatCodec';
 // source of truth for WHY a send is blocked; see NSAT-WALLET-BUTTON-STATES).
 import { sendPreflight, maxSendable, fmtGroup } from '../lib/nsatSendPreflight';
 import { startBalanceRefresh } from '../lib/walletBalanceRefresh.mjs';
-import { isFirebaseWebConfigured, loadGoogleAuth } from '../lib/firebaseAuth';
+import {
+  ACCOUNT_SIGNED_OUT_EVENT, isFirebaseWebConfigured, loadGoogleAuth, signOutGoogleSession,
+} from '../lib/firebaseAuth';
 import { pullLinkedAddressesForUser } from '../lib/walletLinks';
 import {
   biometricWalletNames, enableBiometricUnlock, hasBiometricUnlock,
   removeBiometricUnlock, unlockWithBiometric,
 } from '../lib/biometricUnlock';
 import { backupSilently } from '../lib/driveBackup';
-import { bindOwner, unbindOwner, walletNameForAccount } from '../lib/walletBinding';
+import {
+  bindOwner, normalizeAccount, ownerOf, unbindOwner, walletNameForAccount,
+} from '../lib/walletBinding';
 import GoogleAccount from './GoogleAccount';
 import DriveBackupCard from './DriveBackupCard';
 import BackupReminder from './BackupReminder';
@@ -132,6 +136,12 @@ export default function WalletPanel() {
   // sign-up creates a wallet without typing one; the password stays the user's.
   const [accountEmail, setAccountEmail] = useState('');
   const [accountUid, setAccountUid] = useState('');
+  // Signing in with Google is the start of a session and signing out is its
+  // end: without an account there is nothing to open, so the panel shows only
+  // the gate. `accountReady` keeps the wallet from flashing while the first
+  // auth-state callback is still in flight.
+  const signInRequired = SHOW_GOOGLE_ACCOUNT && isFirebaseWebConfigured();
+  const [accountReady, setAccountReady] = useState(!signInRequired);
   const [importSeed, setImportSeed] = useState('');
   const [unlockName, setUnlockName] = useState('');
   const [unlockPass, setUnlockPass] = useState('');
@@ -198,6 +208,51 @@ export default function WalletPanel() {
     activeRef.current = session;
     setActive(session);
   }, []);
+
+  // Everything a session accumulated. `lockWallet` zeroes the signing key; this
+  // also drops every screen state that belonged to the account — watch list,
+  // balances, history, mint data, forms and open dialogs — so the next person
+  // starts from the sign-in gate, not from the previous user's screen.
+  const endSession = useCallback(() => {
+    lockWallet();
+    setWatchAddresses([]);
+    setWatchPick('');
+    setHistory([]);
+    setChainHistory({ phase: 'idle', items: [], total: null, coverage: null, next: null, loadingMore: false, error: '' });
+    setMintStatus({ phase: 'idle', data: null, timeline: [], unattributed: null, error: '' });
+    setBalance(null);
+    setReview(null);
+    setAccountsOpen(false);
+    setWalletDetails(null);
+    setWalletRemoveState(null);
+    setDest(''); setAmount(''); setCreateDest(false);
+    setUnlockName('');
+    setSwitchName(''); setSwitchPass('');
+    setSwitchBalances({});
+    setOverviewWalletStates({});
+    setSendRecipientBalances({});
+    setToast(null);
+    setPage('overview');
+  }, [lockWallet]);
+
+  // A sign-out — from Settings, from the account switcher, or from another tab
+  // — ends the whole session, not just the Google identity.
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const onSignedOut = () => endSession();
+    window.addEventListener(ACCOUNT_SIGNED_OUT_EVENT, onSignedOut);
+    return () => window.removeEventListener(ACCOUNT_SIGNED_OUT_EVENT, onSignedOut);
+  }, [endSession]);
+
+  // The auth callback is authoritative: a session that disappears without the
+  // event (expired token, revoked access, another tab signing out) tears the
+  // wallet down here too.
+  const lastAccountUid = useRef('');
+  useEffect(() => {
+    const had = lastAccountUid.current;
+    lastAccountUid.current = accountUid;
+    if (had && !accountUid) endSession();
+  }, [accountUid, endSession]);
 
   // An in-app route change unmounts this panel without a pagehide event, so
   // wipe the session buffer on unmount as well: a client-side navigation must
@@ -277,10 +332,30 @@ export default function WalletPanel() {
     return r;
   }, [configured]);
 
+  // What this browser may list for the account signed in now. A wallet bound to
+  // another account stays encrypted on disk — nothing is deleted — but its name
+  // is not shown, so a shared browser does not hand the next person the
+  // previous person's wallet list. Signing back in as the bound account brings
+  // it back.
+  const visibleWallets = useCallback(() => {
+    const all = keystoreList();
+    if (!accountEmail) return all;
+    const mine = normalizeAccount(accountEmail);
+    return all.filter((wallet) => {
+      const owner = normalizeAccount(ownerOf(wallet.name));
+      return !owner || owner === mine;
+    });
+  }, [accountEmail]);
+
   const refreshWallets = useCallback(() => {
-    setWallets(keystoreList());
-    setBiometricWallets(biometricWalletNames());
-  }, []);
+    const listed = visibleWallets();
+    setWallets(listed);
+    setBiometricWallets(biometricWalletNames().filter((name) => listed.some((w) => w.name === name)));
+  }, [visibleWallets]);
+
+  // The list depends on who is signed in, so it is rebuilt whenever that
+  // changes — including sign-out, where it must empty.
+  useEffect(() => { refreshWallets(); }, [refreshWallets]);
 
   // Signing in with Google pre-fills the wallet name, so a first wallet needs
   // one thing typed — the password — instead of a form. Only ever fills an
@@ -308,10 +383,6 @@ export default function WalletPanel() {
     }
   }, []);
 
-  useEffect(() => {
-    setWallets(keystoreList());
-    setBiometricWallets(biometricWalletNames());
-  }, []);
   useEffect(() => { void verifyNetwork(); }, [verifyNetwork]);
 
   // Ledger height for the policy-issuance figure: public, cheap, key-free, so
@@ -362,7 +433,12 @@ export default function WalletPanel() {
         const uid = user?.uid || '';
         if (alive) setAccountEmail(user?.email || '');
         if (alive) setAccountUid(uid);
-      }, () => { /* a session read failure must not break the wallet */ });
+        if (alive) setAccountReady(true);
+      }, () => {
+        // A session read failure must not leave the panel stuck on "checking";
+        // with no confirmed account the gate stays closed.
+        if (alive) setAccountReady(true);
+      });
     }).catch(() => { /* sign-in unavailable: watch-only simply stays off */ });
     return () => { alive = false; unsubscribe(); };
   }, []);
@@ -573,7 +649,7 @@ export default function WalletPanel() {
         zeroSeed(seed32);
         return;
       }
-      setWallets(keystoreList());
+      setWallets(visibleWallets());
       // The freshly created seed stays in this closure's memory only —
       // the same trust level as an explicit Unlock.
       activateWallet({ name: r.name, pubkey: r.pubkeyG, seed32 });
@@ -607,7 +683,7 @@ export default function WalletPanel() {
         zeroSeed(seed32);
         return;
       }
-      setWallets(keystoreList());
+      setWallets(visibleWallets());
       activateWallet({ name: r.name, pubkey: r.pubkeyG, seed32 });
       setNewName(''); setNewPass(''); setImportSeed('');
       setAccountsOpen(false);
@@ -635,7 +711,7 @@ export default function WalletPanel() {
         recordDriveBackup(result.email, result.modifiedTime ? new Date(result.modifiedTime) : new Date(), {
           wallets: keystoreList().map((wallet) => wallet.pubkey),
         });
-        setWallets(keystoreList());
+        setWallets(visibleWallets());
       }
     } catch { /* no session, no Drive grant, or offline: manual backup remains */ }
   }
@@ -663,7 +739,9 @@ export default function WalletPanel() {
         zeroSeed(seed32);
         return false;
       }
-      const list = keystoreList();
+      // Only a wallet this account may see can be unlocked: another account's
+      // wallet stays hidden even if its name is guessed.
+      const list = visibleWallets();
       const entry = list.find(w => w.name === name);
       activateWallet({ name, pubkey: entry?.pubkey, seed32 });
       notify(`Wallet "${name}" unlocked.`, 'ok');
@@ -677,7 +755,7 @@ export default function WalletPanel() {
   }
 
   async function unlockWithDevice(name = unlockName) {
-    const entry = keystoreList().find((wallet) => wallet.name === name);
+    const entry = visibleWallets().find((wallet) => wallet.name === name);
     if (!entry || !hasBiometricUnlock(name)) {
       notify('Device unlock is not set up for this wallet. Use its password.', 'err');
       return false;
@@ -839,8 +917,7 @@ export default function WalletPanel() {
       unbindOwner(wallet.name);
       setWalletDetails(null);
       setWalletManagerView('list');
-      setWallets(keystoreList());
-      setBiometricWallets(biometricWalletNames());
+      refreshWallets();
       setOverviewWalletStates((current) => {
         const next = { ...current };
         delete next[wallet.name];
@@ -1074,8 +1151,29 @@ export default function WalletPanel() {
     && BigInt(amount.replace(/[,_ ]/g, '') || '0') > 0n;
   const destOk = ACCOUNT_RE.test(dest.trim()) && dest.trim() !== active?.pubkey;
   const hasWallets = wallets.length > 0;
+  // Wallets still encrypted on this device but bound to another Google account:
+  // they are not listed, and the unlock form says so instead of looking empty.
+  const hiddenWallets = Math.max(0, keystoreList().length - wallets.length);
 
   const ledger = net?.ledger ?? null;
+
+  // Signed out: the gate is the whole screen. Nothing of the wallet — address,
+  // balance, wallet names, history or the tab bar — is reachable before signing
+  // in, which is what makes "sign out" a real end of use. The gate card renders
+  // immediately, including in the static HTML; it reports the in-flight session
+  // check itself instead of the page looking empty.
+  if (signInRequired && (!accountReady || !accountUid)) {
+    return (
+      <div className="nw-root">
+        <div className="nw-phone">
+          <main className="nw-content">
+            <h1 className="nw-visually-hidden">NSAT Wallet</h1>
+            <GoogleAccount variant="gate" />
+          </main>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="nw-root">
@@ -1149,6 +1247,12 @@ export default function WalletPanel() {
                 aria-label="Wallet password" />
               <button className="nw-send-btn" type="submit"
                 disabled={busy || !unlockName}>Unlock with password</button>
+              {hiddenWallets > 0 && (
+                <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
+                  {`${hiddenWallets} wallet${hiddenWallets === 1 ? '' : 's'} on this device `
+                    + 'belong to another Google account and stay hidden until that account signs in. Nothing was deleted.'}
+                </p>
+              )}
               {unlockName && biometricWallets.includes(unlockName) ? (
                 <button type="button" className="nw-chip-btn" disabled={busy}
                   onClick={() => void unlockWithDevice()}>
@@ -1487,7 +1591,28 @@ export default function WalletPanel() {
             <div className="nw-btn-row">
               <button type="button" className="nw-ghost-btn" disabled={busy}
                 onClick={() => setAccountsOpen(false)}>Close</button>
+              {signInRequired && accountEmail ? (
+                <button type="button" className="nw-danger-btn" disabled={busy}
+                  onClick={async () => {
+                    setBusy(true);
+                    try {
+                      // Locks the wallet and clears the session before the
+                      // Google call returns, then the gate replaces this screen.
+                      await signOutGoogleSession();
+                    } catch {
+                      setBusy(false);
+                      notify('Could not sign out of Google. Please try again.', 'err');
+                    }
+                  }}>
+                  {busy ? 'Signing out…' : 'Sign out of Google'}
+                </button>
+              ) : null}
             </div>
+            {signInRequired && accountEmail ? (
+              <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
+                {`Signing out ends this session as ${accountEmail}: the wallet locks, this screen is cleared and the next person starts at the sign-in screen. Wallets are not deleted.`}
+              </p>
+            ) : null}
           </div>
         </div>
       )}

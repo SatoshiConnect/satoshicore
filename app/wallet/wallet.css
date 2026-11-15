@@ -1172,6 +1172,11 @@ body:has(.nw-root) .site-footer {
 .nw-empty { text-align: center; padding: 34px 10px; color: var(--text-dim); }
 .nw-empty .nw-empty-big { font-size: 28px; margin-bottom: 8px; }
 
+/* The sign-in gate: the only thing on screen when signed out, so it sits near
+ * the top of the empty wallet rather than pretending to be a populated page. */
+.nw-gate { max-width: 420px; margin: 10vh auto 0; }
+.nw-gate-btn { width: 100%; }
+
 .nw-toast {
   position: fixed; bottom: 14px; right: 14px;
   background: var(--surface); border: 1px solid var(--border-strong, rgba(255, 255, 255, 0.16));
