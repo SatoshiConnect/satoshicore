@@ -1227,6 +1227,14 @@ body:has(.nw-root) .site-footer {
 }
 /* Amounts line up between rows, so two wallets read as a comparison. */
 .nw-acc-bal { color: var(--text); font-variant-numeric: tabular-nums; }
+.nw-send-recipient-list { margin: 6px 0 0; }
+.nw-send-recipient {
+  width: 100%; cursor: pointer; font: inherit; text-align: left;
+}
+.nw-send-recipient.is-selected {
+  border-color: color-mix(in srgb, var(--ok) 55%, transparent);
+  background: var(--ok-tint);
+}
 
 /* Linked wallets in Settings: one row per wallet, each removable on its own, so
  * a person with several wallets can see exactly what this account watches. */

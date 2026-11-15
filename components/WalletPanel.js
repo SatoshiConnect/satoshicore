@@ -133,6 +133,8 @@ export default function WalletPanel() {
   const [switchPass, setSwitchPass] = useState('');
   // name -> { kind: 'loading' | 'exact' | 'missing' | 'unavailable', value }
   const [switchBalances, setSwitchBalances] = useState({});
+  // public address -> balance state for linked wallet choices in Send
+  const [sendRecipientBalances, setSendRecipientBalances] = useState({});
   const [dest, setDest] = useState('');
   const [createDest, setCreateDest] = useState(false);
   const [amount, setAmount] = useState('');
@@ -354,6 +356,29 @@ export default function WalletPanel() {
     window.addEventListener('nsat:links-changed', reload);
     return () => { alive = false; window.removeEventListener('nsat:links-changed', reload); };
   }, [accountUid]);
+
+  // Read the signed-in account's other linked wallets for the Send shortcuts.
+  // Their public balances are informational only; the sender's local key remains
+  // the sole authority for signing, and the normal review gate is unchanged.
+  useEffect(() => {
+    const recipients = watchAddresses.filter((address) => address && address !== active?.pubkey);
+    if (page !== 'send' || recipients.length === 0) return undefined;
+    let cancelled = false;
+    setSendRecipientBalances((current) => {
+      const next = {};
+      for (const address of recipients) {
+        next[address] = current[address] ?? { kind: 'loading', value: null };
+      }
+      return next;
+    });
+    Promise.all(recipients.map(async (address) => {
+      let entry;
+      try { entry = readAccountBalance(await getAccount(address)); }
+      catch { entry = { kind: 'unavailable', value: null }; }
+      if (!cancelled) setSendRecipientBalances((current) => ({ ...current, [address]: entry }));
+    }));
+    return () => { cancelled = true; };
+  }, [page, watchAddresses, active?.pubkey]);
 
   // Recipient/sender balance notifications.
   //
@@ -922,6 +947,14 @@ export default function WalletPanel() {
               state={{ dest, setDest, amount, setAmount, createDest, setCreateDest }}
               gate={{ netOk, fee, amtInt, destOk, reserve }} busy={busy}
               active={active} balance={balance}
+              linkedRecipients={watchAddresses
+                .filter((address) => address && address !== active?.pubkey)
+                .map((address) => ({
+                  address,
+                  name: wallets.find((wallet) => wallet.pubkey === address)?.name || 'Linked wallet',
+                }))}
+              recipientBalances={sendRecipientBalances}
+              onChooseRecipient={(address) => setDest(address)}
               onReview={openReview} />
           )}
 
@@ -1346,7 +1379,7 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
 }
 
 /* ---------------------------------- Send --------------------------------- */
-function SendPage({ state, gate, busy, active, balance, onReview }) {
+function SendPage({ state, gate, busy, active, balance, linkedRecipients = [], recipientBalances = {}, onChooseRecipient, onReview }) {
   // ONE preflight decides the disabled state and shows WHY (shared with the
   // Desktop wallet / prototype — NSAT-WALLET-BUTTON-STATES.md).
   const pf = sendPreflight({
@@ -1378,6 +1411,33 @@ function SendPage({ state, gate, busy, active, balance, onReview }) {
             onChange={(e) => state.setDest(e.target.value)}
             placeholder="G… (56-char account address)" />
         </div>
+        {linkedRecipients.length > 0 && (
+          <div>
+            <div className="nw-label">Other wallets linked to this account</div>
+            <ul className="nw-acc-list nw-send-recipient-list">
+              {linkedRecipients.map(({ address, name }) => (
+                <li key={address}>
+                  <button type="button"
+                    className={'nw-acc-row nw-send-recipient' + (state.dest.trim() === address ? ' is-selected' : '')}
+                    aria-pressed={state.dest.trim() === address}
+                    onClick={() => onChooseRecipient?.(address)}>
+                    <span className="nw-acc-main">
+                      <span className="nw-acc-name">{name}</span>
+                      <span className="nw-acc-meta">
+                        <span className="nw-mono">{shortAddr(address, 6)}</span>
+                        <span className="nw-acc-bal">{accountBalanceLine(recipientBalances[address])}</span>
+                      </span>
+                    </span>
+                    <span className="nw-chip-btn">Use</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <p className="nw-small nw-dim" style={{ margin: '6px 0 0' }}>
+              Selecting a wallet fills its public address. Review the recipient before sending.
+            </p>
+          </div>
+        )}
         <div className="nw-row">
           <label htmlFor="nw-amt">Amount NSAT</label>
           <input id="nw-amt" inputMode="numeric" value={state.amount}
