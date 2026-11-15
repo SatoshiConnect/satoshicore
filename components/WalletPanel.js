@@ -163,7 +163,9 @@ export default function WalletPanel() {
     loadingMore: false, error: '',
   });
   // Founder Mint state read from the latest indexed ledger header.
-  const [mintStatus, setMintStatus] = useState({ phase: 'idle', data: null, error: '' });
+  const [mintStatus, setMintStatus] = useState({
+    phase: 'idle', data: null, timeline: [], unattributed: null, error: '',
+  });
 
   const notify = (text, kind = 'ok') => {
     setToast({ text, kind });
@@ -422,15 +424,26 @@ export default function WalletPanel() {
   useEffect(() => {
     if (page !== 'activity' || !isIndexerConfigured()) return undefined;
     let cancelled = false;
-    setMintStatus({ phase: 'loading', data: null, error: '' });
+    setMintStatus({ phase: 'loading', data: null, timeline: [], unattributed: null, error: '' });
     getMintStatus()
       .then((doc) => {
         if (cancelled) return;
-        setMintStatus({ phase: 'ready', data: doc?.mint || null, error: '' });
+        setMintStatus({
+          phase: 'ready',
+          data: doc?.mint || null,
+          // Issuance eras derived by the index from consecutive header
+          // totalCoins deltas, plus the growth they cannot attribute.
+          timeline: Array.isArray(doc?.timeline) ? doc.timeline : [],
+          unattributed: doc?.timeline_unattributed ?? null,
+          error: '',
+        });
       })
       .catch((err) => {
         if (cancelled) return;
-        setMintStatus({ phase: 'unavailable', data: null, error: String(err?.message || err) });
+        setMintStatus({
+          phase: 'unavailable', data: null, timeline: [], unattributed: null,
+          error: String(err?.message || err),
+        });
       });
     return () => { cancelled = true; };
   }, [page]);
@@ -1989,6 +2002,7 @@ function ActivityPage({ history, activeName, chain, mint, onLoadOlder, onRecheck
   const sent = chainItems.filter((item) => item.direction === 'out').length;
   const received = chainItems.filter((item) => item.direction !== 'out').length;
   const mintData = mint?.data;
+  const eras = Array.isArray(mint?.timeline) ? mint.timeline : [];
   const { supply, minted } = supplyAndMinted(mintData?.total_coins);
   return (
     <div>
@@ -2156,6 +2170,45 @@ function ActivityPage({ history, activeName, chain, mint, onLoadOlder, onRecheck
                 <span className="nw-k">Activation ledger</span>
                 <span className="nw-v">{fmtGroup(String(mintData.activation_ledger))}</span>
               </div>
+            )}
+            {eras.length > 0 && (
+              <>
+                <h3 style={{ color: 'var(--text)', margin: '14px 0 0', fontSize: 14 }}>Issuance eras</h3>
+                <p className="nw-small nw-dim" style={{ margin: '4px 0 0' }}>
+                  Each era is a run of finalized ledgers whose header supply (totalCoins) grew by the
+                  same exact amount at every close, read from the headers themselves.
+                </p>
+                <ul className="nw-tx-list" style={{ marginTop: 8 }}>
+                  {eras.map((era) => (
+                    <li key={`${era.from_ledger}-${era.to_ledger}`} className="nw-tx-row"
+                      style={{ alignItems: 'flex-start' }}>
+                      <div style={{ flex: 1 }}>
+                        <div>
+                          {`Ledger ${fmtGroup(String(era.from_ledger))}–${fmtGroup(String(era.to_ledger))}`}{' '}
+                          <span className="nw-badge info">{`${fmtGroup(String(era.ledgers))} ledgers`}</span>
+                        </div>
+                        <div className="nw-small nw-dim">
+                          {`heartbeats ${fmtGroup(String(era.heartbeat_from))}–${fmtGroup(String(era.heartbeat_to))}`}
+                          {chainTime(era.opened_at) ? ` · ${chainTime(era.opened_at)}` : ''}
+                        </div>
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        {era.per_ledger == null
+                          ? <span className="nw-badge warn">rate unknown</span>
+                          : `${fmtGroup(String(era.per_ledger))} / ledger`}
+                        <div className="nw-small nw-dim">
+                          {`${fmtGroup(String(era.minted))} NSAT${era.complete ? '' : ' · partial'}`}
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+                {mint?.unattributed != null && mint.unattributed !== '0' && (
+                  <p className="nw-small" style={{ margin: '8px 0 0', color: 'var(--warn)' }}>
+                    {`${fmtGroup(String(mint.unattributed))} NSAT of header supply growth is not attributable to an era: this index is missing ledgers inside that range.`}
+                  </p>
+                )}
+              </>
             )}
             <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
               {`Read from the ledger header: totalCoins minus the fixed genesis supply of ${fmtGroup(GENESIS_SUPPLY.toString())} NSAT. `}
