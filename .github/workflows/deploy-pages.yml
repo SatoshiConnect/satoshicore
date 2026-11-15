@@ -92,6 +92,17 @@ jobs:
           NEXT_PUBLIC_INDEXER_URL: https://gateway.satoshicore.org
           # Byte-exact Mainnet identity required before any signing UI unlocks.
           NEXT_PUBLIC_NSAT_NETWORK_ID: NSAT Mainnet ; October 2026 ; bc3098829fffc717
+          # Optional Google website sign-in, and with it the theme/address sync
+          # that hangs off a signed-in account. These four values are public
+          # Firebase *web* config (shipped in the JS bundle either way), kept as
+          # repository variables so no secret is needed for a Pages build. When
+          # a variable is unset the build still succeeds and the account card
+          # honestly reports that sign-in is not configured; the wallet itself
+          # never depends on them.
+          NEXT_PUBLIC_FIREBASE_API_KEY: ${{ vars.NEXT_PUBLIC_FIREBASE_API_KEY }}
+          NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ vars.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN }}
+          NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${{ vars.NEXT_PUBLIC_FIREBASE_PROJECT_ID }}
+          NEXT_PUBLIC_FIREBASE_APP_ID: ${{ vars.NEXT_PUBLIC_FIREBASE_APP_ID }}
         run: npm run build
 
       - name: Apply custom-domain configuration
