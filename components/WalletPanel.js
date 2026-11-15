@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   isGatewayConfigured, isIndexerConfigured, EXPECTED_NETWORK_ID,
-  verifyNetworkIdentity, getChainInfo, getAccount, readAccountBalance,
-  submitSignedTransaction, estimateFee, formatExactBalance,
+  verifyNetworkIdentity, getChainInfo, getAccount, getAccountHistory,
+  readAccountBalance, submitSignedTransaction, estimateFee, formatExactBalance,
   waitForConfirmation, accountEventsUrl,
 } from '../lib/nsatClient';
 import {
@@ -140,6 +140,10 @@ export default function WalletPanel() {
   const [amount, setAmount] = useState('');
   const [review, setReview] = useState(null);    // { amount, fee, total }
   const [history, setHistory] = useState([]);
+  // Indexed chain history for the address on screen. Activity used to show
+  // only rows this browser signed, so a transfer made on a phone or another
+  // device was invisible; the indexer already answers for any public address.
+  const [chainHistory, setChainHistory] = useState({ phase: 'idle', items: [], error: '' });
 
   const notify = (text, kind = 'ok') => {
     setToast({ text, kind });
@@ -356,6 +360,33 @@ export default function WalletPanel() {
     window.addEventListener('nsat:links-changed', reload);
     return () => { alive = false; window.removeEventListener('nsat:links-changed', reload); };
   }, [accountUid]);
+
+  // Activity reads the indexer for the address on screen, so older transfers
+  // (and transfers signed elsewhere) appear. Read-only: no key, no signing.
+  useEffect(() => {
+    const address = active?.pubkey || watchAddress;
+    if (page !== 'activity') return undefined;
+    if (!address) {
+      setChainHistory({ phase: 'none', items: [], error: '' });
+      return undefined;
+    }
+    if (!isIndexerConfigured()) {
+      setChainHistory({ phase: 'unavailable', items: [], error: 'indexer not configured' });
+      return undefined;
+    }
+    let cancelled = false;
+    setChainHistory((cur) => ({ phase: 'loading', items: cur.items, error: '' }));
+    getAccountHistory(address, 50)
+      .then((doc) => {
+        if (cancelled) return;
+        setChainHistory({ phase: 'ready', items: Array.isArray(doc?.items) ? doc.items : [], error: '' });
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setChainHistory({ phase: 'unavailable', items: [], error: String(err?.message || err) });
+      });
+    return () => { cancelled = true; };
+  }, [page, active?.pubkey, watchAddress]);
 
   // Read the signed-in account's other linked wallets for the Send shortcuts.
   // Their public balances are informational only; the sender's local key remains
@@ -735,6 +766,19 @@ export default function WalletPanel() {
     };
     try {
       requireActiveSession();
+      // A wallet whose account is not on chain cannot be a source: the node
+      // would answer "source account missing" after the signature existed.
+      // Check first and say what actually has to happen.
+      const source = await getAccount(active.pubkey).catch(() => null);
+      requireActiveSession();
+      if (!source) {
+        notify('Could not read this account from the network — nothing was signed.', 'err');
+        return false;
+      }
+      if (source.status !== 'ok') {
+        notify('This wallet has no on-chain account yet, so it cannot send. An account is created by its first incoming deposit (≈ 2× base reserve). Send funds to this address first.', 'err');
+        return false;
+      }
       const baseFee = await estimateFee();
       requireActiveSession();
       const info = await getChainInfo();
@@ -947,6 +991,7 @@ export default function WalletPanel() {
               state={{ dest, setDest, amount, setAmount, createDest, setCreateDest }}
               gate={{ netOk, fee, amtInt, destOk, reserve }} busy={busy}
               active={active} balance={balance}
+              funded={funded}
               linkedRecipients={watchAddresses
                 .filter((address) => address && address !== active?.pubkey)
                 .map((address) => ({
@@ -965,7 +1010,9 @@ export default function WalletPanel() {
           {page === 'shielded' && <ShieldedGatePage />}
 
           {page === 'activity' && (
-            <ActivityPage history={history} activeName={active?.name}
+            <ActivityPage history={history} activeName={active?.name || (watchAddress ? 'watch only' : '')}
+              chain={chainHistory}
+              issuance={{ minted: policyMinted(liveLedger ?? ledger), ledger: liveLedger ?? ledger }}
               onRecheck={recheckTransfer} canRecheck={isIndexerConfigured()} />
           )}
 
@@ -1379,7 +1426,7 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
 }
 
 /* ---------------------------------- Send --------------------------------- */
-function SendPage({ state, gate, busy, active, balance, linkedRecipients = [], recipientBalances = {}, onChooseRecipient, onReview }) {
+function SendPage({ state, gate, busy, active, balance, funded, linkedRecipients = [], recipientBalances = {}, onChooseRecipient, onReview }) {
   // ONE preflight decides the disabled state and shows WHY (shared with the
   // Desktop wallet / prototype — NSAT-WALLET-BUTTON-STATES.md).
   const pf = sendPreflight({
@@ -1394,10 +1441,10 @@ function SendPage({ state, gate, busy, active, balance, linkedRecipients = [], r
   });
   const canReview = pf.ok;
   const block = pf.block;
-  const funded = balance != null;
-  const mx = funded ? maxSendable(balance, gate.fee ?? '0') : 0n;
+  const hasBalance = balance != null;
+  const mx = hasBalance ? maxSendable(balance, gate.fee ?? '0') : 0n;
   const doMax = () => {
-    if (!funded) return;
+    if (!hasBalance) return;
     // Max = exact balance − fee, BigInt only; empty form if nothing sendable
     const v = mx.toString();
     state.setAmount(v === '0' ? '' : v);
@@ -1447,12 +1494,12 @@ function SendPage({ state, gate, busy, active, balance, linkedRecipients = [], r
         <div className="nw-row nw-small">
           <label htmlFor="nw-max">Max</label>
           <button id="nw-max" type="button" className="nw-chip-btn"
-            disabled={!funded || mx <= 0n}
-            title={funded ? 'Set amount to exact balance − fee (BigInt math)' : 'Funding a brand-new account needs ≥ 2× base reserve.'}
+            disabled={!hasBalance || mx <= 0n}
+            title={hasBalance ? 'Set amount to exact balance − fee (BigInt math)' : 'Funding a brand-new account needs ≥ 2× base reserve.'}
             onClick={doMax}>
             Max (balance − fee)
           </button>
-          {funded && mx > 0n && (
+          {hasBalance && mx > 0n && (
             <span className="nw-small nw-dim">{fmtGroup(mx.toString())} NSAT sendable</span>
           )}
         </div>
@@ -1473,6 +1520,12 @@ function SendPage({ state, gate, busy, active, balance, linkedRecipients = [], r
         )}
         <div className="nw-row nw-small nw-dim"><label>Fee</label>
           <span>{gate.fee ?? '…'} NSAT per operation (live from the verified ledger; exact total shown at Review)</span></div>
+        {funded === false && (
+          <div role="status" className="nw-small nw-send-warning">
+            This wallet has no on-chain account yet. Its first incoming deposit creates the
+            account (≥ 2× base reserve) — until that arrives, sending cannot succeed.
+          </div>
+        )}
         <div className="nw-row">
           <button className="nw-send-btn" disabled={!canReview}
             onClick={onReview} aria-describedby={block ? 'nw-send-block-reason' : undefined}>
@@ -1550,47 +1603,131 @@ function ShieldedGatePage() {
 }
 
 /* -------------------------------- Activity ------------------------------- */
-function ActivityPage({ history, activeName, onRecheck, canRecheck }) {
+function ActivityPage({ history, activeName, chain, issuance, onRecheck, canRecheck }) {
+  // Anything the index already knows is shown from the index; the local list
+  // keeps only what the chain has not reported yet (a transfer sent moments
+  // ago, or one the node rejected before inclusion).
+  const chainItems = chain?.items || [];
+  const onChainHashes = new Set(chainItems.map((item) => String(item.hash || '').toLowerCase()));
+  const localOnly = (history || []).filter(
+    (entry) => !onChainHashes.has(String(entry.txhash || '').toLowerCase()),
+  );
+  const chainTime = (seconds) => {
+    const n = Number(seconds);
+    return Number.isFinite(n) && n > 0 ? new Date(n * 1000).toLocaleString() : '';
+  };
   return (
-    <section className="nw-card">
-      <h2 style={{ color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        {activeName ? `History — ${activeName}` : 'History'}
-        <span className="nw-badge info">locally verified · not a chain indexer</span>
-      </h2>
-      {history.length === 0 ? (
-        <EmptyState text="No signed transfers yet." />
-      ) : (
-        <ul className="nw-tx-list" style={{ marginTop: 10 }}>
-          {history.map((h, i) => (
-            <li key={i} className="nw-tx-row">
-              <div className={'nw-tx-dir ' + (h.dir === 'sent' ? 'sent' : 'rec')}>
-                {h.dir === 'sent' ? '↗' : '↙'}</div>
-              <div style={{ flex: 1 }}>
-                <div>
-                  {h.dir === 'sent' ? 'To' : 'Received'}{' '}
-                  <span className="nw-mono">{shortAddr(h.to)}</span>{' '}
-                  <span className={'nw-badge ' + (h.status === 'confirmed' ? 'ok' : h.status === 'failed' ? 'err' : 'warn')}>
-                    {h.status}</span>
+    <div>
+      <section className="nw-card">
+        <h2 style={{ color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {activeName ? `On-chain activity — ${activeName}` : 'On-chain activity'}
+          <span className="nw-badge info">from the chain index · read-only</span>
+        </h2>
+        {chain?.phase === 'none' ? (
+          <EmptyState text="No wallet selected." />
+        ) : chain?.phase === 'loading' || chain?.phase === 'idle' ? (
+          <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>Reading the chain index…</p>
+        ) : chain?.phase === 'unavailable' ? (
+          <p className="nw-small" style={{ margin: '10px 0 0', color: 'var(--warn)' }}>
+            {`Chain history is unavailable right now${chain.error ? ` (${chain.error})` : ''}. Transfers signed on this device still appear below.`}
+          </p>
+        ) : chainItems.length === 0 ? (
+          <EmptyState text="No on-chain transactions for this address yet." />
+        ) : (
+          <ul className="nw-tx-list" style={{ marginTop: 10 }}>
+            {chainItems.map((item) => (
+              <li key={item.hash} className="nw-tx-row">
+                <div className={'nw-tx-dir ' + (item.direction === 'out' ? 'sent' : 'rec')}>
+                  {item.direction === 'out' ? '↗' : '↙'}</div>
+                <div style={{ flex: 1 }}>
+                  <div>
+                    {item.direction === 'out' ? 'To' : 'From'}{' '}
+                    <span className="nw-mono">{shortAddr(item.counterparty)}</span>{' '}
+                    <span className={'nw-badge ' + (item.success ? 'ok' : 'err')}>
+                      {item.success ? 'confirmed' : (item.result_code || 'failed')}</span>
+                  </div>
+                  <div className="nw-small nw-dim">
+                    {`${item.kind || 'payment'} · fee ${item.fee ?? '—'}${chainTime(item.close_time) ? ` · ${chainTime(item.close_time)}` : ''}`}
+                  </div>
                 </div>
-                <div className="nw-small nw-dim">{h.time} · fee {h.fee}</div>
-                {h.result_code && (
-                  <div className="nw-small nw-dim">result {h.result_code}{h.evidence ? ` · ${h.evidence}` : ''}</div>
-                )}
-                {h.reason && <div className="nw-small nw-dim">reason {h.reason}</div>}
-              </div>
-              <div style={{ textAlign: 'right' }}>
-                {fmtGroup(h.amount)} NSAT
-                {h.ledger && <div className="nw-small nw-dim">ledger {h.ledger}</div>}
-                {canRecheck && h.status !== 'confirmed' && h.status !== 'failed' && (
-                  <button type="button" className="nw-chip-btn" style={{ marginTop: 4 }}
-                    onClick={() => onRecheck(h)}>Check ledger</button>
-                )}
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
+                <div style={{ textAlign: 'right' }}>
+                  {fmtGroup(String(item.amount_stroops ?? item.amount ?? '0'))} NSAT
+                  <div className="nw-small nw-dim">ledger {item.ledger}</div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="nw-card">
+        <h2 style={{ color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          Signed on this device
+          <span className="nw-badge info">local record</span>
+        </h2>
+        {localOnly.length === 0 ? (
+          <EmptyState text={chainItems.length > 0
+            ? 'Nothing pending — every transfer signed here also appears in the chain index.'
+            : 'No signed transfers yet.'} />
+        ) : (
+          <ul className="nw-tx-list" style={{ marginTop: 10 }}>
+            {localOnly.map((h, i) => (
+              <li key={`${h.txhash || 'row'}-${i}`} className="nw-tx-row">
+                <div className={'nw-tx-dir ' + (h.dir === 'sent' ? 'sent' : 'rec')}>
+                  {h.dir === 'sent' ? '↗' : '↙'}</div>
+                <div style={{ flex: 1 }}>
+                  <div>
+                    {h.dir === 'sent' ? 'To' : 'Received'}{' '}
+                    <span className="nw-mono">{shortAddr(h.to)}</span>{' '}
+                    <span className={'nw-badge ' + (h.status === 'confirmed' ? 'ok' : h.status === 'failed' ? 'err' : 'warn')}>
+                      {h.status}</span>
+                  </div>
+                  <div className="nw-small nw-dim">{h.time} · fee {h.fee}</div>
+                  {h.result_code && (
+                    <div className="nw-small nw-dim">result {h.result_code}{h.evidence ? ` · ${h.evidence}` : ''}</div>
+                  )}
+                  {h.reason && <div className="nw-small nw-dim">reason {h.reason}</div>}
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  {fmtGroup(h.amount)} NSAT
+                  {h.ledger && <div className="nw-small nw-dim">ledger {h.ledger}</div>}
+                  {canRecheck && h.status !== 'confirmed' && h.status !== 'failed' && (
+                    <button type="button" className="nw-chip-btn" style={{ marginTop: 4 }}
+                      onClick={() => onRecheck(h)}>Check ledger</button>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {/* Issuance is a protocol credit to the Founder Mint destination, not a
+       * transfer of this wallet, so it can never be a row above. The figure is
+       * the published policy rate, never an invented balance. */}
+      <section className="nw-card">
+        <h2 style={{ color: 'var(--text)' }}>Issuance (policy)</h2>
+        <div className="nw-kv" style={{ marginTop: 8 }}>
+          <span className="nw-k">Minted since activation</span>
+          <span className="nw-v">{issuance?.minted == null
+            ? '…'
+            : `${fmtGroup(String(issuance.minted))} NSAT`}</span>
+        </div>
+        <div className="nw-kv">
+          <span className="nw-k">Rate</span>
+          <span className="nw-v">+4 NSAT per ledger</span>
+        </div>
+        <div className="nw-kv">
+          <span className="nw-k">Ledger</span>
+          <span className="nw-v">{issuance?.ledger ?? '—'}</span>
+        </div>
+        <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
+          The Founder Mint credits the treasury directly in the ledger header, so it is not a
+          transaction and never appears in a wallet&apos;s transfer list. This figure follows the
+          published policy rate from the live ledger height.
+        </p>
+      </section>
+    </div>
   );
 }
 

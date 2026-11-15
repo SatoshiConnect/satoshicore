@@ -1228,6 +1228,8 @@ body:has(.nw-root) .site-footer {
 /* Amounts line up between rows, so two wallets read as a comparison. */
 .nw-acc-bal { color: var(--text); font-variant-numeric: tabular-nums; }
 .nw-send-recipient-list { margin: 6px 0 0; }
+/* The one block that explains a refused send instead of just disabling it. */
+.nw-send-warning { color: var(--warn); }
 .nw-send-recipient {
   width: 100%; cursor: pointer; font: inherit; text-align: left;
 }
