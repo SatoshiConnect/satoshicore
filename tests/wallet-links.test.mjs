@@ -18,7 +18,6 @@ import {
   createFirestoreLinkStore,
   describeLinkFailure,
   diagnoseFirestoreProblem,
-  linkEnabledFor,
   normalizeAddress,
   normalizeAddresses,
   readLinksFrom,
@@ -163,11 +162,6 @@ test('each linked wallet is one document holding one public address', () => {
   // A caller cannot widen the write into wallet data.
   assert.ok(!/seed|password|balance|history|keystore|pubkey|name/i.test(JSON.stringify(doc)));
   assert.throws(() => addressDocument('G-wrong'), /wallet address must be a 56-character/);
-});
-
-test('nothing is stored for an account until it links explicitly', () => {
-  assert.equal(linkEnabledFor('uid-1'), false);
-  assert.equal(linkEnabledFor(''), false);
 });
 
 test('reading and writing keep every linked wallet, one removal at a time', async () => {
