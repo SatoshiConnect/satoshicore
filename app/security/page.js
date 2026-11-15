@@ -62,7 +62,7 @@ const LIMITS = [
   },
   {
     title: 'Google sign-in is not wallet custody',
-    body: 'Optional Google sign-in identifies a website session only. It does not unlock, sync or recover an NSAT wallet key, and it cannot sign or spend. You may also link one public wallet address to the account so another device can show that address\'s balance and receive screen after sign-in — watching an address is not ownership, and sending still requires the wallet password and key on the signing device. The app does not request Gmail mailbox access.'
+    body: 'Google sign-in opens the wallet session and signing out ends it: the wallet locks before the Google call returns and the screen is cleared. Sign-in does not unlock, sync or recover an NSAT wallet key, and it cannot sign or spend. You may also link one public wallet address to the account so another device can show that address\'s balance and receive screen after sign-in — watching an address is not ownership, and sending still requires the wallet password and key on the signing device. The app does not request Gmail mailbox access.'
   },
   {
     title: 'Website connections are not enabled',

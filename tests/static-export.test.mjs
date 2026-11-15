@@ -174,7 +174,8 @@ test('security, terms and privacy pages ship and are linked from the footer', ()
 
 test('Google sign-in disclosures, setup UI, and targeted CSP ship in the static export', () => {
   const privacy = readFileSync(join(OUT, 'privacy/index.html'), 'utf8');
-  assert.match(privacy, /Google sign-in is optional/);
+  assert.match(privacy, /Google sign-in is required to open the wallet/);
+  assert.match(privacy, /Signing out ends that session/);
   assert.match(privacy, /does not request Gmail mailbox access/);
   // Sign-in itself sends no wallet data; a public address is stored only when
   // the user links one, and the disclosure has to say both things.

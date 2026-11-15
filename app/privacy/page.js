@@ -4,7 +4,7 @@ import PageHeader from '../../components/PageHeader';
 export const metadata = {
   title: 'Privacy — NSAT Wallet (draft)',
   description:
-    'Draft privacy disclosure: optional Google sign-in for the website only; wallet keys stay on the device, alongside chain reads and signed-envelope relay.'
+    'Draft privacy disclosure: Google sign-in opens the wallet session; wallet keys stay on the device, alongside chain reads and signed-envelope relay.'
 };
 
 const STORED = [
@@ -25,7 +25,7 @@ const STORED = [
     detail: 'Recipient, amount, fee, hash and the ledger result once read. Not a full chain history, and never sent anywhere.'
   },
   {
-    what: 'Google website sign-in session (optional)',
+    what: 'Google website sign-in session (required to open the wallet)',
     where: 'Firebase Authentication, browser session or this browser only',
     detail: 'By default, the session ends when the browser session closes. If you check Remember this device, Firebase keeps the website sign-in on this browser until you sign out or clear site data. This remembers only website identity: it never unlocks the wallet, remembers its password, or syncs/recover signing keys. Do not enable it on a shared device.'
   },
@@ -113,16 +113,16 @@ export default function PrivacyPage() {
       <section className="panel">
         <div className="panel-head">
           <h2 className="panel-title">What we do not collect</h2>
-          <span className="panel-meta">optional account · no analytics</span>
+          <span className="panel-meta">sign-in required to open · no analytics</span>
         </div>
         <div className="panel-body">
           <ul className="status-list">
-            <li>No wallet account is required. Google sign-in is optional and only identifies a website session.</li>
+            <li>Google sign-in is required to open the wallet and only identifies a website session. Signing out ends that session: the wallet locks and the next person on this device starts at the sign-in screen. Wallets on the device are not deleted by signing out.</li>
             <li>Theme sync is off by default and separate from sign-in: nothing is uploaded unless you turn it on, and it covers the light or dark theme only.</li>
-            <li>No analytics, advertising or fingerprinting. Firebase Auth code is bundled locally. Google sign-in is optional; the website session is browser-session-only by default, or persists on this browser only if you opt into Remember this device.</li>
+            <li>No analytics, advertising or fingerprinting. Firebase Auth code is bundled locally. The website session is browser-session-only by default, or persists on this browser only if you opt into Remember this device.</li>
             <li>The site does not set its own cookies. Google/Firebase may use their own authentication cookies during sign-in.</li>
             <li>No seed, wallet password or private key transmitted to Google/Firebase, logged or stored in plaintext.</li>
-            <li>Google/Firebase receive account identity data only if you opt into sign-in; SatoshiCore does not use it to access your Gmail mailbox or wallet keys. Remember this device stores the sign-in session in this browser, not a wallet unlock.</li>
+            <li>Google/Firebase receive account identity data when you sign in; SatoshiCore does not use it to access your Gmail mailbox or wallet keys. Remember this device stores the sign-in session in this browser, not a wallet unlock.</li>
           </ul>
         </div>
       </section>
