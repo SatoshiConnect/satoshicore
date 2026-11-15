@@ -101,6 +101,10 @@ body:has(.nw-root) .site-main.container {
   --card-grad: linear-gradient(180deg, #171a23, #13161d);
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 28px rgba(0, 0, 0, 0.28),
     inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  /* The simulated device in the desktop preview: a dark bezel and a black
+   * island, the same in both themes because they are hardware, not surfaces. */
+  --device-bezel: #07090d;
+  --device-island: #050608;
 
   --radius: 16px;
   --radius-sm: 12px;
@@ -197,11 +201,27 @@ body:has(.nw-root) .site-main.container {
   height: min(760px, calc(100vh - 170px));
   min-height: 480px;
   background: var(--bg);
-  border: 1px solid var(--border-card);
-  border-radius: 26px;
-  box-shadow: var(--shadow-card);
+  border: 8px solid var(--device-bezel);
+  border-radius: 48px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.42), 0 24px 64px rgba(0, 0, 0, 0.38);
   overflow: hidden;
   position: relative;
+}
+
+/* Desktop preview: give the wallet the silhouette of an iPhone, including a
+   Dynamic Island. Touch devices render the wallet edge-to-edge instead. */
+.nw-phone::before {
+  content: "";
+  position: absolute;
+  z-index: 4;
+  top: 10px;
+  left: 50%;
+  width: 112px;
+  height: 30px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: var(--device-island);
+  pointer-events: none;
 }
 
 .nw-appbar {
@@ -209,7 +229,7 @@ body:has(.nw-root) .site-main.container {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 12px 14px 8px;
+  padding: 48px 14px 8px;
   background: var(--bg);
   flex-shrink: 0;
 }
@@ -534,6 +554,12 @@ body:has(.nw-root) .site-main.container {
   .nw-root {
     padding: 0;
     height: 100%;
+  }
+  .nw-phone::before {
+    display: none;
+  }
+  .nw-appbar {
+    padding: 12px 14px 8px;
   }
   .nw-phone {
     max-width: none;
@@ -1071,6 +1097,14 @@ label.nw-chip-btn:focus-within { outline: 2px solid var(--accent); outline-offse
     border: 0;
     border-radius: 0;
     box-shadow: none;
+  }
+
+  .nw-phone::before {
+    display: none;
+  }
+
+  .nw-appbar {
+    padding: 12px 14px 8px;
   }
 
   .nw-bottomnav {
