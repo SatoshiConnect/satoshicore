@@ -108,6 +108,23 @@ function mergeHistory(prev, doc) {
 }
 
 export default function WalletPanel() {
+  // The wallet is an app-like surface on touch devices, not a document to
+  // pinch-zoom or drag around. Keep its viewport at device scale while mounted;
+  // restore the site's normal viewport if this component is ever unmounted.
+  useEffect(() => {
+    const meta = document.querySelector('meta[name="viewport"]');
+    if (!meta) return undefined;
+    const previous = meta.getAttribute('content');
+    meta.setAttribute(
+      'content',
+      'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover',
+    );
+    return () => {
+      if (previous == null) meta.removeAttribute('content');
+      else meta.setAttribute('content', previous);
+    };
+  }, []);
+
   // gateway/network
   const [net, setNet] = useState(null);          // { ok, network, reason, ledger }
   const [liveLedger, setLiveLedger] = useState(null); // public ledger height, polled
