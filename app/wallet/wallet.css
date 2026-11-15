@@ -32,6 +32,33 @@ body:has(.nw-root) .site-main.container {
   padding: 0;
 }
 
+/* The wallet is the whole product on its own routes: no site header above it
+ * and no site footer below it, so there is exactly one navigation — the app
+ * bar and the tab bar. Everything the header carried is reachable inside the
+ * wallet; see the Settings cards for theme, network pages and the legal line.
+ * Hidden with CSS rather than by unmounting in React: the chrome is already
+ * gone at first paint, so a wallet user never sees a menu flash in and out. */
+body:has(.nw-root) .site-header,
+body:has(.nw-root) .site-footer {
+  display: none;
+}
+
+/* The theme switch lives in Settings now that the header is not above the
+ * wallet. Same button as the rest of the site, restyled with the wallet's own
+ * border tokens (the header's --border/--fill do not exist under .nw-root). */
+.nw-root .theme-toggle {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border-input);
+  background: transparent;
+  color: var(--text);
+}
+
+.nw-root .theme-toggle:hover {
+  background: var(--card);
+  border-color: var(--text-dim);
+}
+
 /* Homepage only (/): install actions that sit above the wallet itself.
    Secondary by design — the create/import cards are the first thing a
    first-time user sees, these never compete with them. */

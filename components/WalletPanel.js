@@ -28,7 +28,9 @@ import { bindOwner, walletNameForAccount } from '../lib/walletBinding';
 import GoogleAccount from './GoogleAccount';
 import DriveBackupCard from './DriveBackupCard';
 import BackupReminder from './BackupReminder';
+import ThemeToggle from './ThemeToggle';
 import { recordDriveBackup } from '../lib/backupReminder';
+import { NSAT } from '../lib/nsatToken';
 
 // Full transactional Web Wallet rendered in the ORIGINAL DESKTOP WALLET
 // DESIGN (canonical source: nsat-core desktop/satoshicore-wallet
@@ -1455,8 +1457,21 @@ function SettingsPage({ s, onShielded }) {
           Why shielded is desktop-only
         </button>
       </section>
-      {/* On a phone the wallet is the whole screen (no site header), so the
-       * rest of SatoshiCore is reachable from here instead of from a nav bar. */}
+      <section className="nw-card">
+        <h2 style={{ color: 'var(--text)' }}>Appearance</h2>
+        <div className="nw-kv" style={{ marginTop: 10, alignItems: 'center' }}>
+          <span className="nw-k">Theme</span>
+          <span className="nw-v" style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <ThemeToggle />
+          </span>
+        </div>
+        <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
+          Follows this browser. If you opted in, the choice is also stored with your Google
+          account.
+        </p>
+      </section>
+      {/* The wallet is the whole site now — no site header above it — so the
+       * rest of SatoshiCore is reached from here instead of from a nav bar. */}
       <section className="nw-card">
         <h2 style={{ color: 'var(--text)' }}>SatoshiCore</h2>
         <div className="nw-linklist">
@@ -1465,6 +1480,9 @@ function SettingsPage({ s, onShielded }) {
           <a className="nw-linkrow" href="/docs/">Docs<span aria-hidden>›</span></a>
           <a className="nw-linkrow" href="/status/">Network status<span aria-hidden>›</span></a>
         </div>
+        <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
+          Non-custodial · {NSAT.baseFee} NSAT per operation · not a sale or investment offer.
+        </p>
       </section>
       <section className="nw-card">
         <h2 style={{ color: 'var(--text)' }}>Security model</h2>
