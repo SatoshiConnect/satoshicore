@@ -298,6 +298,16 @@ browser 430×932 (/  local)                    gate มีสองปุ่ม,
 | เปลี่ยน ID / แสดง `@id` บนหน้ากระเป๋า | **DEPLOYED** (`ccd24cd`) | ID เก็บ `@` เป็นส่วนของค่า (`@somchai`) ไม่ใช่เติมตอนแสดง — label, ฟิลด์ `profileId` และเอกสาร claim `profileIds/@id` เป็นสตริงเดียวกัน; ชื่อที่ไม่มี `@` ถูกปฏิเสธ (ไม่แปลงเงียบ ๆ) การ์ดเป็นโหมดดู/แก้: `Edit profile` → แก้ ID + primary wallet → `Save changes` / `Cancel` โดยเขียนทั้งคู่ในครั้งเดียว (`saveProfileIn()`) จอง ID ใหม่ → เขียน → คืน ID เก่า; ล้มเหลว = คืน ID ใหม่และคงของเดิม; ปุ่ม `@id` ข้าง address คัดลอกค่าจริง; เทสต์ `tests/profile.test.mjs` 13/13 |
 
 ```
+รอบ Activity → Explorer (2026-11-16, `a7c31e0`)
+npm run build (SAME_ORIGIN + CHAT_RELAY)                                     ✓ exit 0
+npm test                                                                    ✓ exit 0, 0 failing
+10 routes 200 · verify-deployed 8 passed / 0 failed, 2 advisory (เดิม)
+live index.html sha256 = fe617fdc…18 · webroot → satoshicore-webroot-explorer-a7c31e0
+/explorer/?q=e94ab09e…1d5a (hash จริงจาก indexer)                          ✓ เติมช่องค้นหาเอง + แสดง Transaction ledger 313951
+rollback: ln -sfn satoshicore-webroot-chat-75af7cb ~/nsat-ops/satoshicore-webroot
+```
+
+```
 รอบเปิดแชท E2E บน production (2026-11-16)
 node --test tests/e2e-chat.test.mjs tests/chat-relay.test.mjs tests/chat-client.test.mjs  ✓ 16/16
 node --test services/api-gateway/tests/gateway.test.js                            ✓ 15/15
