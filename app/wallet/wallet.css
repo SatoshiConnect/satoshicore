@@ -144,9 +144,24 @@ body:has(.nw-root) .site-footer {
   --device-glow: rgba(96, 132, 255, 0.26);
   --device-floor: rgba(0, 0, 0, 0.45);
   --device-button: rgba(255, 255, 255, 0.28);
-  /* One source of truth for the simulated device height: the phone and the
-   * side buttons placed beside it both read it. */
-  --phone-h: clamp(420px, calc(100dvh - 210px), 780px);
+  /* One source of truth for the simulated device: the iPhone 14 Pro Max screen
+   * is 430 × 932 CSS px, so the frame keeps that exact ratio. The frame is the
+   * screen plus the 12px bezel on each side, and --phone-h is the whole frame
+   * height, which the phone and the side buttons placed beside it both read.
+   * Without the ratio the mock was a 406 × 666 screen (0.61) — a shorter,
+   * wider phone than the one it claims to show. */
+  --phone-bezel: 12px;
+  /* Numeric ratio, not lengths: calc() cannot multiply two lengths, so the
+   * width must be the height times a plain number. 454 / 956 is the screen
+   * (430 × 932) plus the 12px bezel on each side.
+   *
+   * The height is the real 14 Pro Max screen height, never a shorter clamp:
+   * the point of the mock is to show the device at its true size, so a short
+   * window scrolls the page rather than shrinking the phone into a different
+   * aspect ratio. */
+  --phone-frame-w: 454;
+  --phone-frame-h: 956;
+  --phone-h: 956px;
 
   --radius: 16px;
   --radius-sm: 12px;
@@ -236,8 +251,10 @@ body:has(.nw-root) .site-footer {
   padding: 1.75rem var(--gutter, 1.25rem);
   display: flex;
   justify-content: center;
-  /* Centred both ways: the phone is the page, wherever the window sits. */
-  align-items: center;
+  /* Centred both ways: the phone is the page, wherever the window sits. `safe`
+   * keeps the top of a full-height phone reachable when the window is shorter
+   * than the device instead of clipping it above the viewport. */
+  align-items: safe center;
   /* A pool of light above and a floor shadow below, so the phone reads as an
      object on a surface instead of a card floating in empty space. */
   background:
@@ -262,20 +279,23 @@ body:has(.nw-root) .site-footer {
 .nw-root::before {
   /* Anchored to the device, which is centred, not to the page. */
   top: calc(50% - var(--phone-h) / 2 + 148px);
-  left: calc(50% - 222px);
+  left: calc(50% - var(--phone-h) * var(--phone-frame-w) / var(--phone-frame-h) / 2 - 7px);
   /* Second bump: the pair of volume keys, drawn with one element. */
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45), 0 58px 0 0 var(--device-button);
 }
 
 .nw-root::after {
   top: calc(50% - var(--phone-h) / 2 + 196px);
-  right: calc(50% - 218px);
+  right: calc(50% - var(--phone-h) * var(--phone-frame-w) / var(--phone-frame-h) / 2 - 7px);
   height: 78px;
 }
 
 .nw-phone {
-  width: 100%;
-  max-width: 430px;
+  /* Height drives the size; the width follows from the 14 Pro Max ratio, so
+   * the simulated screen is always 430 × 932 scaled to the space available
+   * instead of 430 wide and arbitrarily tall. */
+  width: calc(var(--phone-h) * var(--phone-frame-w) / var(--phone-frame-h));
+  max-width: 100%;
   display: flex;
   flex-direction: column;
   /* A phone screen, not a page: the shell keeps its height and only the
@@ -286,7 +306,7 @@ body:has(.nw-root) .site-footer {
   max-height: 100%;
   background: var(--bg);
   /* The device: a 12px bezel, with titanium rails drawn as rings outside it. */
-  border: 12px solid var(--device-bezel);
+  border: var(--phone-bezel) solid var(--device-bezel);
   border-radius: 58px;
   box-shadow:
     inset 0 0 0 1px var(--device-edge-inner),
@@ -746,6 +766,9 @@ body:has(.nw-root) .site-footer {
     padding: 12px 14px 8px;
   }
   .nw-phone {
+    /* A real phone screen fills the viewport: the simulated hardware and its
+     * 430:932 ratio apply only to the desktop preview. */
+    width: 100%;
     max-width: none;
     /* One viewport, one scroll region (the content), so the tab bar stays put
      * no matter how long the page is. dvh follows the real visible height as
@@ -1355,46 +1378,45 @@ label.nw-chip-btn {
 }
 label.nw-chip-btn:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-/* iPhone 14 Pro Max typography (430pt CSS viewport).
- * Use the native iOS system face already selected by .nw-root, with a clear
- * SF-style hierarchy: large titles for sections, 17pt body copy, and a more
- * legible floor for metadata. This only changes the portrait phone scale; the
- * tablet/desktop preview and landscape compact layout keep their existing size. */
-@media (max-width: 440px) {
-  .nw-root {
-    font-size: 17px;
-    letter-spacing: -0.015em;
-    line-height: 1.4;
-  }
-
-  .nw-root h1 { font-size: 28px; line-height: 1.14; font-weight: 600; }
-  .nw-root h2 { font-size: 22px; line-height: 1.2; font-weight: 600; }
-  .nw-root h3 { font-size: 20px; line-height: 1.25; }
-  .nw-root .nw-section-title { font-size: 22px; line-height: 1.2; }
-  .nw-root .nw-page-lead { font-size: 15px; line-height: 1.4; }
-
-  .nw-root .nw-small,
-  .nw-root .nw-label,
-  .nw-root .nw-row > label,
-  .nw-root .nw-kv .nw-k {
-    font-size: 14px;
-    line-height: 1.4;
-  }
-
-  .nw-root .nw-account-pill { font-size: 15px; }
-  .nw-root .nw-asset-name,
-  .nw-root .nw-signin-row-title { font-size: 16px; }
-  .nw-root .nw-asset-sub { font-size: 13px; }
-  .nw-root .nw-asset-value { font-size: 15px; }
-  .nw-root .nw-badge { font-size: 13px; }
-  .nw-root .nw-navitem { font-size: 12px; }
-  .nw-root .nw-navlabel { font-size: 11px; }
-  .nw-root .nw-chip-btn { font-size: 13px; }
-  .nw-root .nw-send-btn,
-  .nw-root .nw-ghost-btn,
-  .nw-root .nw-danger-btn { font-size: 16px; }
-  .nw-root .nw-kv { gap: 12px; }
+/* iPhone 14 Pro Max typography (430 × 932 CSS px screen).
+ * Applied to every wallet surface, not only narrow browser windows: the
+ * desktop preview shows the same 430pt phone screen, so it has to show the
+ * same type scale — otherwise the mock and the real device disagree. The
+ * native iOS system face already selected by .nw-root is kept; only the
+ * hierarchy changes (SF-style titles, 17pt body, a legible metadata floor). */
+.nw-root {
+  font-size: 17px;
+  letter-spacing: -0.015em;
+  line-height: 1.4;
 }
+
+.nw-root h1 { font-size: 28px; line-height: 1.14; font-weight: 600; }
+.nw-root h2 { font-size: 22px; line-height: 1.2; font-weight: 600; }
+.nw-root h3 { font-size: 20px; line-height: 1.25; }
+.nw-root .nw-section-title { font-size: 22px; line-height: 1.2; }
+.nw-root .nw-page-lead { font-size: 15px; line-height: 1.4; }
+
+.nw-root .nw-small,
+.nw-root .nw-label,
+.nw-root .nw-row > label,
+.nw-root .nw-kv .nw-k {
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.nw-root .nw-account-pill { font-size: 15px; }
+.nw-root .nw-asset-name,
+.nw-root .nw-signin-row-title { font-size: 16px; }
+.nw-root .nw-asset-sub { font-size: 13px; }
+.nw-root .nw-asset-value { font-size: 15px; }
+.nw-root .nw-badge { font-size: 13px; }
+.nw-root .nw-navitem { font-size: 12px; }
+.nw-root .nw-navlabel { font-size: 11px; }
+.nw-root .nw-chip-btn { font-size: 13px; }
+.nw-root .nw-send-btn,
+.nw-root .nw-ghost-btn,
+.nw-root .nw-danger-btn { font-size: 16px; }
+.nw-root .nw-kv { gap: 12px; }
 
 /* ----------------------------- Light theme -------------------------------
  * The wallet is also bundled into the extension popup, which loads this file
@@ -1482,6 +1504,7 @@ label.nw-chip-btn:focus-within { outline: 2px solid var(--accent); outline-offse
 
   .nw-phone {
     flex: 1 1 auto;
+    width: 100%;
     height: 100%;
     min-height: 0;
     padding-top: env(safe-area-inset-top, 0px);
