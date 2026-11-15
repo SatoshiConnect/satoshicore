@@ -638,7 +638,7 @@ export default function WalletPanel() {
           )}
           <button type="button" className="nw-account-pill" onClick={() => setPage('settings')}
             title={`${netOk ? 'Connected' : net == null ? 'Connecting…' : 'Offline'} — wallet settings`}>
-            <span className="nw-tokenlogo" aria-hidden>◈</span>
+            <span className="nw-tokenlogo"><NsatCoinMark className="nw-coin-mark" /></span>
             <span className="nw-account-name">
               {active ? active.name : hasWallets ? 'Locked' : watch ? 'Watch only' : 'NSAT Wallet'}
             </span>
@@ -740,7 +740,11 @@ export default function WalletPanel() {
               className={'nw-navitem' + (page === p ? ' is-active' : '')}
               onClick={() => setPage(p)}
               aria-current={page === p ? 'page' : undefined}>
-              <span className="nw-navicon" aria-hidden>{PAGE_GLYPH[p]}</span>
+              <span className="nw-navicon" aria-hidden>
+                {p === 'overview'
+                  ? <NsatCoinMark className="nw-nav-coin" />
+                  : PAGE_GLYPH[p]}
+              </span>
               <span className="nw-navlabel">{NAV_LABEL[p]}</span>
             </button>
           ))}
@@ -977,7 +981,7 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
        * balance, with the live chain state directly under it. */}
       <div className="nw-assets">
         <button type="button" className="nw-asset" onClick={onActivity}>
-          <span className="nw-asset-logo" aria-hidden>◈</span>
+          <span className="nw-asset-logo"><NsatCoinMark className="nw-coin-mark" /></span>
           <span className="nw-asset-main">
             <span className="nw-asset-name">NSAT</span>
             <span className="nw-asset-sub">SatoshiCore mainnet</span>
@@ -1291,6 +1295,19 @@ function NetworkBadge({ net }) {
     );
   }
   return <span className="nw-badge err">● Offline / identity mismatch</span>;
+}
+
+/* The NSAT coin: the gold ring and N from the app icon (public/icons),
+ * redrawn as inline SVG so it stays sharp at any size and needs no raster
+ * fetch inside the wallet shell. */
+function NsatCoinMark({ className = '' }) {
+  return (
+    <svg className={className} viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+      <circle cx="32" cy="32" r="27" fill="#050a14" stroke="#f0b90b" strokeWidth="4" />
+      <path d="M21 44V20l22 24V20" fill="none" stroke="#f0b90b"
+        strokeWidth="5.5" strokeLinecap="square" strokeLinejoin="miter" />
+    </svg>
+  );
 }
 
 function EmptyState({ text }) {
