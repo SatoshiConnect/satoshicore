@@ -20,6 +20,20 @@ rules_version = '2';
 //     The single-address form written before multiple wallets were supported.
 //     Still readable, still one shape, and deleted when its address is removed.
 //
+//   profiles/{uid} = { profileId: "alice", primaryAddress: "G…" | "" }
+//     The basic profile: the ID this person chose and the public address they
+//     chose as primary. Written only by an account whose email the identity
+//     provider has verified (`request.auth.token.email_verified`, which is part
+//     of the signed-in token and cannot be set by the page). The address field
+//     must be empty or a wallet already linked by the SAME account, proven with
+//     a get() on the walletLinks document.
+//
+//   profileIds/{profileId} = { uid: "…" }
+//     The uniqueness claim behind a profile ID. Create-only, so a second account
+//     cannot take an ID that exists. `get` is allowed to signed-in accounts so a
+//     free ID can be checked; `list` is denied, so IDs cannot be enumerated.
+//     The email is never stored here or in the profile.
+//
 // Everything else is denied. The wallet engine never writes to Firestore.
 //
 // Deploy from the Firebase console (Firestore Database → Rules) or with:
@@ -64,6 +78,60 @@ service cloud.firestore {
           && request.resource.data.address == address
           && address.matches('^G[A-Z2-7]{55}$');
       }
+    }
+
+    // ---------------- basic profile ----------------
+    // A profile ID is a handle, never a key: nothing here can sign a transfer,
+    // and no document in this section holds an email, a seed or a password.
+    function isProfileId(value) {
+      return value is string && value.matches('^[a-z0-9][a-z0-9_-]{2,19}$');
+    }
+
+    // The primary wallet must already belong to this account. Checking the
+    // walletLinks document is what stops a profile from claiming an address the
+    // account never linked.
+    function isLinkedAddress(owner, address) {
+      return address is string
+        && address.matches('^G[A-Z2-7]{55}$')
+        && exists(/databases/$(database)/documents/walletLinks/$(owner)/addresses/$(address))
+        && get(/databases/$(database)/documents/walletLinks/$(owner)/addresses/$(address)).data.address == address;
+    }
+
+    function verifiedEmail() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    match /profiles/{uid} {
+      allow read, delete: if request.auth != null && request.auth.uid == uid;
+
+      // Two fields, both required, both checked. The ID must be a claim held by
+      // this same account, so a profile cannot point at somebody else's ID, and
+      // the address must be empty or a wallet this account linked.
+      allow create, update: if verifiedEmail()
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['profileId', 'primaryAddress'])
+        && isProfileId(request.resource.data.profileId)
+        && (request.resource.data.primaryAddress == ''
+            || isLinkedAddress(uid, request.resource.data.primaryAddress))
+        && exists(/databases/$(database)/documents/profileIds/$(request.resource.data.profileId))
+        && get(/databases/$(database)/documents/profileIds/$(request.resource.data.profileId)).data.uid == uid;
+    }
+
+    match /profileIds/{profileId} {
+      // Exact-ID lookup only: a signed-in account can ask "is this free", and
+      // cannot list the collection to see who holds what.
+      allow get: if request.auth != null;
+      allow list: if false;
+
+      allow create: if verifiedEmail()
+        && isProfileId(profileId)
+        && request.resource.data.keys().hasOnly(['uid'])
+        && request.resource.data.uid == request.auth.uid;
+
+      // No update: a claim is created and deleted, never re-pointed, so an ID
+      // cannot be transferred by overwriting it.
+      allow update: if false;
+      allow delete: if request.auth != null && resource.data.uid == request.auth.uid;
     }
 
     // No other collection or document is reachable from the browser.

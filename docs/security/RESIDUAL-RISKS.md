@@ -31,6 +31,9 @@ Nothing here should be read as "accepted" — each item carries its owner/next s
 | R15 | Chat relay learns who talks to whom, when, and the message size | MEDIUM | Disclosed; hiding the social graph needs padding and cover traffic, not built | `E2E-CHAT-DESIGN.md` "What the relay learns" |
 | R16 | Chat is not enabled on the production gateway or web root; the relay exists and is tested, but no user can reach it | INFO | Open by choice — enabling restarts the wallet's read surface (`NSAT_CHAT_RELAY=1`) and needs operator approval | `E2E-CHAT-DESIGN.md` "Enabling it" |
 | R17 | Chat transcript is session-only: locking the wallet or closing the tab loses it, because nothing plaintext is written to storage | LOW | By design (shared-device trade-off); the relay deletes a message once it is read, so there is no second copy | `E2E-CHAT-DESIGN.md` "Client" |
+| R18 | Profile ID lookup is exact-ID only: a signed-in account can check whether one ID is free, and cannot list claims | LOW | By design (`allow get`, `allow list: if false`) | `PROFILE.md` |
+| R19 | A profile cannot prove wallet ownership or sign anything; a primary wallet is a display preference over an already-linked public address | INFO | Stated in the card and the docs; no signing path is reachable from `lib/profile.js` | `PROFILE.md` |
+| R20 | Profile writes are not exercised against a live database (needs a signed-in account and published rules) | MEDIUM | Open — the rules and the module are tested; the live round trip is not | `PROFILE.md` "What is verified" |
 
 ## Explicit non-claims
 - No control above claims protection against host-root compromise.

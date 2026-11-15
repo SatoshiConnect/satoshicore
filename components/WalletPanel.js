@@ -36,6 +36,8 @@ import {
   bindOwner, unbindOwner, visibleWalletNamed, walletNameForAccount, walletsForAccount,
 } from '../lib/walletBinding';
 import GoogleAccount from './GoogleAccount';
+import ProfileCard from './ProfileCard';
+import { readMyProfile } from '../lib/profile';
 import DriveBackupCard from './DriveBackupCard';
 import BackupReminder from './BackupReminder';
 import ThemeToggle from './ThemeToggle';
@@ -159,6 +161,10 @@ export default function WalletPanel() {
   // can link several wallets, so `watchPick` is which of them this screen shows.
   const [watchAddresses, setWatchAddresses] = useState([]);
   const [watchPick, setWatchPick] = useState('');
+  // The address this account named as primary for its profile. It only decides
+  // which linked wallet opens first; it grants nothing, and a primary address
+  // that is no longer linked is ignored rather than shown.
+  const [primaryAddress, setPrimaryAddress] = useState('');
   // ui
   const [page, setPage] = useState('overview');
   const [busy, setBusy] = useState(false);
@@ -467,9 +473,11 @@ export default function WalletPanel() {
     const id = window.setInterval(tick, 4000);
     return () => { alive = false; window.clearInterval(id); };
   }, [configured]);
-  // A picked address wins only while it is still linked; otherwise the first
-  // linked wallet is the one shown.
-  const watchAddress = watchAddresses.includes(watchPick) ? watchPick : (watchAddresses[0] || '');
+  // A picked address wins only while it is still linked; otherwise the
+  // account's primary wallet, and failing that the first linked one.
+  const watchAddress = watchAddresses.includes(watchPick)
+    ? watchPick
+    : (watchAddresses.includes(primaryAddress) ? primaryAddress : (watchAddresses[0] || ''));
   // Mint status belongs to the wallet the Founder Mint pays and to no other:
   // the unlocked wallet in view, or a linked watch-only address for it.
   const mintVisible = seesMintStatus(active?.pubkey || watchAddress);
@@ -516,6 +524,26 @@ export default function WalletPanel() {
     }).catch(() => { /* sign-in unavailable: watch-only simply stays off */ });
     return () => { alive = false; unsubscribe(); };
   }, []);
+
+  // Which linked wallet this account calls primary. Read with the list so the
+  // two cannot disagree, and re-read when Settings changes either one.
+  useEffect(() => {
+    if (!accountUid) { setPrimaryAddress(''); return undefined; }
+    let alive = true;
+    const reload = () => {
+      readMyProfile().then((doc) => {
+        if (alive) setPrimaryAddress(doc?.primaryAddress || '');
+      }).catch(() => { /* no profile yet, or no database: no preference */ });
+    };
+    reload();
+    window.addEventListener('nsat:links-changed', reload);
+    window.addEventListener('nsat:profile-changed', reload);
+    return () => {
+      alive = false;
+      window.removeEventListener('nsat:links-changed', reload);
+      window.removeEventListener('nsat:profile-changed', reload);
+    };
+  }, [accountUid]);
 
   // The linked-wallet list is read once per account and again whenever Settings
   // changes it. Without this, linking or removing a wallet left this screen
@@ -2656,6 +2684,7 @@ function SettingsPage({ s, onShielded }) {
   return (
     <div>
       {SHOW_GOOGLE_ACCOUNT ? <GoogleAccount /> : null}
+      {SHOW_GOOGLE_ACCOUNT ? <ProfileCard /> : null}
       {SHOW_GOOGLE_ACCOUNT ? <DriveBackupCard onKeystoreChanged={s.onReloadWallets} /> : null}
       <section className="nw-card">
         <h2 style={{ color: 'var(--text)' }}>Privacy</h2>

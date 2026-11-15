@@ -1212,6 +1212,15 @@ body:has(.nw-root) .site-footer {
 }
 .nw-chat-input:disabled { opacity: 0.6; }
 
+/* Profile: a refusal is shown where the action was, with the page that fixes it,
+ * because a disabled button with no reason is the failure mode this replaces. */
+.nw-profile-problem {
+  margin-top: 10px; padding: 10px 12px;
+  border: 1px solid var(--border-input); border-left: 3px solid var(--warn);
+  border-radius: 10px; background: var(--surface-2, rgba(255, 255, 255, 0.04));
+}
+.nw-profile-problem a { display: inline-block; margin-top: 6px; color: var(--accent); }
+
 .nw-txf { display: flex; flex-direction: column; gap: 10px; }
 .nw-row { display: flex; gap: 12px; align-items: center; }
 .nw-row > label { width: 150px; color: var(--text-dim); font-size: 13px; flex-shrink: 0; }
