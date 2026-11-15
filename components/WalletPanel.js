@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   isGatewayConfigured, isIndexerConfigured, EXPECTED_NETWORK_ID,
-  verifyNetworkIdentity, getChainInfo, getAccount, getAccountHistory,
+  verifyNetworkIdentity, getChainInfo, getAccount, getAccountHistory, getMintStatus,
   readAccountBalance, submitSignedTransaction, estimateFee, formatExactBalance,
   waitForConfirmation, accountEventsUrl,
 } from '../lib/nsatClient';
@@ -74,23 +74,33 @@ const PAGE_LEAD = {
   send: 'Recipient, amount, then a review with the exact total.',
   receive: 'Your public address only.',
   shielded: 'Desktop only — the native prover is required.',
-  activity: 'Transfers signed here, with the ledger\'s verdict.',
+  activity: 'Every indexed transfer, with the ledger\'s verdict.',
   settings: null,
 };
 
-// Founder Mint policy (docs/NSAT-FOUNDER-MINT-ENGINE.md): 18,175 units were
-// intended through ledger 313,988, and the engine mints 4 units per ledger.
-// The mint is an internal credit, so it never appears as a transfer of its
-// own while a 2.1e24 balance barely moves in its last digits; this figure
-// starts small and therefore visibly ticks. Pure read: no key, no transaction.
-const MINT_REFERENCE_LEDGER = 313_988;
-const MINT_THROUGH_REFERENCE = 18_175;
-const MINT_PER_LEDGER = 4;
+// Founder Mint totals come from the ledger header, never from a rate applied
+// here. `totalCoins` is the chain's own supply figure and the genesis supply is
+// fixed, so minted-since-activation is an exact subtraction. Both numbers
+// exceed 2^53, which is why this is BigInt and never a Number.
+const GENESIS_SUPPLY = 2_100_000_000_000_000_000_000_000n;
+const HISTORY_PAGE = 100;
 
-function policyMinted(ledger) {
-  const n = Number(ledger);
-  if (!Number.isFinite(n) || n < MINT_REFERENCE_LEDGER) return null;
-  return MINT_THROUGH_REFERENCE + MINT_PER_LEDGER * (n - MINT_REFERENCE_LEDGER);
+function supplyAndMinted(totalCoins) {
+  try {
+    const supply = BigInt(String(totalCoins));
+    const minted = supply - GENESIS_SUPPLY;
+    return { supply: supply.toString(), minted: minted >= 0n ? minted.toString() : null };
+  } catch {
+    return { supply: null, minted: null };
+  }
+}
+
+const historyKey = (item) => `${item.hash}:${item.op_index ?? 0}`;
+
+function mergeHistory(prev, doc) {
+  const seen = new Set(prev.map(historyKey));
+  const add = (Array.isArray(doc?.items) ? doc.items : []).filter((item) => !seen.has(historyKey(item)));
+  return [...prev, ...add];
 }
 
 export default function WalletPanel() {
@@ -145,10 +155,15 @@ export default function WalletPanel() {
   const [amount, setAmount] = useState('');
   const [review, setReview] = useState(null);    // { amount, fee, total }
   const [history, setHistory] = useState([]);
-  // Indexed chain history for the address on screen. Activity used to show
-  // only rows this browser signed, so a transfer made on a phone or another
-  // device was invisible; the indexer already answers for any public address.
-  const [chainHistory, setChainHistory] = useState({ phase: 'idle', items: [], error: '' });
+  // Indexed chain history for the address on screen, newest first, paged with a
+  // `(ledger, tx, op)` cursor so "load older" never repeats a row. `coverage`
+  // is what the index actually holds: history is never claimed beyond it.
+  const [chainHistory, setChainHistory] = useState({
+    phase: 'idle', items: [], total: null, coverage: null, next: null,
+    loadingMore: false, error: '',
+  });
+  // Founder Mint state read from the latest indexed ledger header.
+  const [mintStatus, setMintStatus] = useState({ phase: 'idle', data: null, error: '' });
 
   const notify = (text, kind = 'ok') => {
     setToast({ text, kind });
@@ -372,26 +387,80 @@ export default function WalletPanel() {
     const address = active?.pubkey || watchAddress;
     if (page !== 'activity') return undefined;
     if (!address) {
-      setChainHistory({ phase: 'none', items: [], error: '' });
+      setChainHistory({ phase: 'none', items: [], total: null, coverage: null, next: null, loadingMore: false, error: '' });
       return undefined;
     }
     if (!isIndexerConfigured()) {
-      setChainHistory({ phase: 'unavailable', items: [], error: 'indexer not configured' });
+      setChainHistory({ phase: 'unavailable', items: [], total: null, coverage: null, next: null, loadingMore: false, error: 'indexer not configured' });
       return undefined;
     }
     let cancelled = false;
-    setChainHistory((cur) => ({ phase: 'loading', items: cur.items, error: '' }));
-    getAccountHistory(address, 50)
+    setChainHistory({ phase: 'loading', items: [], total: null, coverage: null, next: null, loadingMore: false, error: '' });
+    getAccountHistory(address, { limit: HISTORY_PAGE })
       .then((doc) => {
         if (cancelled) return;
-        setChainHistory({ phase: 'ready', items: Array.isArray(doc?.items) ? doc.items : [], error: '' });
+        const items = Array.isArray(doc?.items) ? doc.items : [];
+        setChainHistory({
+          phase: 'ready',
+          items,
+          total: Number.isFinite(Number(doc?.total)) ? Number(doc.total) : items.length,
+          coverage: doc?.coverage || null,
+          next: doc?.next_cursor || null,
+          loadingMore: false,
+          error: '',
+        });
       })
       .catch((err) => {
         if (cancelled) return;
-        setChainHistory({ phase: 'unavailable', items: [], error: String(err?.message || err) });
+        setChainHistory({ phase: 'unavailable', items: [], total: null, coverage: null, next: null, loadingMore: false, error: String(err?.message || err) });
       });
     return () => { cancelled = true; };
   }, [page, active?.pubkey, watchAddress]);
+
+  // Founder Mint is close-level accounting carried in the ledger header. Read it
+  // from the index (the header itself), never recomputed from a policy rate.
+  useEffect(() => {
+    if (page !== 'activity' || !isIndexerConfigured()) return undefined;
+    let cancelled = false;
+    setMintStatus({ phase: 'loading', data: null, error: '' });
+    getMintStatus()
+      .then((doc) => {
+        if (cancelled) return;
+        setMintStatus({ phase: 'ready', data: doc?.mint || null, error: '' });
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setMintStatus({ phase: 'unavailable', data: null, error: String(err?.message || err) });
+      });
+    return () => { cancelled = true; };
+  }, [page]);
+
+  // One older page, appended. Paging stops on an error and says so rather than
+  // silently ending the list as if it were complete.
+  const loadOlderHistory = useCallback(async () => {
+    const address = active?.pubkey || watchAddress;
+    const before = chainHistory.next;
+    if (!address || !before || chainHistory.loadingMore) return;
+    setChainHistory((cur) => ({ ...cur, loadingMore: true, error: '' }));
+    try {
+      const doc = await getAccountHistory(address, { limit: HISTORY_PAGE, before });
+      setChainHistory((cur) => ({
+        ...cur,
+        phase: 'ready',
+        items: mergeHistory(cur.items, doc),
+        total: Number.isFinite(Number(doc?.total)) ? Number(doc.total) : cur.total,
+        coverage: doc?.coverage || cur.coverage,
+        next: doc?.next_cursor || null,
+        loadingMore: false,
+      }));
+    } catch (err) {
+      setChainHistory((cur) => ({
+        ...cur,
+        loadingMore: false,
+        error: `Could not load older transfers (${String(err?.message || err)}).`,
+      }));
+    }
+  }, [active?.pubkey, watchAddress, chainHistory.next, chainHistory.loadingMore]);
 
   // Read the signed-in account's other linked wallets for the Send shortcuts.
   // Their public balances are informational only; the sender's local key remains
@@ -1087,7 +1156,7 @@ export default function WalletPanel() {
               walletChainStates={overviewWalletStates} baseReserve={reserve}
               bus={{ busy, doCreate, doImport, newName, setNewName, newPass, setNewPass,
                 importSeed, setImportSeed, accountEmail }}
-              net={{ net, netOk, ledger: liveLedger ?? ledger, fee, reserve, minted: policyMinted(liveLedger ?? ledger) }}
+              net={{ net, netOk, ledger: liveLedger ?? ledger, fee, reserve }}
               notify={notify}
               onSend={() => setPage('send')} onReceive={() => setPage('receive')}
               onActivity={() => setPage('activity')}
@@ -1121,7 +1190,8 @@ export default function WalletPanel() {
             <ActivityPage history={history}
               activeName={active?.name || (watchAddress ? `watch only · ${shortAddr(watchAddress, 6)}` : '')}
               chain={chainHistory}
-              issuance={{ minted: policyMinted(liveLedger ?? ledger), ledger: liveLedger ?? ledger }}
+              mint={mintStatus}
+              onLoadOlder={loadOlderHistory}
               onRecheck={recheckTransfer} canRecheck={isIndexerConfigured()} />
           )}
 
@@ -1900,7 +1970,7 @@ function ShieldedGatePage() {
 }
 
 /* -------------------------------- Activity ------------------------------- */
-function ActivityPage({ history, activeName, chain, issuance, onRecheck, canRecheck }) {
+function ActivityPage({ history, activeName, chain, mint, onLoadOlder, onRecheck, canRecheck }) {
   // Anything the index already knows is shown from the index; the local list
   // keeps only what the chain has not reported yet (a transfer sent moments
   // ago, or one the node rejected before inclusion).
@@ -1913,6 +1983,13 @@ function ActivityPage({ history, activeName, chain, issuance, onRecheck, canRech
     const n = Number(seconds);
     return Number.isFinite(n) && n > 0 ? new Date(n * 1000).toLocaleString() : '';
   };
+  const coverage = chain?.coverage;
+  const total = chain?.total;
+  const shown = chainItems.length;
+  const sent = chainItems.filter((item) => item.direction === 'out').length;
+  const received = chainItems.filter((item) => item.direction !== 'out').length;
+  const mintData = mint?.data;
+  const { supply, minted } = supplyAndMinted(mintData?.total_coins);
   return (
     <div>
       <section className="nw-card">
@@ -1929,11 +2006,22 @@ function ActivityPage({ history, activeName, chain, issuance, onRecheck, canRech
             {`Chain history is unavailable right now${chain.error ? ` (${chain.error})` : ''}. Transfers signed on this device still appear below.`}
           </p>
         ) : chainItems.length === 0 ? (
-          <EmptyState text="No on-chain transactions for this address yet." />
+          <>
+            <EmptyState text="No indexed transfers for this address." />
+            {coverage?.from_ledger != null && (
+              <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
+                {`The index covers ledgers ${fmtGroup(String(coverage.from_ledger))}–${fmtGroup(String(coverage.to_ledger))}, and no transfer in that range involves this address.`}
+              </p>
+            )}
+          </>
         ) : (
+          <>
+          <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
+            {`Showing ${fmtGroup(String(shown))}${total != null && total > shown ? ` of ${fmtGroup(String(total))}` : ''} indexed transfers · ${fmtGroup(String(sent))} sent · ${fmtGroup(String(received))} received`}
+          </p>
           <ul className="nw-tx-list" style={{ marginTop: 10 }}>
             {chainItems.map((item) => (
-              <li key={item.hash} className="nw-tx-row">
+              <li key={historyKey(item)} className="nw-tx-row">
                 <div className={'nw-tx-dir ' + (item.direction === 'out' ? 'sent' : 'rec')}>
                   {item.direction === 'out' ? '↗' : '↙'}</div>
                 <div style={{ flex: 1 }}>
@@ -1946,14 +2034,40 @@ function ActivityPage({ history, activeName, chain, issuance, onRecheck, canRech
                   <div className="nw-small nw-dim">
                     {`${item.kind || 'payment'} · fee ${item.fee ?? '—'}${chainTime(item.close_time) ? ` · ${chainTime(item.close_time)}` : ''}`}
                   </div>
+                  {String(item.hash || '') && (
+                    <div className="nw-small nw-dim nw-mono">
+                      {`${String(item.hash).slice(0, 10)}…${String(item.hash).slice(-8)}`}
+                    </div>
+                  )}
                 </div>
                 <div style={{ textAlign: 'right' }}>
-                  {fmtGroup(String(item.amount_stroops ?? item.amount ?? '0'))} NSAT
-                  <div className="nw-small nw-dim">ledger {item.ledger}</div>
+                  {`${item.direction === 'out' ? '−' : '+'}${fmtGroup(String(item.amount_stroops ?? item.amount ?? '0'))} NSAT`}
+                  <div className="nw-small nw-dim">
+                    {item.success ? `ledger ${item.ledger}` : `ledger ${item.ledger} · not moved`}
+                  </div>
                 </div>
               </li>
             ))}
           </ul>
+          {chain.error && (
+            <p className="nw-small" style={{ margin: '8px 0 0', color: 'var(--warn)' }}>{chain.error}</p>
+          )}
+          <div className="nw-btn-row" style={{ margin: '10px 0 0' }}>
+            {chain.next ? (
+              <button type="button" className="nw-chip-btn" onClick={onLoadOlder}
+                disabled={Boolean(chain.loadingMore)}>
+                {chain.loadingMore ? 'Loading older transfers…' : 'Load older transfers'}
+              </button>
+            ) : (
+              <span className="nw-badge ok">end of indexed history</span>
+            )}
+          </div>
+          {coverage?.from_ledger != null && (
+            <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
+              {`Index coverage: ledgers ${fmtGroup(String(coverage.from_ledger))}–${fmtGroup(String(coverage.to_ledger))} (${fmtGroup(String(coverage.ledgers))} ledgers). Transfers outside that range are not in this index.`}
+            </p>
+          )}
+          </>
         )}
       </section>
 
@@ -1999,30 +2113,57 @@ function ActivityPage({ history, activeName, chain, issuance, onRecheck, canRech
         )}
       </section>
 
-      {/* Issuance is a protocol credit to the Founder Mint destination, not a
-       * transfer of this wallet, so it can never be a row above. The figure is
-       * the published policy rate, never an invented balance. */}
+      {/* Founder Mint is a credit written into the ledger header, not a
+       * transfer, so it can never be a row above. Every figure here is read
+       * from that header — never a rate applied to the current height. */}
       <section className="nw-card">
-        <h2 style={{ color: 'var(--text)' }}>Issuance (policy)</h2>
-        <div className="nw-kv" style={{ marginTop: 8 }}>
-          <span className="nw-k">Minted since activation</span>
-          <span className="nw-v">{issuance?.minted == null
-            ? '…'
-            : `${fmtGroup(String(issuance.minted))} NSAT`}</span>
-        </div>
-        <div className="nw-kv">
-          <span className="nw-k">Rate</span>
-          <span className="nw-v">+4 NSAT per ledger</span>
-        </div>
-        <div className="nw-kv">
-          <span className="nw-k">Ledger</span>
-          <span className="nw-v">{issuance?.ledger ?? '—'}</span>
-        </div>
-        <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
-          The Founder Mint credits the treasury directly in the ledger header, so it is not a
-          transaction and never appears in a wallet&apos;s transfer list. This figure follows the
-          published policy rate from the live ledger height.
-        </p>
+        <h2 style={{ color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          Founder Mint
+          <span className="nw-badge info">ledger header</span>
+        </h2>
+        {mint?.phase === 'loading' || mint?.phase === 'idle' ? (
+          <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>Reading the mint state from the index…</p>
+        ) : !mintData ? (
+          <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
+            {`No indexed ledger header carries the Founder Mint extension yet${mint?.error ? ` (${mint.error})` : ''}. No minted total is shown rather than an estimate.`}
+          </p>
+        ) : (
+          <>
+            <div className="nw-kv" style={{ marginTop: 8 }}>
+              <span className="nw-k">Minted since activation</span>
+              <span className="nw-v">{minted == null ? '—' : `${fmtGroup(minted)} NSAT`}</span>
+            </div>
+            <div className="nw-kv">
+              <span className="nw-k">Total supply on chain</span>
+              <span className="nw-v">{supply == null ? '—' : `${fmtGroup(supply)} NSAT`}</span>
+            </div>
+            <div className="nw-kv">
+              <span className="nw-k">Heartbeats counted</span>
+              <span className="nw-v">{fmtGroup(String(mintData.heartbeat ?? 0))}</span>
+            </div>
+            <div className="nw-kv">
+              <span className="nw-k">Pending escrow</span>
+              <span className="nw-v">{String(mintData.escrow ?? '0') === '0'
+                ? 'none — fully delivered'
+                : `${fmtGroup(String(mintData.escrow))} NSAT`}</span>
+            </div>
+            <div className="nw-kv">
+              <span className="nw-k">As of ledger</span>
+              <span className="nw-v">{`${mintData.ledger}${chainTime(mintData.close_time) ? ` · ${chainTime(mintData.close_time)}` : ''}`}</span>
+            </div>
+            {mintData.activation_ledger != null && (
+              <div className="nw-kv">
+                <span className="nw-k">Activation ledger</span>
+                <span className="nw-v">{fmtGroup(String(mintData.activation_ledger))}</span>
+              </div>
+            )}
+            <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
+              {`Read from the ledger header: totalCoins minus the fixed genesis supply of ${fmtGroup(GENESIS_SUPPLY.toString())} NSAT. `}
+              One heartbeat is one finalized ledger; the mint is written during the close, so it is
+              not a transaction and never appears in a transfer list.
+            </p>
+          </>
+        )}
       </section>
     </div>
   );

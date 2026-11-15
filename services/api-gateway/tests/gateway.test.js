@@ -451,3 +451,51 @@ test('explorer snapshot still reports a field the node never answered', async ()
     mockCore.close();
   }
 });
+
+// History pagination + Founder Mint status.
+//
+// The cursor must reach the indexer unchanged: a gateway that dropped it would
+// answer page 1 forever, which looks like "load older" silently failing.
+test('history cursor and mint route are forwarded to the indexer', async () => {
+  const mockCore = await startMockCore();
+  const seen = [];
+  const mockIndexer = http.createServer((req, res) => {
+    seen.push(req.url);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, items: [], next_cursor: null, mint: null }));
+  });
+  await new Promise((r) => mockIndexer.listen(0, '127.0.0.1', r));
+
+  process.env.NSAT_CORE_HTTP_URL = `http://127.0.0.1:${mockCore.address().port}`;
+  process.env.NSAT_INDEXER_URL = `http://127.0.0.1:${mockIndexer.address().port}`;
+  process.env.RATE_MAX_REQUESTS = '1000';
+  delete require.cache[require.resolve('../server.js')];
+  const { createServer: freshCreate } = require('../server.js');
+  const gateway = freshCreate();
+  await new Promise((r) => gateway.listen(0, '127.0.0.1', r));
+
+  try {
+    const acc = 'GBNVPJVAP2DF4J6OFBSAHNN6CMVYKY2BVEMME2KVWNW66522BQT5G6OW';
+    const cursor = `362477:0:${'ab'.repeat(32)}`;
+    const page = await request(
+      gateway.address().port,
+      `/v1/accounts/${acc}/transactions?limit=25&before=${encodeURIComponent(cursor)}`
+    );
+    assert.equal(page.status, 200);
+    assert.ok(
+      seen.includes(`/v1/accounts/${acc}/transactions?limit=25&before=${cursor}`),
+      `indexer saw ${seen.join(', ')}`
+    );
+
+    const bad = await request(gateway.address().port, `/v1/accounts/${acc}/transactions?before=not-a-cursor`);
+    assert.equal(bad.status, 400);
+
+    const mint = await request(gateway.address().port, '/v1/mint');
+    assert.equal(mint.status, 200);
+    assert.ok(seen.includes('/v1/mint'), `indexer saw ${seen.join(', ')}`);
+  } finally {
+    gateway.close();
+    mockCore.close();
+    mockIndexer.close();
+  }
+});

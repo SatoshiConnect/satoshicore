@@ -225,6 +225,10 @@ const TX_DETAIL_RE = /^\/v1\/tx\/([^/]+)$/;
 const ACCOUNT_TX_RE = /^\/v1\/accounts\/([^/]+)\/transactions$/;
 const CONFIRMATION_PREFIX = '/v1/confirmations/';
 const MAX_HISTORY_LIMIT = 200;
+// A history page cursor: `ledger:opIndex:txHash`, as issued by the indexer.
+// Validated here so a malformed value is a 400 instead of reaching the index
+// and coming back as a confusing empty page.
+const HISTORY_CURSOR_RE = /^\d{1,12}:\d{1,6}:[0-9a-f]{64}$/;
 
 let activeEventStreams = 0;
 let identityCache = { at: 0, network: null };
@@ -420,6 +424,9 @@ function handleIndexerRoute(req, res, pathname) {
   if (pathname === '/v1/health') {
     return handleIndexerRead(req, res, '/v1/health');
   }
+  if (pathname === '/v1/mint') {
+    return handleIndexerRead(req, res, '/v1/mint');
+  }
   const txDetail = TX_DETAIL_RE.exec(pathname);
   if (txDetail) {
     if (!TX_HASH_RE.test(txDetail[1])) {
@@ -434,10 +441,18 @@ function handleIndexerRoute(req, res, pathname) {
     }
     // Bound the page size here rather than trusting the caller: the indexer's
     // own limit is honoured but never allowed to grow the response without end.
-    const raw = new URL(req.url, 'http://x').searchParams.get('limit');
+    const params = new URL(req.url, 'http://x').searchParams;
+    const raw = params.get('limit');
     const parsed = Number.parseInt(raw ?? '', 10);
     const limit = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, MAX_HISTORY_LIMIT) : 50;
-    return handleIndexerRead(req, res, `/v1/accounts/${accountTx[1]}/transactions?limit=${limit}`);
+    const before = params.get('before');
+    if (before !== null && !HISTORY_CURSOR_RE.test(before)) {
+      return sendJson(res, 400, { error: 'before must be ledger:opIndex:txHash' }, req);
+    }
+    const query = before === null
+      ? `?limit=${limit}`
+      : `?limit=${limit}&before=${before}`;
+    return handleIndexerRead(req, res, `/v1/accounts/${accountTx[1]}/transactions${query}`);
   }
   const match = EVENT_ROUTE_RE.exec(pathname);
   if (!match) return sendJson(res, 404, { error: 'not found' }, req);
@@ -941,6 +956,7 @@ function createServer() {
     const isIndexerRoute =
       pathname.startsWith(CONFIRMATION_PREFIX) ||
       pathname === '/v1/health' ||
+      pathname === '/v1/mint' ||
       EVENT_ROUTE_RE.test(pathname) ||
       TX_DETAIL_RE.test(pathname) ||
       ACCOUNT_TX_RE.test(pathname);
