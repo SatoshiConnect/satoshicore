@@ -1174,6 +1174,10 @@ body:has(.nw-root) .site-main.container {
   -webkit-overflow-scrolling: touch;
 }
 
+/* The one reminder the home screen raises: money on this device whose encrypted
+ * copy in Drive is stale or missing. Warning colour, same card shell. */
+.nw-backup-remind { border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+
 /* A dialog that reports a failure, not one that asks for confirmation. */
 .nw-modal-alert { border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
 

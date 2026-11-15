@@ -27,6 +27,8 @@ import { backupSilently } from '../lib/driveBackup';
 import { bindOwner, walletNameForAccount } from '../lib/walletBinding';
 import GoogleAccount from './GoogleAccount';
 import DriveBackupCard from './DriveBackupCard';
+import BackupReminder from './BackupReminder';
+import { recordDriveBackup } from '../lib/backupReminder';
 
 // Full transactional Web Wallet rendered in the ORIGINAL DESKTOP WALLET
 // DESIGN (canonical source: nsat-core desktop/satoshicore-wallet
@@ -452,6 +454,8 @@ export default function WalletPanel() {
       const result = await backupSilently(keystoreExport());
       if (result.backedUp && result.email) {
         bindOwner(name, result.email);
+        // A silent upload counts: the copy in Drive is current again.
+        recordDriveBackup(result.email, result.modifiedTime ? new Date(result.modifiedTime) : new Date());
         setWallets(keystoreList());
       }
     } catch { /* no session, no Drive grant, or offline: manual backup remains */ }
@@ -1087,6 +1091,10 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
           </button>
         </div>
       </section>
+
+      {/* Money on this device with a stale Drive copy is the one failure the
+       * wallet cannot undo, so it is raised here and recedes on its own. */}
+      <BackupReminder balance={balance} email={bus.accountEmail} notify={notify} />
 
       {/* Send · Receive · Backup — the round actions the phone build puts under
        * the balance. There is no Buy button: nothing behind it can sell NSAT. */}

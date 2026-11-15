@@ -8,10 +8,11 @@
 // restore on another device still asks for the wallet password. The Drive
 // token lives in memory for the page load only.
 import { useEffect, useState } from 'react';
-import { createPortal } from 'react-dom';
 import {
   isFirebaseWebConfigured, loadGoogleAuth,
 } from '../lib/firebaseAuth';
+import { recordDriveBackup } from '../lib/backupReminder';
+import DriveFailureDialog from './DriveFailureDialog';
 import {
   keystoreExport, keystoreList, keystoreRestore,
 } from '../lib/nsatWallet';
@@ -90,11 +91,6 @@ export default function DriveBackupCard({ onKeystoreChanged } = {}) {
     setNote('Saved the encrypted keystore file to this device. Opening it still needs your wallet password.');
   }
 
-  function failWith(code, message) {
-    setError(message);
-    setDialog(describeDriveFailure({ code, message }));
-  }
-
   async function backupNow() {
     setBusy(true);
     setError('');
@@ -111,6 +107,8 @@ export default function DriveBackupCard({ onKeystoreChanged } = {}) {
       const saved = await uploadBackup(token, JSON.stringify(envelope));
       for (const wallet of keystoreList()) bindOwner(wallet.name, email);
       setWallets(keystoreList());
+      // The home screen reads this to decide when the copy is too old to trust.
+      recordDriveBackup(email, saved.modifiedTime ? new Date(saved.modifiedTime) : new Date());
       setNote(`${saved.existed ? 'Updated' : 'Saved'} the encrypted backup in Google Drive at ${new Date(saved.modifiedTime).toLocaleString()}. Opening it still needs the wallet password.`);
     } catch (err) {
       setError(String(err?.message || 'The Drive backup did not complete.'));
@@ -219,37 +217,8 @@ export default function DriveBackupCard({ onKeystoreChanged } = {}) {
         </p>
       ) : null}
 
-      {dialog && typeof document !== 'undefined' ? createPortal(
-        // Portal to <body>: the phone frame is transformed, which would make a
-        // fixed-position dialog position against the frame instead of the
-        // screen and land off-view on a tall page.
-        <div className="nw-modal-back" role="presentation"
-          onClick={(e) => { if (e.target === e.currentTarget) setDialog(null); }}>
-          <div className="nw-modal nw-modal-alert" role="alertdialog" aria-modal="true"
-            aria-labelledby="nw-drive-dialog-title" tabIndex={-1} autoFocus
-            onKeyDown={(e) => { if (e.key === 'Escape') setDialog(null); }}>
-            <div className="nw-step">WALLET BACKUP · GOOGLE DRIVE</div>
-            <h3 id="nw-drive-dialog-title" style={{ color: 'var(--text)' }}>{dialog.title}</h3>
-            <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>{dialog.message}</p>
-            <div className="nw-btn-row" style={{ margin: '14px 0 0' }}>
-              {dialog.fix ? (
-                <a className="nw-chip-btn" href={dialog.fix.url} target="_blank" rel="noreferrer">
-                  {dialog.fix.label}
-                </a>
-              ) : null}
-              {wallets.length ? (
-                <button type="button" className="nw-chip-btn" onClick={downloadEncryptedBackup}>
-                  Download backup file
-                </button>
-              ) : null}
-              <button type="button" className="nw-send-btn" onClick={() => setDialog(null)}>
-                Close
-              </button>
-            </div>
-          </div>
-        </div>,
-        document.body,
-      ) : null}
+      <DriveFailureDialog dialog={dialog} onClose={() => setDialog(null)}
+        onDownload={downloadEncryptedBackup} canDownload={wallets.length > 0} />
     </section>
   );
 }
