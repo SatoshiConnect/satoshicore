@@ -233,6 +233,9 @@ export default function WalletPanel() {
     setSendRecipientBalances({});
     setToast(null);
     setPage('overview');
+    // A sign-out must not leave the panel busy: the same component instance is
+    // still mounted behind the gate and serves the next sign-in.
+    setBusy(false);
   }, [lockWallet]);
 
   // A sign-out — from Settings, from the account switcher, or from another tab
@@ -1600,8 +1603,11 @@ export default function WalletPanel() {
                       // Google call returns, then the gate replaces this screen.
                       await signOutGoogleSession();
                     } catch {
-                      setBusy(false);
                       notify('Could not sign out of Google. Please try again.', 'err');
+                    } finally {
+                      // endSession also clears it; this keeps the panel usable
+                      // when the sign-out request itself failed.
+                      setBusy(false);
                     }
                   }}>
                   {busy ? 'Signing out…' : 'Sign out of Google'}
