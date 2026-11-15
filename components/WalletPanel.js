@@ -885,6 +885,10 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
             onClick={() => setMode('import')}>Import</button>
         </div>
 
+        {SHOW_GOOGLE_ACCOUNT ? (
+          <div className="nw-signin-entry"><GoogleAccount variant="row" /></div>
+        ) : null}
+
         {/* Both forms stay in the markup — the segmented control only chooses
          * which one is shown, so a static export still carries both actions
          * and Import is one tap away instead of a page away. */}
@@ -976,6 +980,10 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
           <span className="nw-action-label">Backup</span>
         </button>
       </div>
+
+      {SHOW_GOOGLE_ACCOUNT ? (
+        <div className="nw-signin-entry"><GoogleAccount variant="row" /></div>
+      ) : null}
 
       {/* One asset, listed the way a wallet lists tokens: name and exact
        * balance, with the live chain state directly under it. */}

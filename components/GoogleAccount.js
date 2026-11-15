@@ -23,7 +23,10 @@ function friendlyAuthError(error) {
 
 const shortAddress = (address) => (address ? `${address.slice(0, 6)}…${address.slice(-6)}` : '');
 
-export default function GoogleAccount() {
+// `variant="row"` is the wallet-screen entry point: one line with the account
+// state and its single action, so signing in does not require Settings.
+// The full card stays in Settings, where there is room to explain each choice.
+export default function GoogleAccount({ variant = 'card' } = {}) {
   const [user, setUser] = useState(null);
   const [ready, setReady] = useState(!configured);
   const [busy, setBusy] = useState(false);
@@ -182,6 +185,33 @@ export default function GoogleAccount() {
     } finally {
       setBusy(false);
     }
+  }
+
+  if (variant === 'row') {
+    return (
+      <div className="nw-signin-row">
+        <span className="nw-signin-row-main">
+          <span className="nw-signin-row-title">Website account</span>
+          <span className="nw-small nw-dim">
+            {!configured ? 'Google sign-in is not configured in this build.'
+              : !ready ? 'Checking sign-in session…'
+                : user ? (user.email || 'signed in') : 'not signed in'}
+          </span>
+        </span>
+        {configured && ready ? (
+          user ? (
+            <button type="button" className="nw-chip-btn" onClick={signOut} disabled={busy}>
+              {busy ? 'Signing out…' : 'Sign out'}
+            </button>
+          ) : (
+            <button type="button" className="nw-chip-btn nw-signin-row-btn"
+              onClick={signIn} disabled={busy}>
+              {busy ? 'Opening Google…' : 'Sign in'}
+            </button>
+          )
+        ) : null}
+      </div>
+    );
   }
 
   return (
