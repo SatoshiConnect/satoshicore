@@ -38,6 +38,10 @@ const CONTROLS = [
     body: 'Locking drops the signing key from memory. The idle timeout locks automatically; signing never survives a reload.'
   },
   {
+    title: 'Optional device unlock',
+    body: 'On supported devices, WebAuthn can ask the platform authenticator (Face ID, fingerprint, Windows Hello, security key, or device PIN) to unlock a separate AES-GCM encrypted copy stored only in this browser. The site receives no face/fingerprint data and sends no key to a server. This depends on this device and browser; deleting the authenticator or browser data can remove this convenience, so keep the original wallet password and encrypted backup.'
+  },
+  {
     title: 'No caching of chain state',
     body: 'The service worker caches only the static shell — never API paths, so a stale balance or verdict cannot be served.'
   }
@@ -50,7 +54,7 @@ const LIMITS = [
   },
   {
     title: 'Password strength is your responsibility',
-    body: 'The keystore is only as strong as its password. There is no server-side reset and no way for the project to unlock a wallet.'
+    body: 'The original keystore is protected by its password. Device unlock is an optional convenience on the enrolled browser only; it is not a recovery method. There is no server-side reset and no way for the project to unlock a wallet.'
   },
   {
     title: 'Shielded transfers are desktop-only',

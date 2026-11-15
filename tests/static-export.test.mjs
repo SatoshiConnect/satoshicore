@@ -182,6 +182,12 @@ test('Google sign-in disclosures, setup UI, and targeted CSP ship in the static 
   assert.match(privacy, /a wallet address is stored only if you choose to link one/);
   assert.match(privacy, /Linked wallet address \(optional\)/);
   assert.match(privacy, /Wallet address link \(only when you link one\)/);
+  assert.match(privacy, /Device unlock \(only if you turn it on\)/);
+  assert.match(privacy, /no face or fingerprint image\/template is available to or sent by this site/i);
+  const security = readFileSync(join(OUT, 'security/index.html'), 'utf8');
+  assert.match(security, /Optional device unlock/);
+  assert.match(security, /Face ID, fingerprint, Windows Hello/);
+
   const clientBundles = files
     .filter((f) => f.endsWith('.js'))
     .map((f) => readFileSync(f, 'utf8'))
@@ -189,6 +195,8 @@ test('Google sign-in disclosures, setup UI, and targeted CSP ship in the static 
   assert.match(clientBundles, /Website account/);
   assert.match(clientBundles, /This does not unlock, back up, or sync your NSAT wallet/);
   assert.match(clientBundles, /Google sign-in is not configured in this build yet/);
+  assert.match(clientBundles, /Set up Face ID \/ device unlock/);
+  assert.match(clientBundles, /Unlock with this device/);
   assert.match(clientBundles, /Watch only/);
   assert.match(clientBundles, /sending still needs the wallet password and key on the device that signs/);
 

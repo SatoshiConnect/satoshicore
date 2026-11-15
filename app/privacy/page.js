@@ -38,6 +38,11 @@ const STORED = [
     what: 'Linked wallet address (optional)',
     where: 'Firebase · only if you link one',
     detail: 'The public address you choose to link to your website account, so another device can show its balance and receive screen after Google sign-in. An address is public and confers no spending power — sending still needs the wallet password and key on the device that signs. No balance, history, wallet name, seed or password is stored with it, and unlinking deletes it.'
+  },
+  {
+    what: 'Device-unlock copy (optional)',
+    where: 'this browser only',
+    detail: 'If you enable supported WebAuthn device unlock, a second AES-GCM encrypted copy of the seed is stored locally. It can be opened only with the enrolled device authenticator (which may use face, fingerprint, security key or device PIN). The site gets no biometric image/template and the PRF-derived unlock key is not stored or sent. Removing browser data or the authenticator may remove this unlock option; the original password and encrypted backup remain the recovery path.'
   }
 ];
 
@@ -65,6 +70,10 @@ const TRANSMITTED = [
   {
     what: 'Wallet address link (only when you link one)',
     why: 'Stores one public G… address under your own signed-in account so a device without the key can show its balance and receive screen. Only the address is written: no balance, history, wallet name, seed or password, and unlinking deletes the entry.'
+  },
+  {
+    what: 'Device unlock (only if you turn it on)',
+    why: 'WebAuthn asks your platform authenticator to verify you. No face or fingerprint image/template is available to or sent by this site. A separate locally encrypted copy stays in this browser; no PRF output or wallet key is uploaded.'
   },
   {
     what: 'Theme sync (only when you turn it on)',

@@ -19,6 +19,10 @@ import { sendPreflight, maxSendable, fmtGroup } from '../lib/nsatSendPreflight';
 import { startBalanceRefresh } from '../lib/walletBalanceRefresh.mjs';
 import { isFirebaseWebConfigured, loadGoogleAuth } from '../lib/firebaseAuth';
 import { pullLinkedAddressForUser } from '../lib/walletLinks';
+import {
+  biometricWalletNames, enableBiometricUnlock, hasBiometricUnlock,
+  removeBiometricUnlock, unlockWithBiometric,
+} from '../lib/biometricUnlock';
 import GoogleAccount from './GoogleAccount';
 
 // Full transactional Web Wallet rendered in the ORIGINAL DESKTOP WALLET
@@ -90,6 +94,7 @@ export default function WalletPanel() {
   const [reserve, setReserve] = useState(null);  // live base reserve (NSAT integer unit)
   // wallet session
   const [wallets, setWallets] = useState([]);
+  const [biometricWallets, setBiometricWallets] = useState([]);
   const [active, setActive] = useState(null);    // { name, pubkey, seed32 }
   const [balance, setBalance] = useState(null);  // exact stroops string
   const [funded, setFunded] = useState(null);    // true / false / unknown
@@ -219,7 +224,10 @@ export default function WalletPanel() {
     return r;
   }, [configured]);
 
-  const refreshWallets = useCallback(() => setWallets(keystoreList()), []);
+  const refreshWallets = useCallback(() => {
+    setWallets(keystoreList());
+    setBiometricWallets(biometricWalletNames());
+  }, []);
 
   const refreshBalance = useCallback(async (pubkey) => {
     // A brand-new (unfunded) account reads as HTTP 404 from the gateway —
@@ -239,7 +247,10 @@ export default function WalletPanel() {
     }
   }, []);
 
-  useEffect(() => { setWallets(keystoreList()); }, []);
+  useEffect(() => {
+    setWallets(keystoreList());
+    setBiometricWallets(biometricWalletNames());
+  }, []);
   useEffect(() => { void verifyNetwork(); }, [verifyNetwork]);
 
   // Ledger height for the policy-issuance figure: public, cheap, key-free, so
@@ -429,6 +440,65 @@ export default function WalletPanel() {
     } catch (err) { notify(String(err.message || err), 'err'); }
     finally {
       password = '';
+      setBusy(false);
+    }
+  }
+
+  async function unlockWithDevice(name = unlockName) {
+    const entry = keystoreList().find((wallet) => wallet.name === name);
+    if (!entry || !hasBiometricUnlock(name)) {
+      notify('Device unlock is not set up for this wallet. Use its password.', 'err');
+      return;
+    }
+    const operationEpoch = lockEpoch.current;
+    setBusy(true);
+    try {
+      const seed32 = await unlockWithBiometric(name, entry.pubkey);
+      if (operationEpoch !== lockEpoch.current) {
+        zeroSeed(seed32);
+        return;
+      }
+      activateWallet({ name, pubkey: entry.pubkey, seed32 });
+      setUnlockName('');
+      notify(`Wallet "${name}" unlocked on this device.`, 'ok');
+    } catch (err) {
+      notify(String(err.message || 'Device unlock failed. Use the wallet password.'), 'err');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleBiometricUnlock() {
+    if (!active?.seed32) {
+      notify('Unlock this wallet with its password before setting up device unlock.', 'err');
+      return;
+    }
+    const name = active.name;
+    if (hasBiometricUnlock(name)) {
+      removeBiometricUnlock(name);
+      setBiometricWallets(biometricWalletNames());
+      notify('Device unlock removed from this browser. Your wallet password still works.', 'ok');
+      return;
+    }
+    const session = activeRef.current;
+    const operationEpoch = lockEpoch.current;
+    const canContinue = () => operationEpoch === lockEpoch.current && activeRef.current === session;
+    const seed32 = session.seed32.slice();
+    pendingSeedsRef.current.add(seed32);
+    setBusy(true);
+    try {
+      await enableBiometricUnlock({
+        name, pubkey: active.pubkey, seed32,
+        shouldCancel: () => !canContinue(),
+      });
+      if (!canContinue()) return;
+      setBiometricWallets(biometricWalletNames());
+      notify('Device unlock enabled for this browser. Keep using your wallet password as a backup.', 'ok');
+    } catch (err) {
+      notify(String(err.message || err), 'err');
+    } finally {
+      zeroSeed(seed32);
+      pendingSeedsRef.current.delete(seed32);
       setBusy(false);
     }
   }
@@ -685,7 +755,13 @@ export default function WalletPanel() {
                 onChange={(e) => setUnlockPass(e.target.value)} autoComplete="current-password"
                 aria-label="Wallet password" />
               <button className="nw-send-btn" type="submit"
-                disabled={busy || !unlockName}>Unlock</button>
+                disabled={busy || !unlockName}>Unlock with password</button>
+              {unlockName && biometricWallets.includes(unlockName) ? (
+                <button type="button" className="nw-chip-btn" disabled={busy}
+                  onClick={() => void unlockWithDevice()}>
+                  Unlock with this device
+                </button>
+              ) : null}
             </form>
           )}
 
@@ -726,7 +802,8 @@ export default function WalletPanel() {
 
           {page === 'settings' && (
             <SettingsPage
-              s={{ active, doLock, doBackup, doRestore, wallets, onSwitch: switchTo }}
+                              s={{ active, busy, doLock, doBackup, doRestore, wallets, biometricWallets,
+                onSwitch: switchTo, onToggleBiometric: toggleBiometricUnlock }}
               onShielded={() => setPage('shielded')} />
           )}
       </main>
@@ -885,6 +962,9 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
             onClick={() => setMode('import')}>Import</button>
         </div>
 
+        {/* The website account belongs on the wallet screen itself: signing in
+         * identifies the session, and someone who never opens Settings would
+         * otherwise never see it. It touches no key, no balance and no seed. */}
         {SHOW_GOOGLE_ACCOUNT ? (
           <div className="nw-signin-entry"><GoogleAccount variant="row" /></div>
         ) : null}
@@ -981,6 +1061,8 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
         </button>
       </div>
 
+      {/* Same entry as on first run, above the asset list so it stays visible
+       * without hunting through Settings. */}
       {SHOW_GOOGLE_ACCOUNT ? (
         <div className="nw-signin-entry"><GoogleAccount variant="row" /></div>
       ) : null}
@@ -1210,6 +1292,19 @@ function SettingsPage({ s, onShielded }) {
       <section className="nw-card">
         <h2 style={{ color: 'var(--text)' }}>Privacy</h2>
         <div className="nw-kv" style={{ marginTop: 10 }}>
+          <span className="nw-k">Device unlock</span>
+          <span className="nw-v">
+            {s.active ? (
+              <button className="nw-chip-btn" onClick={s.onToggleBiometric} disabled={s.busy}>
+                {s.biometricWallets.includes(s.active.name) ? 'Turn off on this browser' : 'Set up Face ID / device unlock'}
+              </button>
+            ) : <span className="nw-badge info">{s.biometricWallets.length ? 'available on this browser' : 'not set up'}</span>}
+          </span>
+        </div>
+        <p className="nw-small nw-dim" style={{ margin: '6px 0 10px' }}>
+          Uses your device&apos;s secure check (Face ID, fingerprint, Windows Hello, or device PIN, depending on the device). This site never sees face or fingerprint data. Your password remains the backup; this setup works only in this browser.
+        </p>
+        <div className="nw-kv">
           <span className="nw-k">Signing power</span>
           <span className="nw-v">
             {s.active
