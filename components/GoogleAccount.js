@@ -130,8 +130,10 @@ export default function GoogleAccount() {
           ? `Theme sync on — the theme saved on your account (${result.theme}) was applied to this device.`
           : `Theme sync on — this device's theme (${result.theme}) was saved to your account.`);
       }
-    } catch {
-      setError('Could not change theme sync. The site database may not be configured yet.');
+    } catch (err) {
+      setError(/did not complete/.test(String(err?.message || ''))
+        ? 'The theme change was not confirmed as saved. Reload to check.'
+        : 'Could not change theme sync. The site database may not be configured yet.');
     } finally {
       setBusy(false);
     }
@@ -150,10 +152,13 @@ export default function GoogleAccount() {
       setLinkTarget('');
       setLinkNote(`Linked ${shortAddress(saved)}. Balance and receive now work on another device after Google sign-in; sending still needs this wallet's key.`);
     } catch (err) {
+      const message = String(err?.message || '');
       setError(
-        /account id/.test(String(err?.message))
+        /account id/.test(message)
           ? 'That is not a wallet address. Use the full 56-character address starting with G.'
-          : 'Could not link the address. The site database may not be configured yet.',
+          : /did not complete/.test(message)
+            ? 'The address was not confirmed as saved. Reload to check before relying on it; if it appears, it is linked.'
+            : 'Could not link the address. The site database may not be configured yet.',
       );
     } finally {
       setBusy(false);
@@ -170,8 +175,10 @@ export default function GoogleAccount() {
       await unlinkAddressForUser(uid);
       setLinked('');
       setLinkNote('Address unlinked and deleted from your account.');
-    } catch {
-      setError('Could not unlink the address. The site database may not be configured yet.');
+    } catch (err) {
+      setError(/did not complete/.test(String(err?.message || ''))
+        ? 'Unlinking was not confirmed. Reload to check whether it is still linked.'
+        : 'Could not unlink the address. The site database may not be configured yet.');
     } finally {
       setBusy(false);
     }

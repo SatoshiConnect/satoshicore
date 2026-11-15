@@ -15,6 +15,7 @@ import {
   writeLinkTo,
   clearLinkFrom,
 } from '../lib/walletLinks.js';
+import { DB_TIMEOUT_MS, withTimeout } from '../lib/withTimeout.js';
 
 const RULES = readFileSync(join(process.cwd(), 'firestore.rules'), 'utf8');
 const MODULE = readFileSync(join(process.cwd(), 'lib', 'walletLinks.js'), 'utf8');
@@ -100,6 +101,30 @@ test('firestore rules keep the link owner-only, single-field and address-shaped'
   assert.match(RULES, /match \/\{document=\*\*\}/);
   assert.match(RULES, /allow read, write: if false;/);
   assert.doesNotMatch(RULES, /allow (read|write)(, (read|write))?: if true/);
+});
+
+test('a database that never answers fails instead of hanging the button', async () => {
+  // Found on the deployed site: with the Cloud Firestore API disabled, the SDK
+  // queues and retries forever, the promise never settles, and the control
+  // stayed disabled with no message at all.
+  const never = new Promise(() => {});
+  const started = Date.now();
+  await assert.rejects(() => withTimeout(never, 'gave up', 30), /gave up/);
+  assert.ok(Date.now() - started < 2000, 'the deadline must fire well before a person gives up');
+
+  // The deadline is a bound, not a delay: a normal answer passes straight through.
+  assert.equal(await withTimeout(Promise.resolve('ok'), 'nope', 1000), 'ok');
+  assert.equal(DB_TIMEOUT_MS, 12_000);
+
+  // And the storage helpers actually route the three database calls through it,
+  // so no browser control can wait on an unanswered write forever.
+  for (const call of ['store.read()', 'store.write(doc)', 'store.remove()']) {
+    assert.ok(MODULE.includes(`withTimeout(${call}`), `${call} must be bounded by the deadline`);
+  }
+  const theme = readFileSync(join(process.cwd(), 'lib', 'themeSync.js'), 'utf8');
+  for (const call of ['store.read()', 'store.write(doc)', 'store.remove()']) {
+    assert.ok(theme.includes(`withTimeout(${call}`), `theme sync ${call} must be bounded too`);
+  }
 });
 
 test('watching an address grants no signing path', () => {
