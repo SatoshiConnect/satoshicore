@@ -2137,10 +2137,10 @@ function OverviewPage({ active, wallets, balance, funded, walletChainStates, bas
             <button type="button" className="nw-chip-btn nw-mono"
               title="Copy your profile ID — a handle, not a payment address"
               onClick={async () => {
-                await navigator.clipboard.writeText(`@${profileId}`);
+                await navigator.clipboard.writeText(profileId);
                 notify('📋 Copied: profile ID');
               }}>
-              @{profileId}
+              {profileId}
             </button>
           ) : null}
         </div>

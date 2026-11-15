@@ -13,7 +13,7 @@ import { pullLinkedAddressesForUser } from '../lib/walletLinks';
 import {
   PROFILE_ID_MAX, PROFILE_ID_MIN, createProfileForUser, deleteProfileForUser,
   describeProfileFailure, describeProfileIdProblem, normalizeProfileId,
-  profileLabel, readMyProfile, renameProfileIdForUser, setPrimaryWalletForUser,
+  profileLabel, readMyProfile, saveMyProfile,
 } from '../lib/profile';
 
 const configured = isFirebaseWebConfigured();
@@ -31,11 +31,11 @@ export default function ProfileCard() {
   const [profile, setProfile] = useState(null);          // { profileId, primaryAddress }
   const [loaded, setLoaded] = useState(false);
   const [linked, setLinked] = useState([]);
-  const [idInput, setIdInput] = useState('');
+  const [idInput, setIdInput] = useState('@');
   const [primaryPick, setPrimaryPick] = useState('');
-  // Renaming is a separate field so the current ID stays visible while a new
-  // one is typed; a typo is the usual reason to change it.
-  const [renameInput, setRenameInput] = useState('');
+  const [editing, setEditing] = useState(false);
+  const [editProfileId, setEditProfileId] = useState('');
+  const [editPrimary, setEditPrimary] = useState('');
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const [problem, setProblem] = useState(null);          // describeProfileFailure result
@@ -44,6 +44,8 @@ export default function ProfileCard() {
     try {
       const doc = await readMyProfile();
       setProfile(doc);
+      setEditProfileId(doc?.profileId || '');
+      setEditPrimary(doc?.primaryAddress || '');
     } catch {
       // No database yet, or offline: the card says it has not been created and
       // never invents one.
@@ -72,6 +74,9 @@ export default function ProfileCard() {
           }).catch(() => { if (alive) setLinked([]); });
         } else {
           setProfile(null);
+          setEditProfileId('');
+          setEditPrimary('');
+          setEditing(false);
           setLinked([]);
           setLoaded(true);
         }
@@ -86,14 +91,22 @@ export default function ProfileCard() {
     let alive = true;
     const reload = () => {
       void pullLinkedAddressesForUser(account.uid).then((list) => {
-        if (alive) setLinked(list);
+        if (!alive) return;
+        setLinked(list);
+        setProfile((current) => {
+          if (current?.primaryAddress && !list.includes(current.primaryAddress)) {
+            setEditPrimary('');
+            return { ...current, primaryAddress: '' };
+          }
+          return current;
+        });
       }).catch(() => {});
     };
     window.addEventListener('nsat:links-changed', reload);
     return () => { alive = false; window.removeEventListener('nsat:links-changed', reload); };
   }, [account?.uid]);
 
-  const idProblem = idInput ? describeProfileIdProblem(idInput) : '';
+  const idProblem = idInput && idInput !== '@' ? describeProfileIdProblem(idInput) : '';
 
   async function create() {
     setBusy(true);
@@ -107,7 +120,9 @@ export default function ProfileCard() {
       }
       const doc = await createProfileForUser({ profileId: id, primaryAddress: primaryPick });
       setProfile(doc);
-      setIdInput('');
+      setEditProfileId(doc.profileId);
+      setEditPrimary(doc.primaryAddress);
+      setIdInput('@');
       announceProfileChanged();
       setNote(`Profile ${profileLabel(doc.profileId)} created.`);
     } catch (error) {
@@ -123,44 +138,47 @@ export default function ProfileCard() {
     }
   }
 
-  async function rename() {
+  async function saveChanges() {
     setBusy(true);
     setNote('');
     setProblem(null);
     try {
-      const id = normalizeProfileId(renameInput);
+      const id = normalizeProfileId(editProfileId);
       if (!id) {
-        setNote(describeProfileIdProblem(renameInput));
+        setNote(describeProfileIdProblem(editProfileId));
         return;
       }
-      const doc = await renameProfileIdForUser(id);
+      const doc = await saveMyProfile({
+        profileId: id,
+        primaryAddress: editPrimary,
+        linked,
+      });
+      const oldId = profile?.profileId;
       setProfile(doc);
-      setRenameInput('');
+      setEditProfileId(doc.profileId);
+      setEditPrimary(doc.primaryAddress);
+      setEditing(false);
       announceProfileChanged();
-      setNote(`Profile ID is now ${profileLabel(doc.profileId)} — the old ID was released.`);
+      setNote(oldId !== doc.profileId
+        ? `Saved ${profileLabel(doc.profileId)}. The previous ID was released.`
+        : 'Profile changes saved.');
     } catch (error) {
-      setProblem(describeProfileFailure(error, { action: 'save', projectId: getFirebaseWebConfig().projectId }));
+      if (/link that wallet/.test(String(error?.message || ''))) {
+        setNote(String(error.message));
+      } else {
+        setProblem(describeProfileFailure(error, { action: 'save', projectId: getFirebaseWebConfig().projectId }));
+      }
     } finally {
       setBusy(false);
     }
   }
 
-  async function savePrimary() {
-    setBusy(true);
+  function cancelChanges() {
+    setEditProfileId(profile?.profileId || '');
+    setEditPrimary(profile?.primaryAddress || '');
+    setEditing(false);
     setNote('');
     setProblem(null);
-    try {
-      const doc = await setPrimaryWalletForUser(primaryPick, { linked });
-      setProfile(doc);
-      announceProfileChanged();
-      setNote(doc.primaryAddress
-        ? `${shortAddress(doc.primaryAddress)} is now the primary wallet for this profile.`
-        : 'The profile no longer names a primary wallet.');
-    } catch (error) {
-      setProblem(describeProfileFailure(error, { action: 'save', projectId: getFirebaseWebConfig().projectId }));
-    } finally {
-      setBusy(false);
-    }
   }
 
   async function remove() {
@@ -170,8 +188,11 @@ export default function ProfileCard() {
     try {
       const removed = await deleteProfileForUser();
       setProfile(null);
-      setIdInput('');
+      setIdInput('@');
       setPrimaryPick('');
+      setEditProfileId('');
+      setEditPrimary('');
+      setEditing(false);
       announceProfileChanged();
       setNote(removed
         ? `Profile ${profileLabel(removed.profileId)} was deleted and its ID released. No wallet was changed.`
@@ -182,8 +203,6 @@ export default function ProfileCard() {
       setBusy(false);
     }
   }
-
-  const primaryOptions = Array.from(new Set([profile?.primaryAddress, ...linked].filter(Boolean)));
 
   return (
     <section className="nw-card nw-profile" aria-labelledby="nw-profile-title">
@@ -230,76 +249,105 @@ export default function ProfileCard() {
             </p>
           ) : profile ? (
             <div className="nw-profile-body">
-              <div className="nw-kv">
-                <span className="nw-k">ID</span>
-                <span className="nw-v nw-mono">{profileLabel(profile.profileId)}</span>
-              </div>
-              <div className="nw-kv">
-                <span className="nw-k">Primary wallet</span>
-                <span className="nw-v nw-small nw-mono">
-                  {profile.primaryAddress
-                    ? shortAddress(profile.primaryAddress)
-                    : 'none chosen'}
-                </span>
-              </div>
-              {linked.length === 0 ? (
-                <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
-                  Link a wallet under Linked wallets first — a primary wallet must be one this
-                  account already links.
-                </p>
+              {!editing ? (
+                <>
+                  <div className="nw-kv">
+                    <span className="nw-k">ID</span>
+                    <span className="nw-v nw-mono">{profileLabel(profile.profileId)}</span>
+                  </div>
+                  <div className="nw-kv">
+                    <span className="nw-k">Primary wallet</span>
+                    <span className="nw-v nw-small nw-mono">
+                      {profile.primaryAddress ? shortAddress(profile.primaryAddress) : 'none chosen'}
+                    </span>
+                  </div>
+                  <div className="nw-btn-row" style={{ margin: '8px 0 0' }}>
+                    <button type="button" className="nw-chip-btn"
+                      onClick={() => {
+                        setEditProfileId(profile.profileId);
+                        setEditPrimary(profile.primaryAddress);
+                        setEditing(true);
+                        setNote('');
+                        setProblem(null);
+                      }} disabled={busy || !account.emailVerified}>
+                      Edit profile
+                    </button>
+                    <button type="button" className="nw-chip-btn" onClick={remove} disabled={busy}>
+                      Delete profile
+                    </button>
+                  </div>
+                  {!account.emailVerified ? (
+                    <p className="nw-small" style={{ margin: '8px 0 0', color: 'var(--warn)' }}>
+                      Editing is disabled because the provider no longer reports this email as
+                      verified. Verify it with the provider and sign in again.
+                    </p>
+                  ) : null}
+                </>
               ) : (
-                <div className="nw-kv" style={{ marginTop: 8 }}>
-                  <span className="nw-k">Choose primary</span>
-                  <span className="nw-v">
-                    <select aria-label="Primary wallet" value={primaryPick}
-                      onChange={(event) => setPrimaryPick(event.target.value)}>
-                      <option value="">— none —</option>
-                      {primaryOptions.map((address) => (
-                        <option key={address} value={address}>{shortAddress(address)}</option>
-                      ))}
-                    </select>
-                  </span>
-                </div>
+                <>
+                  <label className="nw-label" htmlFor="nw-profile-id-edit">Profile ID</label>
+                  <input id="nw-profile-id-edit" value={editProfileId} spellCheck={false}
+                    autoComplete="off" disabled={busy}
+                    onChange={(event) => setEditProfileId(event.target.value.startsWith('@')
+                      ? event.target.value : `@${event.target.value}`)} />
+                  {editProfileId && describeProfileIdProblem(editProfileId) ? (
+                    <p className="nw-small" style={{ margin: '6px 0 0', color: 'var(--warn)' }}>
+                      {describeProfileIdProblem(editProfileId)}
+                    </p>
+                  ) : (
+                    <p className="nw-small nw-dim" style={{ margin: '6px 0 0' }}>
+                      {`Start with @, then ${PROFILE_ID_MIN}–${PROFILE_ID_MAX} lowercase letters, digits, “-” or “_”. Cancelling keeps your current ID.`}
+                    </p>
+                  )}
+                  {linked.length > 0 ? (
+                    <div className="nw-kv" style={{ marginTop: 8 }}>
+                      <span className="nw-k">Primary wallet</span>
+                      <span className="nw-v">
+                        <select aria-label="Primary wallet" value={editPrimary}
+                          disabled={busy} onChange={(event) => setEditPrimary(event.target.value)}>
+                          <option value="">— none —</option>
+                          {Array.from(new Set([profile.primaryAddress, ...linked].filter(Boolean)))
+                            .map((address) => (
+                              <option key={address} value={address}>{shortAddress(address)}</option>
+                            ))}
+                        </select>
+                      </span>
+                    </div>
+                  ) : (
+                    <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
+                      No linked wallets. The saved primary wallet will be cleared.
+                    </p>
+                  )}
+                  <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
+                    The email is verified by your sign-in provider and cannot be edited here.
+                    The ID must be available; your previous ID is released only after Save succeeds.
+                  </p>
+                  <div className="nw-btn-row" style={{ margin: '10px 0 0' }}>
+                    <button type="button" className="nw-send-btn" onClick={saveChanges}
+                      disabled={busy || !normalizeProfileId(editProfileId)}>
+                      {busy ? 'Saving…' : 'Save changes'}
+                    </button>
+                    <button type="button" className="nw-chip-btn" onClick={cancelChanges}
+                      disabled={busy}>
+                      Cancel
+                    </button>
+                    <button type="button" className="nw-chip-btn" onClick={remove}
+                      disabled={busy}>
+                      Delete profile
+                    </button>
+                  </div>
+                </>
               )}
-              {/* Delete stays available with no linked wallet: a profile that
-                * names no primary wallet must still be removable. */}
-              <div className="nw-btn-row" style={{ margin: '8px 0 0' }}>
-                {linked.length > 0 ? (
-                  <button type="button" className="nw-chip-btn" onClick={savePrimary}
-                    disabled={busy}>
-                    {busy ? 'Saving…' : 'Save primary wallet'}
-                  </button>
-                ) : null}
-                <button type="button" className="nw-chip-btn" onClick={remove} disabled={busy}>
-                  Delete profile
-                </button>
-              </div>
-              <div className="nw-profile-rename">
-                <label className="nw-label" htmlFor="nw-profile-rename">Change ID</label>
-                <input id="nw-profile-rename" value={renameInput} spellCheck={false}
-                  autoComplete="off" placeholder={profile.profileId} disabled={busy}
-                  onChange={(event) => setRenameInput(event.target.value)} />
-                <div className="nw-btn-row" style={{ margin: '8px 0 0' }}>
-                  <button type="button" className="nw-chip-btn" onClick={rename}
-                    disabled={busy || !normalizeProfileId(renameInput)
-                      || normalizeProfileId(renameInput) === profile.profileId}>
-                    {busy ? 'Saving…' : 'Change ID'}
-                  </button>
-                </div>
-                <p className="nw-small nw-dim" style={{ margin: '6px 0 0' }}>
-                  The new ID must be free. Your primary wallet choice is kept, and the old ID is
-                  released only after the new one is saved.
-                </p>
-              </div>
             </div>
           ) : (
             <div className="nw-profile-body">
               <label className="nw-label" htmlFor="nw-profile-id">Profile ID</label>
               <input id="nw-profile-id" value={idInput} spellCheck={false} autoComplete="off"
-                placeholder="e.g. somchai" disabled={busy || !account.emailVerified}
-                onChange={(event) => setIdInput(event.target.value)} />
+                placeholder="@somchai" disabled={busy || !account.emailVerified}
+                onChange={(event) => setIdInput(event.target.value.startsWith('@')
+                  ? event.target.value : `@${event.target.value}`)} />
               <p className="nw-small nw-dim" style={{ margin: '6px 0 0' }}>
-                {`${PROFILE_ID_MIN}–${PROFILE_ID_MAX} characters: lowercase letters, digits, “-” and “_”. IDs are unique; you can change yours later under Change ID.`}
+                {`Start with @, then use ${PROFILE_ID_MIN}–${PROFILE_ID_MAX} lowercase letters, digits, “-” or “_”. IDs are unique; you can change yours later.`}
               </p>
               {idProblem ? (
                 <p className="nw-small" style={{ margin: '6px 0 0', color: 'var(--warn)' }}>
@@ -326,7 +374,7 @@ export default function ProfileCard() {
                 </p>
               )}
               <div className="nw-btn-row" style={{ margin: '10px 0 0' }}>
-                <button type="button" className="nw-chip-btn" onClick={create}
+                <button type="button" className="nw-send-btn" onClick={create}
                   disabled={busy || !account.emailVerified || !normalizeProfileId(idInput)}>
                   {busy ? 'Creating…' : 'Create profile'}
                 </button>

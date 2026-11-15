@@ -14,6 +14,7 @@ import {
   claimProfileIdIn,
   createFirestoreProfileStore,
   renameProfileIdIn,
+  saveProfileIn,
   describeProfileFailure,
   describeProfileIdProblem,
   normalizeProfile,
@@ -51,64 +52,70 @@ function fakeStore({ profile = null, claims = {}, uid = UID } = {}) {
   };
 }
 
-test('a profile ID is lowercase, 3–20 characters, and unambiguous', () => {
-  assert.equal(normalizeProfileId('somchai'), 'somchai');
-  assert.equal(normalizeProfileId('  Somchai  '), 'somchai', 'case is folded, not rejected');
-  assert.equal(normalizeProfileId('a_b-9'), 'a_b-9');
-  for (const bad of ['', 'ab', 'a'.repeat(PROFILE_ID_MAX + 1), 'has space', 'dot.name',
-    '@handle', 'id!', '-lead', '_lead', 'กมล', null, undefined, 42, {}]) {
+test('a profile ID includes @, is lowercase, and has 3–20 name characters', () => {
+  assert.equal(normalizeProfileId('@somchai'), '@somchai');
+  assert.equal(normalizeProfileId('  @Somchai  '), '@somchai', 'case is folded, not rejected');
+  assert.equal(normalizeProfileId('@a_b-9'), '@a_b-9');
+  // @ is required, not implied — the stored ID and its claim are the same
+  // string, so a bare name is not silently rewritten.
+  assert.equal(normalizeProfileId('somchai'), null);
+  for (const bad of ['', 'ab', '@ab', `@${'a'.repeat(PROFILE_ID_MAX + 1)}`, 'has space',
+    '@dot.name', '@@handle', '@id!', '@-lead', '@_lead', '@กมล', null, undefined, 42, {}]) {
     assert.equal(normalizeProfileId(bad), null, `${String(bad)} must be rejected`);
   }
-  // The bounds are the ones the rules use.
-  assert.equal(normalizeProfileId('a'.repeat(PROFILE_ID_MIN)), 'a'.repeat(PROFILE_ID_MIN));
-  assert.equal(normalizeProfileId('a'.repeat(PROFILE_ID_MAX)), 'a'.repeat(PROFILE_ID_MAX));
-  assert.match(RULES, /\^\[a-z0-9\]\[a-z0-9_-\]\{2,19\}\$/);
+  // The bounds are the ones the rules use, excluding the required @ prefix.
+  assert.equal(normalizeProfileId(`@${'a'.repeat(PROFILE_ID_MIN)}`), `@${'a'.repeat(PROFILE_ID_MIN)}`);
+  assert.equal(normalizeProfileId(`@${'a'.repeat(PROFILE_ID_MAX)}`), `@${'a'.repeat(PROFILE_ID_MAX)}`);
+  assert.match(RULES, /\^@\[a-z0-9\]\[a-z0-9_-\]\{2,19\}\$/);
 });
 
 test('a rejected ID says why, in words that can be acted on', () => {
-  assert.match(describeProfileIdProblem(''), /Choose/);
-  assert.match(describeProfileIdProblem('Somchai'), /lowercase/);
-  assert.match(describeProfileIdProblem('ab'), /at least/);
-  assert.match(describeProfileIdProblem('a'.repeat(PROFILE_ID_MAX + 1)), /at most/);
-  assert.match(describeProfileIdProblem('has space'), /letters, digits/);
-  assert.equal(describeProfileIdProblem('somchai'), '');
+  assert.match(describeProfileIdProblem(''), /Choose.*@/);
+  assert.match(describeProfileIdProblem('@Somchai'), /lowercase/);
+  assert.match(describeProfileIdProblem('@ab'), /at least/);
+  assert.match(describeProfileIdProblem(`@${'a'.repeat(PROFILE_ID_MAX + 1)}`), /at most/);
+  assert.match(describeProfileIdProblem('@has space'), /letters, digits/);
+  assert.match(describeProfileIdProblem('somchai'), /must start with @/);
+  assert.equal(describeProfileIdProblem('@somchai'), '');
 });
 
 test('the profile document has exactly two fields and a canonical address', () => {
-  assert.deepEqual(profileDocument({ profileId: 'Somchai' }), { profileId: 'somchai', primaryAddress: '' });
-  assert.deepEqual(profileDocument({ profileId: 'alice', primaryAddress: ` ${ADDRESS} ` }),
-    { profileId: 'alice', primaryAddress: ADDRESS });
+  assert.deepEqual(profileDocument({ profileId: '@Somchai' }), { profileId: '@somchai', primaryAddress: '' });
+  assert.deepEqual(profileDocument({ profileId: '@alice', primaryAddress: ` ${ADDRESS} ` }),
+    { profileId: '@alice', primaryAddress: ADDRESS });
   // A caller cannot widen the write into wallet data.
-  const doc = profileDocument({ profileId: 'alice', primaryAddress: ADDRESS });
+  const doc = profileDocument({ profileId: '@alice', primaryAddress: ADDRESS });
   assert.deepEqual(Object.keys(doc).sort(), ['primaryAddress', 'profileId']);
   assert.ok(!/seed|password|balance|history|keystore|email|name/i.test(JSON.stringify(doc)));
   assert.throws(() => profileDocument({ profileId: 'no' }), /profile id/);
-  assert.throws(() => profileDocument({ profileId: 'alice', primaryAddress: 'G-short' }), /primary wallet/);
+  assert.throws(() => profileDocument({ profileId: '@alice', primaryAddress: 'G-short' }), /primary wallet/);
 });
 
 test('a document that is not a profile never reaches the app', () => {
-  assert.deepEqual(normalizeProfile({ profileId: 'alice', primaryAddress: ADDRESS }),
-    { profileId: 'alice', primaryAddress: ADDRESS });
-  assert.deepEqual(normalizeProfile({ profileId: 'alice' }), { profileId: 'alice', primaryAddress: '' });
-  assert.deepEqual(normalizeProfile({ profileId: 'ALICE', primaryAddress: 'junk' }),
-    { profileId: 'alice', primaryAddress: '' }, 'bad address is dropped, not stored back');
+  assert.deepEqual(normalizeProfile({ profileId: '@alice', primaryAddress: ADDRESS }),
+    { profileId: '@alice', primaryAddress: ADDRESS });
+  // A document without @ is not a profile this build understands.
+  assert.equal(normalizeProfile({ profileId: 'alice' }), null);
+  assert.deepEqual(normalizeProfile({ profileId: '@ALICE', primaryAddress: 'junk' }),
+    { profileId: '@alice', primaryAddress: '' }, 'bad address is dropped, not stored back');
   for (const bad of [null, 'alice', [], { profileId: 'x' }, { primaryAddress: ADDRESS }]) {
     assert.equal(normalizeProfile(bad), null);
   }
-  assert.equal(profileLabel('somchai'), '@somchai');
+  assert.equal(profileLabel('@somchai'), '@somchai');
+  assert.equal(profileLabel('somchai'), '', 'an ID without @ is not a label either');
   assert.equal(profileLabel(''), '');
 });
 
 test('claiming an ID is one-time, and a taken ID is reported as taken', async () => {
   const store = fakeStore();
-  assert.equal(await claimProfileIdIn(store, 'somchai'), 'somchai');
-  assert.equal(store.state.claims.somchai, UID);
+  assert.equal(await claimProfileIdIn(store, '@somchai'), '@somchai');
+  assert.equal(store.state.claims['@somchai'], UID);
 
   const other = { ...fakeStore(), uid: 'uid-2' };
-  other.state.claims = { somchai: UID };
-  await assert.rejects(() => claimProfileIdIn(other, 'somchai'),
+  other.state.claims = { '@somchai': UID };
+  await assert.rejects(() => claimProfileIdIn(other, '@somchai'),
     (error) => error.code === 'ID_TAKEN');
-  assert.equal(other.state.claims.somchai, UID, 'the first claim is untouched');
+  assert.equal(other.state.claims['@somchai'], UID, 'the first claim is untouched');
 
   // A lost race comes back from the rules as permission-denied, and must read
   // as "taken" rather than as a generic failure.
@@ -116,59 +123,82 @@ test('claiming an ID is one-time, and a taken ID is reported as taken', async ()
   raced.claim = async () => {
     throw Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' });
   };
-  await assert.rejects(() => claimProfileIdIn(raced, 'fresh'), (error) => error.code === 'ID_TAKEN');
+  await assert.rejects(() => claimProfileIdIn(raced, '@fresh'), (error) => error.code === 'ID_TAKEN');
 });
 
 test('profile round trip: create, change primary wallet, delete and release', async () => {
   const store = fakeStore();
   assert.equal(await readProfileFrom(store), null);
 
-  await writeProfileTo(store, { profileId: 'alice', primaryAddress: '' });
-  assert.deepEqual(await readProfileFrom(store), { profileId: 'alice', primaryAddress: '' });
+  await writeProfileTo(store, { profileId: '@alice', primaryAddress: '' });
+  assert.deepEqual(await readProfileFrom(store), { profileId: '@alice', primaryAddress: '' });
 
-  await writeProfileTo(store, { profileId: 'alice', primaryAddress: ADDRESS });
-  assert.deepEqual(await readProfileFrom(store), { profileId: 'alice', primaryAddress: ADDRESS });
+  await writeProfileTo(store, { profileId: '@alice', primaryAddress: ADDRESS });
+  assert.deepEqual(await readProfileFrom(store), { profileId: '@alice', primaryAddress: ADDRESS });
 
-  await removeProfileFrom(store, 'alice');
+  await removeProfileFrom(store, '@alice');
   assert.equal(store.state.deletes, 1);
-  assert.deepEqual(store.state.releases, ['alice']);
+  assert.deepEqual(store.state.releases, ['@alice']);
   assert.deepEqual(store.state.claims, {});
   assert.equal(await readProfileFrom(store), null);
 });
 
 test('changing an ID claims the new one first and releases the old one after', async () => {
-  const store = fakeStore({ profile: { profileId: 'alice', primaryAddress: ADDRESS }, claims: { alice: UID } });
-  const renamed = await renameProfileIdIn(store, 'Alice-2');
-  assert.deepEqual(renamed, { profileId: 'alice-2', primaryAddress: ADDRESS },
+  const store = fakeStore({ profile: { profileId: '@alice', primaryAddress: ADDRESS }, claims: { '@alice': UID } });
+  const renamed = await renameProfileIdIn(store, '@Alice-2');
+  assert.deepEqual(renamed, { profileId: '@alice-2', primaryAddress: ADDRESS },
     'the primary wallet survives the rename');
-  assert.deepEqual(store.state.claims, { 'alice-2': UID }, 'old claim released, new one held');
-  assert.deepEqual(store.state.releases, ['alice']);
+  assert.deepEqual(store.state.claims, { '@alice-2': UID }, 'old claim released, new one held');
+  assert.deepEqual(store.state.releases, ['@alice']);
 
   // Same ID is a no-op, not claim and write churn.
   const writes = store.state.writes.length;
-  const again = await renameProfileIdIn(store, 'alice-2');
-  assert.equal(again.profileId, 'alice-2');
+  const again = await renameProfileIdIn(store, '@alice-2');
+  assert.equal(again.profileId, '@alice-2');
   assert.equal(store.state.writes.length, writes);
 
-  await assert.rejects(() => renameProfileIdIn(store, 'no'), /profile id/);
+  await assert.rejects(() => renameProfileIdIn(store, '@no'), /profile id/);
   const empty = fakeStore();
-  await assert.rejects(() => renameProfileIdIn(empty, 'bob'), /create a profile first/);
+  await assert.rejects(() => renameProfileIdIn(empty, '@bob'), /create a profile first/);
 });
 
 // A failed rename must leave the account exactly as it was: still holding the
 // old ID and its profile, with the unclaimed new ID free for anyone.
 test('a failed rename gives the new ID back and keeps the old profile', async () => {
-  const store = fakeStore({ profile: { profileId: 'alice', primaryAddress: ADDRESS }, claims: { alice: UID } });
+  const store = fakeStore({ profile: { profileId: '@alice', primaryAddress: ADDRESS }, claims: { '@alice': UID } });
   store.write = async () => { throw Object.assign(new Error('denied'), { code: 'permission-denied' }); };
-  await assert.rejects(() => renameProfileIdIn(store, 'bob'), /denied/);
-  assert.deepEqual(store.state.claims, { alice: UID }, 'the new claim is released again');
-  assert.deepEqual(store.state.profile, { profileId: 'alice', primaryAddress: ADDRESS });
+  await assert.rejects(() => renameProfileIdIn(store, '@bob'), /denied/);
+  assert.deepEqual(store.state.claims, { '@alice': UID }, 'the new claim is released again');
+  assert.deepEqual(store.state.profile, { profileId: '@alice', primaryAddress: ADDRESS });
 
   // And a rename onto an ID somebody else holds is refused before any write.
-  const taken = fakeStore({ profile: { profileId: 'alice', primaryAddress: '' }, claims: { alice: UID, bob: 'uid-2' } });
-  await assert.rejects(() => renameProfileIdIn(taken, 'bob'), (error) => error.code === 'ID_TAKEN');
+  const taken = fakeStore({ profile: { profileId: '@alice', primaryAddress: '' }, claims: { '@alice': UID, '@bob': 'uid-2' } });
+  await assert.rejects(() => renameProfileIdIn(taken, '@bob'), (error) => error.code === 'ID_TAKEN');
   assert.equal(taken.state.writes.length, 0);
-  assert.deepEqual(taken.state.claims, { alice: UID, bob: 'uid-2' });
+  assert.deepEqual(taken.state.claims, { '@alice': UID, '@bob': 'uid-2' });
+});
+
+// One save path for the Edit form: ID and primary wallet are written together,
+// and a primary wallet that is not linked is refused before anything is sent.
+test('saving writes the ID and primary wallet together, and refuses a stray wallet', async () => {
+  const store = fakeStore({ profile: { profileId: '@alice', primaryAddress: '' }, claims: { '@alice': UID } });
+  await assert.rejects(
+    () => saveProfileIn(store, { profileId: '@alice', primaryAddress: ADDRESS, linked: [OTHER] }),
+    /link that wallet/,
+  );
+  assert.equal(store.state.writes.length, 0, 'a refused save writes nothing');
+
+  const saved = await saveProfileIn(store,
+    { profileId: '@alice', primaryAddress: ADDRESS, linked: [ADDRESS] });
+  assert.deepEqual(saved, { profileId: '@alice', primaryAddress: ADDRESS });
+  assert.deepEqual(store.state.writes, [{ profileId: '@alice', primaryAddress: ADDRESS }]);
+
+  // A save that also changes the ID claims the new one and releases the old one.
+  const renamed = await saveProfileIn(store,
+    { profileId: '@alice-b', primaryAddress: '', linked: [ADDRESS] });
+  assert.deepEqual(renamed, { profileId: '@alice-b', primaryAddress: '' });
+  assert.deepEqual(store.state.claims, { '@alice-b': UID });
+  assert.deepEqual(store.state.releases, ['@alice']);
 });
 
 test('the Firestore store keeps the claim and the profile in separate documents', async () => {

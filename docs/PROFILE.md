@@ -10,9 +10,14 @@ password. A profile ID is a handle, never a key.
 ## Documents
 
 ```
-profiles/{uid}                    = { profileId: "somchai", primaryAddress: "G…" | "" }
-profileIds/{profileId}            = { uid: "…" }
+profiles/{uid}                    = { profileId: "@somchai", primaryAddress: "G…" | "" }
+profileIds/{profileId}            = { uid: "…" }      // e.g. profileIds/@somchai
 ```
+
+The `@` is part of the stored ID, not decoration added while rendering: the
+label, the profile field and the claim document id are the same string. A bare
+name without `@` is rejected rather than silently rewritten, so what is stored
+is exactly what is shown and claimed.
 
 - Both fields always exist on the profile, so the rules can check the shape
   without looping, and there is nowhere to add a name, balance, history, seed,
@@ -47,11 +52,18 @@ requirement is normally satisfied by signing in.
 - **Taken ID**: reported as taken, before and after the race. A concurrent claim
   loses at the rules (`create` only), and that refusal is reported as "taken",
   not as a generic error.
-- **Change the ID**: a typo is the usual reason, so it is a first-class action
-  instead of delete-and-recreate. The new claim is taken first, the profile is
-  written, and only then is the old claim released — so a failure in between
-  leaves the account holding its existing ID and frees the new one again. The
-  primary wallet choice survives.
+- **Edit**: the ID and the primary wallet are edited together in one form with
+  **Save changes** / **Cancel**, and both are written in a single profile write.
+  The new ID's claim is taken first, the profile is written, and only then is the
+  old claim released — so a failure in between leaves the account holding its
+  existing ID and frees the new one again. Cancel restores both fields from the
+  saved profile; nothing is sent.
+- **What is editable, and what is not**: the ID and the primary wallet are the
+  only two stored fields, and both are editable. The email is not: it is the
+  provider's identity for the account, shown with its verified badge, and
+  `firestore.rules` reads `email_verified` from the signed-in token — a change
+  here would have to happen at the provider and is deliberately not offered, so
+  the card says so instead of showing a dead control.
 - **Change primary wallet**: allowed only to one of the linked addresses; the
   select lists those, and the rules re-check the link.
 - **Delete**: removes `profiles/{uid}` and the claim it holds, freeing the ID.
@@ -80,11 +92,13 @@ Settings. It is display only and is not resolvable to an address yet.
 
 ## What is verified, and what is not
 
-- `npm test` includes `tests/profile.test.mjs` (12 checks): ID validation and
-  wording, the exact two-field document, claim/race handling, the round trip
-  (create → primary → delete → release), changing an ID (new claim first, old
-  released after, failed rename gives the new ID back), the Firestore store
-  writing one profile and one claim document, refusal wording, and assertions on the rules file
+- `npm test` includes `tests/profile.test.mjs` (13 checks): ID validation and
+  wording (including that `@` is required and stored), the exact two-field
+  document, claim/race handling, the round trip (create → primary → delete →
+  release), editing (one save writes ID + primary together, new claim first, old
+  released after, failed save gives the new ID back, an unlinked primary wallet is
+  refused before any write), the Firestore store writing one profile and one
+  claim document, refusal wording, and assertions on the rules file
   (verified-email requirement, `hasOnly` shapes, claim/`walletLinks` linkage,
   no `list`, no `update`, deny-all fallback, no `if true`).
 - The card was rendered in a local build and shows, for a signed-out visitor,
