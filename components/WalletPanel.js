@@ -1010,7 +1010,8 @@ export default function WalletPanel() {
           {page === 'shielded' && <ShieldedGatePage />}
 
           {page === 'activity' && (
-            <ActivityPage history={history} activeName={active?.name || (watchAddress ? 'watch only' : '')}
+            <ActivityPage history={history}
+              activeName={active?.name || (watchAddress ? `watch only · ${shortAddr(watchAddress, 6)}` : '')}
               chain={chainHistory}
               issuance={{ minted: policyMinted(liveLedger ?? ledger), ledger: liveLedger ?? ledger }}
               onRecheck={recheckTransfer} canRecheck={isIndexerConfigured()} />
