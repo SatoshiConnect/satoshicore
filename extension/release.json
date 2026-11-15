@@ -1,0 +1,65 @@
+{
+  "version": "24.0.0",
+  "file": "nsat-wallet-v24.0.0-production.zip",
+  "bytes": 80478,
+  "sha256": "945d58a2bb80c8b392adb478e847c32d99c6a0195b9743e321669191f8d99f01",
+  "builtAt": "2026-11-14",
+  "manifestVersion": 3,
+  "permissions": [
+    "storage",
+    "downloads"
+  ],
+  "hosts": [
+    "https://gateway.satoshicore.org/*",
+    "https://satoshicore.org/*"
+  ],
+  "endpoints": {
+    "gateway": "https://gateway.satoshicore.org",
+    "indexer": "https://satoshicore.org"
+  },
+  "tests": {
+    "passed": 10,
+    "failed": 0
+  },
+  "firefoxFile": "nsat-wallet-v24.0.0-firefox.zip",
+  "storePublished": false,
+  "browsers": [
+    {
+      "name": "Google Chrome",
+      "status": "BUILD_PRODUCED",
+      "note": "Chromium MV3 build; shared artifact suite green; not loaded by a human yet"
+    },
+    {
+      "name": "Microsoft Edge",
+      "status": "BUILD_PRODUCED",
+      "note": "Same Chromium MV3 build; Edge not exercised separately"
+    },
+    {
+      "name": "Brave",
+      "status": "BUILD_PRODUCED",
+      "note": "Same Chromium MV3 build; Brave not exercised separately"
+    },
+    {
+      "name": "Mozilla Firefox",
+      "status": "BUILD_PRODUCED",
+      "note": "dist-firefox with gecko id wallet@satoshicore.org (MV3); not loaded in Firefox yet"
+    },
+    {
+      "name": "Opera",
+      "status": "NOT_TESTED",
+      "note": "Chromium-based; unverified"
+    },
+    {
+      "name": "Vivaldi",
+      "status": "NOT_TESTED",
+      "note": "Chromium-based; unverified"
+    },
+    {
+      "name": "Safari (macOS)",
+      "status": "NOT_SUPPORTED",
+      "note": "Requires an Xcode/Safari extension package and distribution review"
+    }
+  ],
+  "firefoxBytes": 80515,
+  "firefoxSha256": "40bc0f8c5db37501f62094e7ba7dba859e914326d6e62df6994314be95f53165"
+}

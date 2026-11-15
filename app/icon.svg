@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="SatoshiCore">
+  <rect width="1024" height="1024" rx="228" fill="#2D5BE6" />
+  <g transform="translate(512 512) scale(1)">
+    <path d="M-352-58.7-160-230.4H160L352-58.7 0 422.4Z" fill="#fff" />
+    <path d="M0 422.4-160-230.4H0Z" fill="#fff" opacity="0.8" />
+    <path d="M-352-58.7H352L0 422.4Z" fill="#fff" opacity="0.9" />
+    <path d="M-160-230.4H160L0-58.7Z" fill="#fff" />
+  </g>
+</svg>

@@ -68,6 +68,94 @@ paths:
                   serverTime: { type: string, nullable: true }
                   network: { type: string }
       security: []
+  /api/v1/explorer/snapshot:
+    get:
+      operationId: explorerSnapshot
+      summary: Read-only node snapshot for the explorer dashboard
+      description: >
+        Aggregates four read-only node GETs (/info, /peers, /quorum, /metrics)
+        into one cached reading, plus the ledger closes this gateway witnessed
+        itself. Values are real readings only — a source that fails is listed in
+        `partial` instead of being filled in. When the node is briefly
+        unreachable the last reading is served with `stale: true` and its
+        original `observedAt`, so clients can show its age.
+      responses:
+        "200":
+          description: Node snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, source, observedAt, ledger]
+                properties:
+                  ok: { type: boolean }
+                  source: { type: string, enum: [nsat-core] }
+                  observedAt: { type: integer, description: epoch milliseconds }
+                  stale: { type: boolean }
+                  partial:
+                    type: array
+                    items: { type: string, enum: [peers, quorum, metrics] }
+                  network: { type: string, nullable: true }
+                  protocolVersion: { type: integer, nullable: true }
+                  state: { type: string, nullable: true }
+                  ledger:
+                    type: object
+                    properties:
+                      num: { type: integer, nullable: true }
+                      closeTime: { type: integer, nullable: true }
+                      age: { type: integer, nullable: true }
+                      baseFee: { type: integer, nullable: true }
+                      maxTxSetSize: { type: integer, nullable: true }
+                      hash: { type: string, nullable: true }
+                  peers:
+                    type: object
+                    properties:
+                      authenticated: { type: integer, nullable: true }
+                      pending: { type: integer, nullable: true }
+                  quorum:
+                    type: object
+                    properties:
+                      agreeCount: { type: integer, nullable: true }
+                      validated: { type: boolean, nullable: true }
+                      phase: { type: string, nullable: true }
+                      lagMs: { type: integer, nullable: true }
+                      nodeCount: { type: integer, nullable: true }
+                  validators:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        self: { type: boolean }
+                        direction: { type: string, enum: [self, inbound, outbound] }
+                        latencyMs: { type: integer, nullable: true }
+                        version: { type: string, nullable: true }
+                        agree: { type: boolean, nullable: true }
+                  metrics:
+                    type: object
+                    description: Selected nsat-core /metrics values (ms, counts)
+                  history:
+                    type: object
+                    description: Ledger closes this gateway witnessed since `since`
+                    properties:
+                      since: { type: integer }
+                      closes:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            num: { type: integer }
+                            closeTime: { type: integer }
+                            seconds: { type: number, nullable: true }
+                            txs: { type: integer, nullable: true }
+                            tps: { type: number, nullable: true }
+                      samples:
+                        type: array
+                        items: { type: object }
+        "503":
+          description: Core node unreachable and no recent reading cached
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+      security: []
   /api/v1/account:
     get:
       operationId: getAccount

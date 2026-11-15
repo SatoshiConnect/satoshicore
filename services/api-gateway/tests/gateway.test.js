@@ -360,3 +360,94 @@ test('hardening headers present on every response (JSON, proxied, error)', async
     mockCore.close();
   }
 });
+
+// The live node serves /info, /peers, /quorum and /metrics from the loop that
+// applies ledgers, so a read that lands inside a multi-second close stalls and
+// then answers at once. `stallOnce` models exactly that: the first read of one
+// path misses the window, the retry lands right after it.
+function startStallingCore({ stallPath, stallMs, stallOnce = true }) {
+  let stalled = 0;
+  const doc = (path) => {
+    if (path === '/info') return { info: { ledger: { num: 9, closeTime: 1000 }, network: 'NSAT Mainnet' } };
+    if (path === '/peers') return { authenticated_peers: { inbound: [], outbound: [] } };
+    if (path === '/quorum') return { node: 'GAMOJ', qset: { agree: ['GAMOJ'], validated: true, phase: 'EXTERNALIZE' } };
+    if (path === '/metrics') return { metrics: { 'ledger.apply.success': { count: 1 } } };
+    return null;
+  };
+  return new Promise((resolve) => {
+    const server = http.createServer((req, res) => {
+      const path = req.url.split('?')[0];
+      const body = doc(path);
+      if (!body) {
+        res.writeHead(404);
+        res.end('{}');
+        return;
+      }
+      const stall = path === stallPath && (stallOnce ? stalled === 0 : true);
+      if (stall) {
+        stalled += 1;
+        setTimeout(() => {
+          if (res.destroyed) return;
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(body));
+        }, stallMs);
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(body));
+    });
+    server.listen(0, '127.0.0.1', () => resolve(server));
+  });
+}
+
+async function startGatewayAgainst(corePort, env) {
+  process.env.NSAT_CORE_HTTP_URL = `http://127.0.0.1:${corePort}`;
+  process.env.RATE_MAX_REQUESTS = '1000';
+  process.env.EXPLORER_CACHE_MS = '0';
+  Object.assign(process.env, env);
+  delete require.cache[require.resolve('../server.js')];
+  const { createServer: freshCreate } = require('../server.js');
+  const gateway = freshCreate();
+  await new Promise((r) => gateway.listen(0, '127.0.0.1', r));
+  return gateway;
+}
+
+test('explorer snapshot retries a read that stalled inside a ledger close', async () => {
+  const mockCore = await startStallingCore({ stallPath: '/metrics', stallMs: 900, stallOnce: true });
+  const gateway = await startGatewayAgainst(mockCore.address().port, {
+    EXPLORER_ATTEMPT_MS: '400',
+    EXPLORER_DEADLINE_MS: '4000',
+    EXPLORER_RETRY_DELAY_MS: '20'
+  });
+  try {
+    const snap = await request(gateway.address().port, '/api/v1/explorer/snapshot');
+    assert.equal(snap.status, 200);
+    const body = JSON.parse(snap.body);
+    // The retry reached the node: no field is reported unavailable, and the
+    // metrics really are the node's own numbers.
+    assert.deepEqual(body.partial, []);
+    assert.equal(body.metrics.applySuccess, 1);
+  } finally {
+    gateway.close();
+    mockCore.close();
+  }
+});
+
+test('explorer snapshot still reports a field the node never answered', async () => {
+  const mockCore = await startStallingCore({ stallPath: '/metrics', stallMs: 5000, stallOnce: false });
+  const gateway = await startGatewayAgainst(mockCore.address().port, {
+    EXPLORER_ATTEMPT_MS: '300',
+    EXPLORER_DEADLINE_MS: '900',
+    EXPLORER_RETRY_DELAY_MS: '20'
+  });
+  try {
+    const snap = await request(gateway.address().port, '/api/v1/explorer/snapshot');
+    assert.equal(snap.status, 200);
+    const body = JSON.parse(snap.body);
+    assert.deepEqual(body.partial, ['metrics']);
+    assert.equal(body.metrics && body.metrics.applySuccess, null);
+  } finally {
+    gateway.close();
+    mockCore.close();
+  }
+});

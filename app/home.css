@@ -1,0 +1,370 @@
+/* Neon home page — the same visual language as /dashboard (deep navy, glowing
+ * cyan/green cards, monospace figures) but with the site's real content and
+ * real live figures. Only #/api/v1/network/status feeds the tiles, so nothing
+ * here is fabricated. */
+
+body:has(.np) {
+  overflow-x: hidden;
+}
+
+/* The home page sits in the same shell as every other route: shared header,
+ * shared content width, shared footer. Only the hero content is its own. */
+body:has(.np) .site-main {
+  max-width: none;
+  padding: 1.75rem 0 0;
+}
+
+body:has(.np) .site-header {
+  border-bottom-color: rgba(56, 189, 248, 0.2);
+  background: rgba(5, 10, 20, 0.9);
+}
+
+body:has(.np) .brand,
+body:has(.np) .main-nav a:hover {
+  color: #e6f3ff;
+}
+
+body:has(.np) .brand-sub,
+body:has(.np) .main-nav a {
+  color: #7b93ad;
+}
+
+body:has(.np) .main-nav a[aria-current='page'] {
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.14);
+}
+
+body:has(.np) .site-footer {
+  border-top: 1px solid rgba(56, 189, 248, 0.16);
+  background: #04070f;
+  color: #7b93ad;
+}
+
+body:has(.np) .site-footer a {
+  color: #7dd3fc;
+}
+
+.np {
+  --fg: #e6f3ff;
+  --dim: #7c93ad;
+  --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+
+  position: relative;
+  width: 100%;
+  padding: 0 0 1rem;
+  /* The decorative halo is wider than the content column by design; clip it
+   * here so it can never create a horizontal scrollbar on phones. */
+  overflow-x: clip;
+  color: var(--fg);
+}
+
+/* Same measure and gutters as .container on every other page. */
+.np > * {
+  position: relative;
+  max-width: var(--page-max);
+  margin: 0 auto;
+  padding-left: var(--gutter);
+  padding-right: var(--gutter);
+}
+
+/* -------------------------------- Hero ---------------------------------- */
+
+.np-hero {
+  padding-top: 3rem;
+  padding-bottom: 1rem;
+}
+
+.np-halo {
+  position: absolute;
+  left: 50%;
+  top: -120px;
+  width: min(980px, 120%);
+  height: 480px;
+  transform: translateX(-50%);
+  pointer-events: none;
+  background:
+    radial-gradient(closest-side, rgba(56, 189, 248, 0.22), transparent 72%),
+    radial-gradient(closest-side at 60% 40%, rgba(74, 222, 128, 0.12), transparent 70%);
+  filter: blur(6px);
+}
+
+.np-badges {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.1rem;
+}
+
+.np-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #9fb6cc;
+  padding: 0.3rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid rgba(120, 150, 180, 0.3);
+  background: rgba(12, 22, 40, 0.75);
+}
+
+.np-pill i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #fbbf24;
+  box-shadow: 0 0 8px #fbbf24;
+}
+
+.np-pill.is-green {
+  color: #86efac;
+  border-color: rgba(74, 222, 128, 0.42);
+  background: rgba(74, 222, 128, 0.1);
+}
+
+.np-pill.is-green i {
+  background: #4ade80;
+  box-shadow: 0 0 8px #4ade80;
+}
+
+/* Same title scale as .page-head on every other route. */
+.np h1 {
+  margin: 0 0 0.75rem;
+  font-size: clamp(1.75rem, 3vw, 2.35rem);
+  line-height: 1.12;
+  letter-spacing: -0.03em;
+  color: #f2fbff;
+  text-shadow: 0 0 34px rgba(56, 189, 248, 0.3);
+}
+
+.np-lead {
+  max-width: 68ch;
+  margin: 0 0 0.85rem;
+  font-size: 0.9375rem;
+  line-height: 1.65;
+  color: var(--muted);
+}
+
+.np-lead.is-muted {
+  color: var(--dim);
+}
+
+.np-cta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin: 1.4rem 0 1.6rem;
+}
+
+.np-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  letter-spacing: 0.04em;
+  padding: 0.6rem 1.05rem;
+  border-radius: 10px;
+  text-decoration: none;
+  color: #04121c;
+  background: linear-gradient(180deg, #7dd3fc, #38bdf8);
+  border: 1px solid rgba(125, 211, 252, 0.9);
+  box-shadow: 0 0 22px rgba(56, 189, 248, 0.45);
+}
+
+.np-button:hover {
+  color: #04121c;
+  text-decoration: none;
+  box-shadow: 0 0 30px rgba(56, 189, 248, 0.7);
+}
+
+.np-button.is-secondary {
+  color: #d7f7e5;
+  background: linear-gradient(180deg, rgba(74, 222, 128, 0.28), rgba(74, 222, 128, 0.1));
+  border-color: rgba(74, 222, 128, 0.6);
+  box-shadow: 0 0 20px rgba(74, 222, 128, 0.3);
+}
+
+.np-button.is-secondary:hover {
+  color: #eafff3;
+  box-shadow: 0 0 28px rgba(74, 222, 128, 0.5);
+}
+
+.np-button.is-ghost {
+  color: #bcd8f2;
+  background: rgba(56, 189, 248, 0.08);
+  border-color: rgba(56, 189, 248, 0.32);
+  box-shadow: none;
+}
+
+.np-button.is-ghost:hover {
+  color: #e6f3ff;
+  box-shadow: 0 0 20px rgba(56, 189, 248, 0.3);
+}
+
+/* --------------------------- Live figures ------------------------------- */
+
+.np-live {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 0.55rem;
+  margin-top: 0.4rem;
+}
+
+.np-tile {
+  --tone: #38bdf8;
+  position: relative;
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: var(--radius-lg, 16px);
+  /* Same chrome as .panel/.card everywhere else; tone only tints the label. */
+  border: 1px solid var(--border);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--tone) 10%, transparent), transparent 76%),
+    var(--card);
+  box-shadow: inset 0 1px 0 rgba(125, 211, 252, 0.08), 0 12px 30px rgba(2, 6, 14, 0.45);
+  backdrop-filter: blur(6px);
+  overflow: hidden;
+}
+
+.np-tile.is-cyan { --tone: #22d3ee; }
+.np-tile.is-violet { --tone: #a855f7; }
+.np-tile.is-amber { --tone: #fbbf24; }
+
+.np-tile-label {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #7f97ae;
+}
+
+.np-tile b {
+  font-family: var(--mono);
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: color-mix(in srgb, var(--tone) 85%, white);
+  text-shadow: 0 0 16px color-mix(in srgb, var(--tone) 50%, transparent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.np-tile-sub {
+  font-size: 0.6875rem;
+  color: #6d859c;
+}
+
+.np-relay {
+  margin: 0.7rem 0 0;
+  font-size: 0.6875rem;
+  letter-spacing: 0.03em;
+  color: #5f7a92;
+}
+
+.np-relay.mono,
+.np-mono-line {
+  font-family: var(--mono);
+}
+
+.np-relay.is-warn {
+  color: #fbbf24;
+  max-width: 72ch;
+  line-height: 1.5;
+}
+
+/* ------------------------------ Sections -------------------------------- */
+
+.np-section {
+  padding-top: 2.4rem;
+}
+
+/* Section headings use the same mono label as .panel-title / .page-eyebrow so
+ * the home page and the content pages share one hierarchy. */
+.np-section h2 {
+  margin: 0 0 0.9rem;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #cfe9ff;
+}
+
+.np-section h2::after {
+  content: '';
+  display: block;
+  width: 42px;
+  height: 1px;
+  margin-top: 0.5rem;
+  background: linear-gradient(90deg, #38bdf8, rgba(56, 189, 248, 0));
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.7);
+}
+
+.np-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0.6rem;
+}
+
+.np-card {
+  --tone: #38bdf8;
+  padding: 0.9rem 1rem 1rem;
+  border-radius: var(--radius-lg, 16px);
+  /* Same panel chrome as docs/status/search/wallet cards. */
+  border: 1px solid var(--border);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--tone) 8%, transparent), transparent 70%),
+    var(--card);
+  box-shadow: inset 0 1px 0 rgba(125, 211, 252, 0.08), 0 12px 30px rgba(2, 6, 14, 0.45);
+  backdrop-filter: blur(6px);
+}
+
+.np-card.is-green { --tone: #4ade80; }
+.np-card.is-violet { --tone: #a855f7; }
+.np-card.is-cyan { --tone: #22d3ee; }
+.np-card.is-amber { --tone: #fbbf24; }
+
+.np-card h3 {
+  margin: 0 0 0.35rem;
+  font-size: 0.95rem;
+  color: color-mix(in srgb, var(--tone) 60%, white);
+}
+
+.np-card p {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: #b6cbe0;
+}
+
+.np-card p:last-child {
+  margin-bottom: 0;
+}
+
+.np-card a {
+  color: #7dd3fc;
+}
+
+.np-mono-line {
+  margin: 0 0 0.45rem !important;
+  font-size: 0.6875rem !important;
+  letter-spacing: 0.04em;
+  color: #7f97ae !important;
+}
+
+.np-run {
+  padding-bottom: 1rem;
+}
+
+@media (max-width: 640px) {
+  .np-hero {
+    padding-top: 2rem;
+  }
+  .np h1 {
+    font-size: 1.75rem;
+  }
+}

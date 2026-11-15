@@ -1,24 +1,117 @@
+import Link from 'next/link';
+import PageHeader from '../../components/PageHeader';
+import { NSAT, groupExact } from '../../lib/nsatToken';
+
 export const metadata = {
-  title: 'Docs — SatoshiCore'
+  title: 'Docs — SatoshiCore NSAT'
 };
 
 export default function DocsPage() {
   return (
-    <div>
-      <h1>Documentation</h1>
-      <h2>Deployment architecture</h2>
-      <ul>
-        <li>Static export via Next.js <code>output: &apos;export&apos;</code>, deployed to GitHub Pages by GitHub Actions.</li>
-        <li>Production domain: <code>satoshicore.org</code> and <code>www.satoshicore.org</code> (DNS setup pending owner approval — see <code>docs/DEPLOYMENT.md</code>).</li>
-        <li>Web Wallet API Gateway and Blockchain Indexer are separate backend services; this site consumes them from the browser only.</li>
-        <li>Features that depend on unavailable backends render an explicit offline/experimental state.</li>
-      </ul>
-      <h2>Security</h2>
-      <p>
-        See <code>SECURITY.md</code>. In short: no secrets in the repository or
-        static output, no public administrative APIs, and no publication of
-        the production Web Wallet without owner approval.
-      </p>
+    <div className="stack">
+      <PageHeader
+        eyebrow="NSAT · documentation"
+        title="Documentation"
+        lead="What NSAT is, how this site works, and how the wallet keeps a key safe."
+        actions={
+          <>
+            <Link href="/dashboard" className="button">Live explorer</Link>
+            <Link href="/wallet" className="button secondary">Open the wallet</Link>
+          </>
+        }
+      />
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2 className="panel-title">What this project is (and is not)</h2>
+          <span className="panel-meta">study project</span>
+        </div>
+        <div className="panel-body">
+          <p>
+            An independent, non-commercial study project. Nothing is sold, there is
+            no presale, and nothing here is investment advice.
+          </p>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2 className="panel-title">What NSAT is</h2>
+          <span className="panel-meta">{NSAT.decimals} decimals · fee {NSAT.baseFee}</span>
+        </div>
+        <div className="panel-body">
+          <ul className="status-list">
+            <li>
+              <strong>Own chain:</strong> SatoshiCore, own genesis, fixed supply —
+              not a token on another network.
+            </li>
+            <li>
+              <strong>Decimals:</strong> {NSAT.decimals} — whole NSAT only.
+            </li>
+            <li>
+              <strong>Fee:</strong> {NSAT.baseFee} NSAT per operation, read from the
+              live ledger before signing.
+            </li>
+            <li>
+              <strong>Base reserve:</strong> {groupExact(NSAT.baseReserve)} NSAT; a
+              new account needs {groupExact(NSAT.createMinimum)} NSAT on its first
+              deposit (2× reserve).
+            </li>
+            <li>
+              <strong>Accounts:</strong> {NSAT.accountKey} — one address across the
+              iPhone app, desktop wallet and this site.
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2 className="panel-title">How this site is served</h2>
+          <span className="panel-meta">static export · one origin</span>
+        </div>
+        <div className="panel-body">
+          <ul className="status-list">
+            <li>
+              <strong>Static export</strong> served by Caddy — no Node.js server
+              behind the page.
+            </li>
+            <li>
+              Same origin only: <code>/api/v1/*</code> is the gateway,{' '}
+              <code>/v1/*</code> is the indexer behind{' '}
+              <Link href="/explorer">search</Link>.
+            </li>
+            <li>
+              If a service is down the UI says so — it never shows a fabricated
+              balance or history row.
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2 className="panel-title">Security model</h2>
+          <span className="panel-meta">client-side signing</span>
+        </div>
+        <div className="panel-body">
+          <ul className="status-list">
+            <li>
+              Seeds are generated here, encrypted with PBKDF2 + AES-GCM, and stored
+              only as ciphertext. Signing is client-side; the gateway relays signed
+              envelopes.
+            </li>
+            <li>
+              No signature unless the gateway reports the exact network identity{' '}
+              <span className="mono">{NSAT.network}</span>.
+            </li>
+            <li>
+              Shielded transfers need the native prover, so they are desktop-only.
+            </li>
+            <li>Full review: <code>SECURITY.md</code> in the repository.</li>
+          </ul>
+        </div>
+      </section>
     </div>
   );
 }

@@ -1,132 +1,646 @@
+/* SatoshiCore web — design tokens mirrored from the iPhone app.
+ *
+ * Source of truth (verbatim values):
+ *   gemwallet/ios/Packages/Style/Sources/Colors.swift
+ *     blue #2D5BE6 · blueDark #1742C5 · red #F84E4E · green #1B9A6C
+ *     orange #FF9314 · gray #818181 · grayVeryLight #F4F4F4 / #333333
+ *     grayBackground #F2F2F7 / #1C1C1E · black #222222 / #FFFFFF
+ *   gemwallet/ios/Packages/Style/Sources/GemFont.swift
+ *     title1 36/600 · title2 22/500 · title3 20/500 · headline 17/500
+ *     body 16/500 · callout 13/500 · footnote 12/500
+ *   gemwallet/ios/Packages/Style/Sources/Button/ColorButtonStyle.swift
+ *     cornerRadius space12 (12pt), label weight .semibold
+ *
+ * The app ships light and dark; so does the site, following the OS setting.
+ * Nothing here uses Bitcoin orange — NSAT is its own chain and the wallet is
+ * the same product on phone and on the web.
+ */
+
+/* One theme for every route. The site used to speak three visual languages
+ * (neon home, neon dashboard, iOS-light wallet/docs), which read as three
+ * separate websites. These tokens are now the only palette: neon navy
+ * surfaces, cyan accent, and the same chrome on every page. */
 :root {
-  --bg: #0b0f14;
-  --fg: #e6edf3;
-  --muted: #8b949e;
-  --accent: #f7931a;
-  --card: #12181f;
-  --border: #1f2730;
+  color-scheme: dark;
+
+  /* Neutral slate surfaces with one electric-indigo accent — the palette
+   * today's wallets and exchanges converge on (Coinbase, Phantom, Robinhood)
+   * instead of the 2021 cyan-on-navy glow. Accent is reserved for actions,
+   * focus and live state; everything structural is a grey step. */
+  --bg: #0a0c11;
+  --bg-deep: #07080c;
+  --surface: #12151c;
+  --card: #14171f;
+  --fg: #edf1f7;
+  --muted: #8b94a7;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --fill: rgba(255, 255, 255, 0.06);
+
+  /* White labels on the accent fill need 4.5:1, which caps how light this can
+   * be: #4c6fff measured 4.18:1 and failed. Pressed goes deeper, as it does in
+   * the light theme, instead of lighter (white on #6b87ff was 3.21:1). */
+  --accent: #4464f2;
+  --accent-pressed: #3a56db;
+  --accent-tint: rgba(68, 100, 242, 0.14);
+  --on-accent: #ffffff;
+  /* Accent as TEXT needs its own step: #4c6fff on a card is 4.29:1, under AA.
+   * --accent stays the fill/focus colour (white on it is 4.68:1). */
+  --link: #8fa2ff;
+
+  /* Filled brand mark: indigo tile with a white glyph, identical in both
+   * themes, so it lives here instead of inline in the rule. */
+  --brand-grad: linear-gradient(180deg, #5b7bff, #3f5ce0);
+  --brand-ink: #ffffff;
+
+  --ok: #2ed3a0;
+  --ok-tint: rgba(46, 211, 160, 0.12);
+  --warn: #f5a524;
+  --warn-tint: rgba(245, 165, 36, 0.12);
+  --danger: #f0616d;
+  --danger-tint: rgba(240, 97, 109, 0.12);
+
+  /* Surfaces built from tokens, so a theme only swaps values. */
+  --card-grad: linear-gradient(180deg, #171a23, #13161d);
+  --bg-top: #0b0d14;
+  --bg-glow-a: rgba(76, 111, 255, 0.14);
+  --bg-glow-b: rgba(46, 211, 160, 0.07);
+
+  --radius-sm: 10px;
+  --radius: 14px;
+  --radius-lg: 18px;
+
+  /* Height of the sticky global header services keep clear of. */
+  --chrome-h: 57px;
+
+  /* One content width and gutter for every route: the home page, the
+   * explorer, the wallet, search, docs and status all line up on the same
+   * left edge instead of each inventing its own measure. */
+  --page-max: 1240px;
+  --gutter: clamp(1rem, 2.5vw, 1.5rem);
+
+  --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue',
+    system-ui, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+}
+
+/* Light theme: the SAME tokens, different values. Nothing below re-declares
+ * a component; every rule keeps reading --bg/--fg/--accent/etc. */
+[data-theme='light'] {
+  color-scheme: light;
+
+  --bg: #f6f7f9;
+  --bg-deep: #eceef2;
+  --surface: #ffffff;
+  --card: #ffffff;
+  --fg: #10141a;
+  --muted: #566072;
+  --border: rgba(16, 20, 26, 0.1);
+  --border-strong: rgba(16, 20, 26, 0.2);
+  --fill: rgba(16, 20, 26, 0.05);
+
+  /* A touch deeper than the dark-mode indigo so text/actions stay AA on white. */
+  --accent: #3b5bdb;
+  --accent-pressed: #2c46b8;
+  --accent-tint: rgba(59, 91, 219, 0.1);
+  --on-accent: #ffffff;
+  --link: #3b5bdb;
+
+  --ok: #0a7f60;
+  --ok-tint: rgba(10, 127, 96, 0.1);
+  --warn: #a45b06;
+  --warn-tint: rgba(164, 91, 6, 0.1);
+  --danger: #cf2f45;
+  --danger-tint: rgba(207, 47, 69, 0.1);
+
+  --card-grad: linear-gradient(180deg, #ffffff, #fafbfd);
+  --bg-top: #fbfcfe;
+  --bg-glow-a: rgba(59, 91, 219, 0.09);
+  --bg-glow-b: rgba(11, 143, 108, 0.05);
+
+  /* Floor depth: shadows read differently on light surfaces. */
+  --shadow-card: 0 1px 2px rgba(16, 20, 26, 0.06), 0 10px 24px rgba(16, 20, 26, 0.06);
 }
 
 * {
   box-sizing: border-box;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
   margin: 0;
-  background: var(--bg);
+  /* Column flex so a short page still pushes the shared footer to the bottom
+   * instead of leaving it stranded mid-screen. */
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background:
+    radial-gradient(900px 480px at 12% -12%, var(--bg-glow-a), transparent 60%),
+    radial-gradient(760px 420px at 92% -8%, var(--bg-glow-b), transparent 60%),
+    linear-gradient(180deg, var(--bg-top) 0%, var(--bg) 46%, var(--bg-deep) 100%);
+  background-attachment: fixed;
+  background-color: var(--bg);
   color: var(--fg);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  line-height: 1.6;
+  font-family: var(--font);
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: -0.01em;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* GemFont scale, remapped to the web type ramp. */
+h1,
+h2,
+h3,
+h4 {
+  color: var(--fg);
+  letter-spacing: -0.02em;
+}
+
+h1 {
+  font-size: clamp(2rem, 4.4vw, 2.75rem); /* title1 36 → display 44 */
+  font-weight: 600;
+  line-height: 1.12;
+  margin: 0 0 0.75rem;
+}
+
+h2 {
+  font-size: 1.375rem; /* title2 22 */
+  font-weight: 500;
+  line-height: 1.3;
+  margin: 2rem 0 0.75rem;
+}
+
+h3 {
+  font-size: 1.0625rem; /* headline 17 */
+  font-weight: 600;
+  line-height: 1.35;
+  margin: 0 0 0.5rem;
+}
+
+p {
+  margin: 0 0 1rem;
+}
+
+a {
+  color: var(--link);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--accent-pressed);
+  text-decoration: underline;
+}
+
+hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2rem 0;
 }
 
 .container {
-  max-width: 1080px;
+  max-width: var(--page-max);
   margin: 0 auto;
-  padding: 0 1.25rem;
+  padding: 0 var(--gutter);
 }
 
 .site-main {
   padding-top: 2rem;
-  padding-bottom: 4rem;
+  padding-bottom: 3.5rem;
   min-height: 60vh;
+  flex: 1 0 auto;
+  width: 100%;
 }
 
+/* Pages that manage their own inner layout still align to the same gutters. */
+.site-main > .np,
+.site-main > .nsx,
+.site-main > .nw-root {
+  width: 100%;
+}
+
+.site-footer {
+  margin-top: auto;
+  flex-shrink: 0;
+}
+
+/* ------------------------------- Header ------------------------------ */
+
 .site-header {
+  position: sticky;
+  top: 0;
+  z-index: 30;
   border-bottom: 1px solid var(--border);
-  background: rgba(11, 15, 20, 0.95);
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
 }
 
 .header-inner {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-top: 1rem;
-  padding-bottom: 1rem;
+  gap: 1rem;
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+  flex-wrap: wrap;
 }
 
 .brand {
-  font-size: 1.3rem;
-  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
   color: var(--fg);
   text-decoration: none;
 }
 
-.brand span {
-  color: var(--accent);
+.brand:hover {
+  color: var(--fg);
+  text-decoration: none;
+}
+
+.brand-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  background: var(--brand-grad);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  color: var(--brand-ink);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.brand-mark svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.brand-sub {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.main-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-wrap: wrap;
 }
 
 .main-nav a {
   color: var(--muted);
   text-decoration: none;
-  margin-left: 1.25rem;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  padding: 0.4rem 0.7rem;
+  border-radius: 999px;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .main-nav a:hover {
   color: var(--fg);
+  background: var(--fill);
+  text-decoration: none;
 }
 
+.main-nav a[aria-current='page'] {
+  color: var(--fg);
+  font-weight: 600;
+  background: var(--accent-tint);
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, transparent);
+}
+
+.main-nav a {
+  border: 1px solid transparent;
+}
+
+/* Theme switch: one button, two states, preference remembered. */
+.header-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--fill);
+  color: var(--fg);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.theme-toggle:hover {
+  background: var(--accent-tint);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.theme-toggle svg {
+  width: 17px;
+  height: 17px;
+  display: block;
+}
+
+/* -------------------------------- Hero ------------------------------- */
+
 .hero h1 {
-  font-size: 2.4rem;
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.75rem;
 }
 
 .lead {
   color: var(--muted);
-  max-width: 46rem;
+  font-size: 1.0625rem;
+  max-width: 44rem;
+  margin-bottom: 1.5rem;
 }
 
 .cta-row {
   display: flex;
-  gap: 1rem;
-  margin: 1.5rem 0 3rem;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin: 0 0 2.5rem;
 }
 
+/* ------------------------------ Buttons ------------------------------ */
+
 .button {
-  display: inline-block;
-  padding: 0.65rem 1.4rem;
-  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.7rem 1.25rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
   background: var(--accent);
-  color: #10140a;
+  color: var(--on-accent);
+  font-size: 0.9375rem;
   font-weight: 600;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  transition: background 0.15s ease, transform 0.05s ease;
+}
+
+.button:hover {
+  background: var(--accent-pressed);
+  color: var(--on-accent);
   text-decoration: none;
 }
 
+.button:active {
+  transform: translateY(1px);
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .button.secondary {
-  background: transparent;
-  border: 1px solid var(--border);
+  background: var(--surface);
+  border-color: var(--border-strong);
+  color: var(--fg);
+  box-shadow: none;
+}
+
+.button.secondary:hover {
+  background: var(--fill);
+  border-color: rgba(255, 255, 255, 0.24);
   color: var(--fg);
 }
+
+/* --------------------------- Page shell ------------------------------
+ * Every content page opens with the same eyebrow/title/lead block and stacks
+ * the same bordered panel below it. That uniformity is what makes the site
+ * read as one product rather than several.
+ */
+
+.page-head {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 20px;
+}
+
+.page-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--link);
+}
+
+.page-eyebrow::before {
+  content: '';
+  width: 24px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent));
+  flex-shrink: 0;
+}
+
+.page-head h1 {
+  margin: 0;
+  font-size: clamp(1.75rem, 3vw, 2.35rem);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+
+.page-lead {
+  margin: 0;
+  max-width: 68ch;
+  color: var(--muted);
+  font-size: 0.9375rem;
+  line-height: 1.65;
+}
+
+.page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.page-meta {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.panel {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card-grad);
+  box-shadow: var(--shadow-card, 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 28px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04));
+}
+
+.panel + .panel {
+  margin-top: 12px;
+}
+
+.panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.panel-title {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--fg);
+}
+
+.panel-meta {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  text-align: right;
+}
+
+.panel-body {
+  padding: 16px;
+}
+
+.stack {
+  display: grid;
+  gap: 12px;
+}
+
+.grid-panels {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+/* Narrow screens: the switch stays next to the brand, and the nav takes its
+ * own full row instead of pushing the switch onto a third line. */
+@media (max-width: 720px) {
+  .header-tools {
+    display: contents;
+  }
+
+  .header-inner {
+    row-gap: 0.5rem;
+  }
+
+  .brand {
+    order: 1;
+  }
+
+  .theme-toggle {
+    order: 2;
+  }
+
+  .main-nav {
+    order: 3;
+    flex: 1 1 100%;
+  }
+}
+
+/* Narrow screens: let the panel title own a full line instead of squeezing
+ * against its meta label. */
+@media (max-width: 560px) {
+  .panel-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .panel-meta {
+    text-align: left;
+  }
+}
+
+/* ------------------------------- Cards ------------------------------- */
 
 .grid-3 {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 1rem;
+  gap: 0.875rem;
 }
 
 .card {
-  background: var(--card);
+  background: var(--card-grad);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   padding: 1.25rem;
+  box-shadow: var(--shadow-card, 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 28px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04));
 }
 
 .card h3 {
   margin-top: 0;
 }
 
+.card p:last-child {
+  margin-bottom: 0;
+}
+
+.card a {
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+/* ------------------------------- Footer ------------------------------ */
+
 .site-footer {
   border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-deep) 92%, transparent);
   color: var(--muted);
-  font-size: 0.9rem;
+  font-size: 0.75rem;
   padding: 1.5rem 0;
 }
 
+.site-footer p {
+  margin: 0;
+}
+
+/* --------------------------- States / forms -------------------------- */
+
 .offline-banner {
-  background: #241a05;
-  border: 1px solid #5c4408;
-  border-radius: 10px;
-  padding: 1rem 1.25rem;
-  margin: 1.5rem 0;
+  background: var(--warn-tint);
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+  border-radius: var(--radius);
+  color: var(--fg);
+  font-size: 0.9375rem;
+  padding: 0.85rem 1rem;
+  margin: 1rem 0;
 }
 
 .wallet-panel,
@@ -140,32 +654,37 @@ body {
 
 .wallet-form label {
   display: block;
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.4rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--muted);
 }
 
 .wallet-form input {
   width: 100%;
-  padding: 0.65rem 0.8rem;
-  border-radius: 8px;
+  padding: 0.7rem 0.85rem;
+  border-radius: var(--radius);
   border: 1px solid var(--border);
-  background: var(--card);
+  background: var(--surface);
   color: var(--fg);
+  font: inherit;
   margin-bottom: 1rem;
 }
 
 .wallet-form button {
-  padding: 0.6rem 1.2rem;
-  border-radius: 8px;
+  padding: 0.65rem 1.2rem;
+  border-radius: var(--radius);
   border: none;
   background: var(--accent);
-  color: #10140a;
+  color: var(--on-accent);
+  font: inherit;
   font-weight: 600;
   cursor: pointer;
 }
 
 .wallet-warning {
-  color: var(--accent);
-  font-size: 0.9rem;
+  color: var(--warn);
+  font-size: 0.8125rem;
 }
 
 .wallet-body ul {
@@ -174,25 +693,26 @@ body {
 }
 
 .net-ok {
-  color: #7bd88f;
-  font-size: 0.95rem;
+  color: var(--ok);
+  font-size: 0.9375rem;
 }
 
 .net-bad {
-  color: #ff6b6b;
-  font-size: 0.95rem;
+  color: var(--danger);
+  font-size: 0.9375rem;
 }
 
 .net-expected {
   color: var(--muted);
-  font-size: 0.8rem;
+  font-size: 0.75rem;
 }
 
 .wallet-limitations {
   margin-top: 1.2rem;
-  padding: 0.8rem 1rem;
-  border: 1px solid var(--card);
-  border-radius: 6px;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
 }
 
 .wallet-limitations h3 {
@@ -202,15 +722,269 @@ body {
 
 .wallet-limitations p {
   color: var(--muted);
-  font-size: 0.88rem;
+  font-size: 0.8125rem;
+}
+
+.status-list {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  font-size: 0.875rem;
+  color: var(--muted);
 }
 
 .status-list li {
-  margin-bottom: 0.5rem;
+  position: relative;
+  margin-bottom: 0.55rem;
+  padding-left: 18px;
+  line-height: 1.6;
+}
+
+.status-list li:last-child {
+  margin-bottom: 0;
+}
+
+.status-list li::before {
+  content: '▸';
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: var(--link);
+}
+
+.status-list strong {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+code,
+.mono {
+  font-family: var(--mono);
+  font-size: 0.9em;
 }
 
 code {
-  background: var(--card);
+  background: var(--fill);
   padding: 0.1rem 0.35rem;
-  border-radius: 4px;
+  border-radius: 6px;
+}
+
+/* ------------------------------ Explorer ----------------------------- */
+
+.explorer-form {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin: 1rem 0 0.5rem;
+}
+
+.explorer-form input {
+  flex: 1 1 22rem;
+  min-width: 0;
+  padding: 0.7rem 0.85rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 0.9375rem;
+}
+
+.explorer-form input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+.explorer-coverage {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  margin: 0 0 1rem;
+}
+
+.explorer-full {
+  word-break: break-all;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.card .mono,
+.tx-table .mono {
+  word-break: break-all;
+}
+
+.tx-table {
+  display: block;
+  overflow-x: auto;
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+  margin-top: 0.5rem;
+}
+
+.tx-table th,
+.tx-table td {
+  text-align: left;
+  padding: 0.55rem 0.65rem;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.tx-table th {
+  color: var(--link);
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  background: rgba(56, 189, 248, 0.06);
+}
+
+.tx-table td {
+  color: var(--fg);
+}
+
+.tx-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* ── NSAT live numbers & coin identity ────────────────────────────────────
+ * The strip that makes the homepage about *this chain*: ledger head, fee,
+ * supply and indexed history, each read from a live service. Tone follows the
+ * app palette (blue accent, green ok, orange warn). */
+
+.hero-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 14px;
+}
+
+.net-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--fill);
+  color: var(--fg);
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.net-pill.ok {
+  color: var(--ok);
+  background: var(--ok-tint);
+  border-color: transparent;
+}
+
+.net-pill.bad {
+  color: var(--danger);
+  background: var(--danger-tint);
+  border-color: transparent;
+}
+
+.net-pill.wait {
+  color: var(--warn);
+  background: var(--warn-tint);
+  border-color: transparent;
+}
+
+.stats-block {
+  margin: 28px 0 8px;
+}
+
+.stats-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.stat {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  min-width: 0;
+}
+
+.stat-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.stat-value {
+  font-size: 1.25rem; /* title3 20 */
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.stat-hint {
+  margin-top: 4px;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.stats-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  font-size: 0.75rem;
+}
+
+.stats-foot .mono {
+  overflow-wrap: anywhere;
+}
+
+.exact-line {
+  margin: 0 0 8px;
+  font-size: 0.8125rem;
+  color: var(--link);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 780px) {
+  .stats-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 460px) {
+  .stats-strip {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.footer-links {
+  font-size: 0.8125rem;
+}
+
+.site-footer .mono {
+  font-size: 0.75rem;
+}
+
+.doc-block {
+  display: block;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--fill);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  overflow-x: auto;
 }

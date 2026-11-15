@@ -1,0 +1,56 @@
+rules_version = '2';
+
+// Firestore rules for the optional website account features.
+//
+// Two documents exist per signed-in website account, both chosen explicitly by
+// the user and both narrow on purpose:
+//
+//   websitePreferences/{uid} = { theme: "light" | "dark" }
+//     The site's light/dark choice, for cross-device sync.
+//
+//   walletLinks/{uid} = { address: "G…" }
+//     A PUBLIC wallet address, so a device without the key can show that
+//     address's balance and receive screen. A public address is not a secret
+//     and confers no spending power; signing still needs the local encrypted
+//     keystore. Adding a wallet name, balance, history, seed, password or
+//     signature to this document is a rejection.
+//
+// Everything else is denied. The wallet engine never writes to Firestore.
+//
+// Deploy from the Firebase console (Firestore Database → Rules) or with:
+//   firebase deploy --only firestore:rules
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /websitePreferences/{uid} {
+      // Only the owner of the document may read it or delete it (delete is how
+      // "turn off theme sync" removes the entry).
+      allow read, delete: if request.auth != null && request.auth.uid == uid;
+
+      // A create/update must be the owner's, must contain the single theme
+      // field, and must hold one of the two allowed values. hasOnly() makes any
+      // additional field — a wallet name, address, balance, seed — a rejection.
+      allow create, update: if request.auth != null
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['theme'])
+        && request.resource.data.theme in ['light', 'dark'];
+    }
+
+    match /walletLinks/{uid} {
+      // Owner-only read and delete, like the preferences document.
+      allow read, delete: if request.auth != null && request.auth.uid == uid;
+
+      // One field, and it must be a canonical 56-character G… account id: the
+      // shape check is what stops this document from becoming a dumping ground
+      // for wallet data. Uppercase base32 with the 'G' version byte only.
+      allow create, update: if request.auth != null
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['address'])
+        && request.resource.data.address.matches('^G[A-Z2-7]{55}$');
+    }
+
+    // No other collection or document is reachable from the browser.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

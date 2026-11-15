@@ -14,10 +14,23 @@ const nextConfig = {
   images: { unoptimized: true },
   trailingSlash: true,
 
+  webpack(config, { dev, isServer }) {
+    if (!dev && !isServer) {
+      config.optimization.splitChunks.cacheGroups.nsatNetworkIdentity = {
+        name: 'nsat-network-identity',
+        test: (module) => module.resource?.endsWith('/lib/nsatClient.js'),
+        chunks: 'all',
+        enforce: true,
+      };
+    }
+    return config;
+  },
+
   env: {
     // Public, non-sensitive runtime flags only. No secrets, keys or seeds are
     // ever placed here — see SECURITY.md.
     NEXT_PUBLIC_PLATFORM_VERSION: '24.0.0',
+    NEXT_PUBLIC_EXTENSION_BUILD: '0',
     NEXT_PUBLIC_API_GATEWAY_URL: process.env.NEXT_PUBLIC_API_GATEWAY_URL || '',
     NEXT_PUBLIC_INDEXER_URL: process.env.NEXT_PUBLIC_INDEXER_URL || ''
   }

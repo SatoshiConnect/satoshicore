@@ -12,6 +12,7 @@ node. **Separate deployment from the static website. Holds no keys.**
 | `/api/v1/network/status` | GET | Gateway + core liveness, ledger number, network name (identity check) |
 | `/api/v1/account?acc=<G-strkey>` | GET | Read-only account lookup — exact `balance128` decimal + seqnum; validated strkey |
 | `/api/v1/tx` | POST | Relay of **already-signed** transaction envelopes (`{ "envelope_xdr": "<base64>" }`) to nsat-core |
+| `/api/v1/explorer/snapshot` | GET | Read-only node snapshot for the dashboard: `/info` + `/peers` + `/quorum` + selected `/metrics`, plus the ledger closes this gateway saw (cached ~2.5 s, served with `stale: true` if the node blips) |
 
 There is no wildcard proxying: only these three routes exist. nsat-core
 administrative endpoints are unreachable through the gateway by design.
@@ -28,6 +29,7 @@ administrative endpoints are unreachable through the gateway by design.
 | `CORE_TIMEOUT_MS` | `10000` | Upstream timeout |
 | `CORE_BUSY_RETRIES` / `CORE_BUSY_DELAY_MS` | `4` / `150` | Bounded backoff for core `{status:"busy"}` ledger-close windows (busy is retried, never answered as a success/zero balance) |
 | `NSAT_NETWORK_NAME` | `NSAT` | Network name reported by `/api/v1/network/status` |
+| `EXPLORER_DEADLINE_MS` / `EXPLORER_ATTEMPT_MS` / `EXPLORER_RETRY_DELAY_MS` | `8500` / `2500` / `120` | Explorer snapshot reads: the core serves `/info`, `/peers`, `/quorum`, `/metrics` from the loop that applies ledgers, so a read caught in a multi-second close stalls. Each read is retried until one overall deadline instead of failing on a single timeout; the deadline stays under the dashboard's 10 s request timeout |
 | `GATEWAY_VERSION` | `24.0.0` | Reported by `/health` |
 
 ## API contract
