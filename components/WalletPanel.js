@@ -119,6 +119,7 @@ export default function WalletPanel() {
   // Signed-in website account, if any. It seeds the wallet name so a Google
   // sign-up creates a wallet without typing one; the password stays the user's.
   const [accountEmail, setAccountEmail] = useState('');
+  const [accountUid, setAccountUid] = useState('');
   const [importSeed, setImportSeed] = useState('');
   const [unlockName, setUnlockName] = useState('');
   const [unlockPass, setUnlockPass] = useState('');
@@ -322,14 +323,27 @@ export default function WalletPanel() {
       unsubscribe = authSdk.onAuthStateChanged(auth, (user) => {
         const uid = user?.uid || '';
         if (alive) setAccountEmail(user?.email || '');
-        if (!uid) { if (alive) setWatchAddresses([]); return; }
-        pullLinkedAddressesForUser(uid).then((list) => {
-          if (alive) setWatchAddresses(list);
-        }).catch(() => { /* no database yet: leave the wallet as it is */ });
+        if (alive) setAccountUid(uid);
       }, () => { /* a session read failure must not break the wallet */ });
     }).catch(() => { /* sign-in unavailable: watch-only simply stays off */ });
     return () => { alive = false; unsubscribe(); };
   }, []);
+
+  // The linked-wallet list is read once per account and again whenever Settings
+  // changes it. Without this, linking or removing a wallet left this screen
+  // showing the old set until a reload.
+  useEffect(() => {
+    if (!accountUid) { setWatchAddresses([]); return undefined; }
+    let alive = true;
+    const reload = () => {
+      pullLinkedAddressesForUser(accountUid).then((list) => {
+        if (alive) setWatchAddresses(list);
+      }).catch(() => { /* no database yet: leave the wallet as it is */ });
+    };
+    reload();
+    window.addEventListener('nsat:links-changed', reload);
+    return () => { alive = false; window.removeEventListener('nsat:links-changed', reload); };
+  }, [accountUid]);
 
   // Recipient/sender balance notifications.
   //

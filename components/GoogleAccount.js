@@ -11,8 +11,8 @@ import {
 } from '../lib/themeSync';
 import { keystoreList } from '../lib/nsatWallet';
 import {
-  MAX_LINKED_ADDRESSES, addLinkedAddressForUser, describeLinkFailure,
-  diagnoseFirestoreProblem, linkedAddressesForCurrentUser,
+  MAX_LINKED_ADDRESSES, addLinkedAddressForUser, classifyLinkFailure,
+  describeLinkFailure, diagnoseFirestoreProblem, linkedAddressesForCurrentUser,
   removeLinkedAddressForUser, unlinkAddressForUser,
 } from '../lib/walletLinks';
 import DriveFailureDialog from './DriveFailureDialog';
@@ -59,6 +59,22 @@ export default function GoogleAccount({ variant = 'card' } = {}) {
   // Wallets on this device that the account is not watching yet: only those are
   // offered, so linking never duplicates an address.
   const unlinkedLocal = localWallets.filter((wallet) => !linked.includes(wallet.pubkey));
+
+  // Ask the API only when the write itself did not say why: an anonymous probe
+  // always gets "permission denied" once the rules are owner-only, so it must
+  // never override the SDK's own explanation.
+  async function linkFailureDialog(err, action) {
+    let code = classifyLinkFailure(err, '');
+    if (!code) code = classifyLinkFailure(err, (await diagnoseFirestoreProblem()).code);
+    return describeLinkFailure(code, { action, projectId: getFirebaseWebConfig().projectId });
+  }
+
+  // Settings is not the only screen that cares: the wallet home shows a
+  // watch-only view from the same list, so a change here has to reach it without
+  // a reload.
+  function announceLinksChanged() {
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event('nsat:links-changed'));
+  }
 
   useEffect(() => {
     if (!configured) return undefined;
@@ -203,6 +219,7 @@ export default function GoogleAccount({ variant = 'card' } = {}) {
       const saved = await addLinkedAddressForUser(uid, target);
       setLinked(saved);
       setLinkTarget('');
+      announceLinksChanged();
       setLinkNote(`${shortAddress(target)} is linked. ${saved.length} wallet${saved.length === 1 ? '' : 's'} on this account can now be watched and receive after Google sign-in on another device; sending still needs the wallet's key.`);
     } catch (err) {
       const message = String(err?.message || '');
@@ -211,10 +228,7 @@ export default function GoogleAccount({ variant = 'card' } = {}) {
       } else if (/account id/.test(message)) {
         setError('That is not a wallet address. Use the full 56-character address starting with G.');
       } else {
-        // Ask the API itself rather than guessing from a deadline: a disabled
-        // database and a rules denial need different pages to fix.
-        const { code } = await diagnoseFirestoreProblem();
-        setLinkDialog(describeLinkFailure(code, { action: 'link', projectId: getFirebaseWebConfig().projectId }));
+        setLinkDialog(await linkFailureDialog(err, 'link'));
       }
     } finally {
       setBusy(false);
@@ -231,10 +245,10 @@ export default function GoogleAccount({ variant = 'card' } = {}) {
     try {
       const remaining = await removeLinkedAddressForUser(uid, address);
       setLinked(remaining);
+      announceLinksChanged();
       setLinkNote(`${shortAddress(address)} is no longer linked. ${remaining.length ? `${remaining.length} wallet${remaining.length === 1 ? '' : 's'} still linked.` : 'No wallets are linked to this account now.'}`);
     } catch (err) {
-      const { code } = await diagnoseFirestoreProblem();
-      setLinkDialog(describeLinkFailure(code, { action: 'unlink', projectId: getFirebaseWebConfig().projectId }));
+      setLinkDialog(await linkFailureDialog(err, 'unlink'));
     } finally {
       setBusy(false);
     }
@@ -249,10 +263,10 @@ export default function GoogleAccount({ variant = 'card' } = {}) {
     try {
       await unlinkAddressForUser(uid);
       setLinked([]);
+      announceLinksChanged();
       setLinkNote('All linked addresses were removed from your account.');
     } catch (err) {
-      const { code } = await diagnoseFirestoreProblem();
-      setLinkDialog(describeLinkFailure(code, { action: 'unlink', projectId: getFirebaseWebConfig().projectId }));
+      setLinkDialog(await linkFailureDialog(err, 'unlink'));
     } finally {
       setBusy(false);
     }
