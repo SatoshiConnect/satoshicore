@@ -101,12 +101,19 @@ unaffected — the theme keeps working locally.
 
 ## Optional watch-only address link
 
-Settings → Website account has a **Wallet address** control, separate from theme
-sync and off by default. Linking writes exactly one document:
+Settings → Website account has a **Linked wallets** control, separate from theme
+sync and off by default. One account can link several wallets (up to ten),
+because one person usually holds more than one. Each linked wallet is its own
+document:
 
 ```
-walletLinks/{googleAuthUid} = { address: "G…" }
+walletLinks/{googleAuthUid}/addresses/{address} = { address: "G…" }
 ```
+
+The document id must equal the address it holds, which is what lets the rules
+prove the shape without looping over a list. A single-address document from
+before this supported more than one wallet (`walletLinks/{uid} = { address }`)
+is still read as one more entry and is deleted when that address is unlinked.
 
 What it is for: after signing in with Google on another device, that device can
 show the address's balance and receive screen without holding a key. What it is
@@ -115,12 +122,14 @@ spending power, and it is not a backup. Every send path still requires the
 keystore and password on the device doing the signing; a watched address is
 rendered read-only, with the Send action absent rather than failing later.
 
-The address must be a canonical 56-character account id. `firestore.rules` enforces
-the owner check plus `keys().hasOnly(['address'])` and
-`address.matches('^G[A-Z2-7]{55}$')`, so no balance, history, name, seed or
-password can be added to that document. On read, a document containing any
-additional field is ignored entirely (`lib/walletLinks.js`). Unlinking deletes
-the document and clears the local per-account flag.
+An address must be a canonical 56-character account id. `firestore.rules` enforces
+the owner check plus `keys().hasOnly(['address'])`, `address == address` (the
+document id) and `address.matches('^G[A-Z2-7]{55}$')`, so no balance, history,
+name, seed or password can be added to that document. On read, anything that is
+not one of those addresses is dropped (`lib/walletLinks.js`). Removing one entry
+deletes only that document; removing all of them also clears the local
+per-account flag. The ten-wallet cap is enforced by the client, because a rules
+file cannot count a collection.
 
 Deploy uses the same Firestore database and the same `firestore.rules` file; the
 `walletLinks` block must be published together with the preferences block or the

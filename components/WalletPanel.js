@@ -18,7 +18,7 @@ import { decodeSeed } from '../lib/nsatCodec';
 import { sendPreflight, maxSendable, fmtGroup } from '../lib/nsatSendPreflight';
 import { startBalanceRefresh } from '../lib/walletBalanceRefresh.mjs';
 import { isFirebaseWebConfigured, loadGoogleAuth } from '../lib/firebaseAuth';
-import { pullLinkedAddressForUser } from '../lib/walletLinks';
+import { pullLinkedAddressesForUser } from '../lib/walletLinks';
 import {
   biometricWalletNames, enableBiometricUnlock, hasBiometricUnlock,
   removeBiometricUnlock, unlockWithBiometric,
@@ -103,10 +103,12 @@ export default function WalletPanel() {
   const [active, setActive] = useState(null);    // { name, pubkey, seed32 }
   const [balance, setBalance] = useState(null);  // exact stroops string
   const [funded, setFunded] = useState(null);    // true / false / unknown
-  // Watch-only: a PUBLIC address linked to the signed-in website account. It
-  // shows a balance and a receive screen on a device with no key, and can do
-  // nothing else — there is no seed here, so nothing can be signed.
-  const [watch, setWatch] = useState(null);      // { address } | null
+  // Watch-only: PUBLIC addresses linked to the signed-in website account. They
+  // show a balance and a receive screen on a device with no key, and can do
+  // nothing else — there is no seed here, so nothing can be signed. One account
+  // can link several wallets, so `watchPick` is which of them this screen shows.
+  const [watchAddresses, setWatchAddresses] = useState([]);
+  const [watchPick, setWatchPick] = useState('');
   // ui
   const [page, setPage] = useState('overview');
   const [busy, setBusy] = useState(false);
@@ -291,17 +293,21 @@ export default function WalletPanel() {
     const id = window.setInterval(tick, 4000);
     return () => { alive = false; window.clearInterval(id); };
   }, [configured]);
+  // A picked address wins only while it is still linked; otherwise the first
+  // linked wallet is the one shown.
+  const watchAddress = watchAddresses.includes(watchPick) ? watchPick : (watchAddresses[0] || '');
+
   useEffect(() => {
     if (active) {
       void refreshBalance(active.pubkey);
       setHistory(historyLoad(active.name));
-    } else if (watch) {
+    } else if (watchAddress) {
       // Read-only balance for the linked address. No key, no history of ours:
       // this wallet never signed anything from this device.
-      void refreshBalance(watch.address);
+      void refreshBalance(watchAddress);
       setHistory([]);
     } else { setBalance(null); setHistory([]); }
-  }, [active, watch, refreshBalance]);
+  }, [active, watchAddress, refreshBalance]);
 
   // Follow the website account: if it has a linked address and this device has
   // no wallet of its own, the wallet opens in watch-only mode instead of the
@@ -316,10 +322,9 @@ export default function WalletPanel() {
       unsubscribe = authSdk.onAuthStateChanged(auth, (user) => {
         const uid = user?.uid || '';
         if (alive) setAccountEmail(user?.email || '');
-        if (!uid) { if (alive) setWatch(null); return; }
-        pullLinkedAddressForUser(uid).then((address) => {
-          if (!alive) return;
-          setWatch(address ? { address } : null);
+        if (!uid) { if (alive) setWatchAddresses([]); return; }
+        pullLinkedAddressesForUser(uid).then((list) => {
+          if (alive) setWatchAddresses(list);
         }).catch(() => { /* no database yet: leave the wallet as it is */ });
       }, () => { /* a session read failure must not break the wallet */ });
     }).catch(() => { /* sign-in unavailable: watch-only simply stays off */ });
@@ -753,7 +758,7 @@ export default function WalletPanel() {
             title={`${netOk ? 'Connected' : net == null ? 'Connecting…' : 'Offline'} — wallet settings`}>
             <span className="nw-tokenlogo"><NsatCoinMark className="nw-coin-mark" /></span>
             <span className="nw-account-name">
-              {active ? active.name : hasWallets ? 'Locked' : watch ? 'Watch only' : 'NSAT Wallet'}
+              {active ? active.name : hasWallets ? 'Locked' : watchAddress ? 'Watch only' : 'NSAT Wallet'}
             </span>
             <span className={'nw-dot ' + (netOk ? 'ok' : net == null ? 'wait' : 'err')} aria-hidden />
             <span className="nw-account-chevron" aria-hidden>⌄</span>
@@ -808,12 +813,13 @@ export default function WalletPanel() {
             </form>
           )}
 
-          {page === 'overview' && !active && wallets.length === 0 && watch && (
-            <WatchOnlyHome address={watch.address} balance={balance} funded={funded}
+          {page === 'overview' && !active && wallets.length === 0 && watchAddress && (
+            <WatchOnlyHome address={watchAddress} addresses={watchAddresses} balance={balance}
+              funded={funded} onSelect={setWatchPick}
               onReceive={() => setPage('receive')} onSettings={() => setPage('settings')} />
           )}
 
-          {page === 'overview' && !(watch && !active && wallets.length === 0) && (
+          {page === 'overview' && !(watchAddress && !active && wallets.length === 0) && (
             <OverviewPage active={active} wallets={wallets} balance={balance} funded={funded}
               bus={{ busy, doCreate, doImport, newName, setNewName, newPass, setNewPass,
                 importSeed, setImportSeed, accountEmail }}
@@ -833,7 +839,7 @@ export default function WalletPanel() {
           )}
 
           {page === 'receive' && (
-            <ReceivePage activePubkey={active?.pubkey || watch?.address || ''} notify={notify} />
+            <ReceivePage activePubkey={active?.pubkey || watchAddress || ''} notify={notify} />
           )}
 
           {page === 'shielded' && <ShieldedGatePage />}
@@ -928,7 +934,7 @@ export default function WalletPanel() {
 // device can show the balance and the receive screen without a key. Everything
 // that needs a signature is explicitly out of reach here instead of failing
 // later: no Send button, and a plain sentence saying why.
-function WatchOnlyHome({ address, balance, funded, onReceive, onSettings }) {
+function WatchOnlyHome({ address, addresses = [], balance, funded, onSelect, onReceive, onSettings }) {
   const exact = balance == null ? '…' : formatExactBalance(balance);
   return (
     <div className="nw-home">
@@ -956,6 +962,24 @@ function WatchOnlyHome({ address, balance, funded, onReceive, onSettings }) {
           <span className="nw-action-label">Settings</span>
         </button>
       </div>
+
+      {addresses.length > 1 ? (
+        <section className="nw-card" aria-labelledby="nw-watch-pick-title">
+          <h2 id="nw-watch-pick-title" style={{ color: 'var(--text)' }}>Linked wallets</h2>
+          <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
+            {`${addresses.length} wallets on this account. Pick the one to watch on this device.`}
+          </p>
+          <div className="nw-btn-row" style={{ margin: '8px 0 0' }}>
+            {addresses.map((item) => (
+              <button key={item} type="button" className="nw-chip-btn nw-mono"
+                aria-pressed={item === address}
+                onClick={() => onSelect?.(item)}>
+                {item === address ? `● ${shortAddr(item, 6)}` : shortAddr(item, 6)}
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <section className="nw-card">
         <h2 style={{ color: 'var(--text)' }}>Read-only on this device</h2>

@@ -8,12 +8,17 @@ rules_version = '2';
 //   websitePreferences/{uid} = { theme: "light" | "dark" }
 //     The site's light/dark choice, for cross-device sync.
 //
+//   walletLinks/{uid}/addresses/{address} = { address: "G…" }
+//     One PUBLIC wallet address per document, because one person usually holds
+//     several wallets. A device without the key can show that address's balance
+//     and receive screen. A public address is not a secret and confers no
+//     spending power; signing still needs the local encrypted keystore. Adding a
+//     wallet name, balance, history, seed, password or signature to this
+//     document is a rejection, and the document id must be the address it holds.
+//
 //   walletLinks/{uid} = { address: "G…" }
-//     A PUBLIC wallet address, so a device without the key can show that
-//     address's balance and receive screen. A public address is not a secret
-//     and confers no spending power; signing still needs the local encrypted
-//     keystore. Adding a wallet name, balance, history, seed, password or
-//     signature to this document is a rejection.
+//     The single-address form written before multiple wallets were supported.
+//     Still readable, still one shape, and deleted when its address is removed.
 //
 // Everything else is denied. The wallet engine never writes to Firestore.
 //
@@ -39,13 +44,26 @@ service cloud.firestore {
       // Owner-only read and delete, like the preferences document.
       allow read, delete: if request.auth != null && request.auth.uid == uid;
 
-      // One field, and it must be a canonical 56-character G… account id: the
-      // shape check is what stops this document from becoming a dumping ground
-      // for wallet data. Uppercase base32 with the 'G' version byte only.
+      // The legacy single-address document. One field, and it must be a
+      // canonical 56-character G… account id: the shape check is what stops this
+      // document from becoming a dumping ground for wallet data. Uppercase
+      // base32 with the 'G' version byte only.
       allow create, update: if request.auth != null
         && request.auth.uid == uid
         && request.resource.data.keys().hasOnly(['address'])
         && request.resource.data.address.matches('^G[A-Z2-7]{55}$');
+
+      // One wallet per document. Requiring the id to equal the field is what
+      // makes the shape provable without looping over a list, so every document
+      // in here is exactly one public address and nothing else.
+      match /addresses/{address} {
+        allow read, delete: if request.auth != null && request.auth.uid == uid;
+        allow create, update: if request.auth != null
+          && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['address'])
+          && request.resource.data.address == address
+          && address.matches('^G[A-Z2-7]{55}$');
+      }
     }
 
     // No other collection or document is reachable from the browser.

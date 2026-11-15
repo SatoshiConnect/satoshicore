@@ -11,8 +11,9 @@ import {
 } from '../lib/themeSync';
 import { keystoreList } from '../lib/nsatWallet';
 import {
-  describeLinkFailure, diagnoseFirestoreProblem, linkAddressForUser,
-  linkedAddressForCurrentUser, unlinkAddressForUser,
+  MAX_LINKED_ADDRESSES, addLinkedAddressForUser, describeLinkFailure,
+  diagnoseFirestoreProblem, linkedAddressesForCurrentUser,
+  removeLinkedAddressForUser, unlinkAddressForUser,
 } from '../lib/walletLinks';
 import DriveFailureDialog from './DriveFailureDialog';
 
@@ -43,9 +44,10 @@ export default function GoogleAccount({ variant = 'card' } = {}) {
   // A link that could not be saved says why in a dialog: the usual cause is a
   // disabled database or a rules denial, and both have a page that fixes them.
   const [linkDialog, setLinkDialog] = useState(null);
-  // Optional watch-only address link. Also separate from sign-in: nothing is
-  // stored until the user links an address here.
-  const [linked, setLinked] = useState('');
+  // Optional watch-only address links. Also separate from sign-in: nothing is
+  // stored until the user links a wallet here, and one account can link several
+  // because one person usually holds more than one wallet.
+  const [linked, setLinked] = useState([]);
   const [linkTarget, setLinkTarget] = useState('');
   const [linkNote, setLinkNote] = useState('');
   const [localWallets, setLocalWallets] = useState([]);
@@ -53,6 +55,10 @@ export default function GoogleAccount({ variant = 'card' } = {}) {
   useEffect(() => {
     setLocalWallets(keystoreList());
   }, [user]);
+
+  // Wallets on this device that the account is not watching yet: only those are
+  // offered, so linking never duplicates an address.
+  const unlinkedLocal = localWallets.filter((wallet) => !linked.includes(wallet.pubkey));
 
   useEffect(() => {
     if (!configured) return undefined;
@@ -76,11 +82,11 @@ export default function GoogleAccount({ variant = 'card' } = {}) {
         // A linked address only pre-fills the field; it is never applied to a
         // wallet or used to sign anything.
         if (uid) {
-          void linkedAddressForCurrentUser().then((address) => {
-            if (mounted) setLinked(address || '');
-          }).catch(() => { if (mounted) setLinked(''); });
+          void linkedAddressesForCurrentUser().then((list) => {
+            if (mounted) setLinked(list);
+          }).catch(() => { if (mounted) setLinked([]); });
         } else {
-          setLinked('');
+          setLinked([]);
         }
       }, () => {
         setError('Could not read the Google sign-in session.');
@@ -188,19 +194,21 @@ export default function GoogleAccount({ variant = 'card' } = {}) {
 
   async function linkAddress() {
     const uid = user?.uid;
-    const target = (linkTarget || localWallets[0]?.pubkey || '').trim();
+    const target = (linkTarget || unlinkedLocal[0]?.pubkey || '').trim();
     if (!uid) return;
     setBusy(true);
     setError('');
     setLinkNote('');
     try {
-      const saved = await linkAddressForUser(uid, target);
+      const saved = await addLinkedAddressForUser(uid, target);
       setLinked(saved);
       setLinkTarget('');
-      setLinkNote(`Linked ${shortAddress(saved)}. Balance and receive now work on another device after Google sign-in; sending still needs this wallet's key.`);
+      setLinkNote(`${shortAddress(target)} is linked. ${saved.length} wallet${saved.length === 1 ? '' : 's'} on this account can now be watched and receive after Google sign-in on another device; sending still needs the wallet's key.`);
     } catch (err) {
       const message = String(err?.message || '');
-      if (/account id/.test(message)) {
+      if (err?.code === 'LINK_LIMIT') {
+        setError(`This account already links ${MAX_LINKED_ADDRESSES} wallets, which is the limit. Remove one first.`);
+      } else if (/account id/.test(message)) {
         setError('That is not a wallet address. Use the full 56-character address starting with G.');
       } else {
         // Ask the API itself rather than guessing from a deadline: a disabled
@@ -208,6 +216,25 @@ export default function GoogleAccount({ variant = 'card' } = {}) {
         const { code } = await diagnoseFirestoreProblem();
         setLinkDialog(describeLinkFailure(code, { action: 'link', projectId: getFirebaseWebConfig().projectId }));
       }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // One wallet at a time: removing wallet A must leave B linked.
+  async function unlinkOne(address) {
+    const uid = user?.uid;
+    if (!uid) return;
+    setBusy(true);
+    setError('');
+    setLinkNote('');
+    try {
+      const remaining = await removeLinkedAddressForUser(uid, address);
+      setLinked(remaining);
+      setLinkNote(`${shortAddress(address)} is no longer linked. ${remaining.length ? `${remaining.length} wallet${remaining.length === 1 ? '' : 's'} still linked.` : 'No wallets are linked to this account now.'}`);
+    } catch (err) {
+      const { code } = await diagnoseFirestoreProblem();
+      setLinkDialog(describeLinkFailure(code, { action: 'unlink', projectId: getFirebaseWebConfig().projectId }));
     } finally {
       setBusy(false);
     }
@@ -221,8 +248,8 @@ export default function GoogleAccount({ variant = 'card' } = {}) {
     setLinkNote('');
     try {
       await unlinkAddressForUser(uid);
-      setLinked('');
-      setLinkNote('Address unlinked and deleted from your account.');
+      setLinked([]);
+      setLinkNote('All linked addresses were removed from your account.');
     } catch (err) {
       const { code } = await diagnoseFirestoreProblem();
       setLinkDialog(describeLinkFailure(code, { action: 'unlink', projectId: getFirebaseWebConfig().projectId }));
@@ -337,61 +364,90 @@ export default function GoogleAccount({ variant = 'card' } = {}) {
       {user ? (
         <div className="nw-google-sync">
           <div className="nw-kv">
-            <span className="nw-k">Wallet address</span>
-            <span className="nw-v nw-mono nw-small">{linked ? shortAddress(linked) : 'not linked'}</span>
+            <span className="nw-k">Linked wallets</span>
+            <span className="nw-v nw-mono nw-small">
+              {linked.length ? `${linked.length} of ${MAX_LINKED_ADDRESSES}` : 'not linked'}
+            </span>
           </div>
+          {linked.length ? (
+            <ul className="nw-link-list">
+              {linked.map((address) => (
+                <li key={address} className="nw-link-row">
+                  <span className="nw-mono nw-small">{shortAddress(address)}</span>
+                  <button type="button" className="nw-chip-btn" disabled={busy}
+                    aria-label={`Stop watching ${address}`}
+                    onClick={() => unlinkOne(address)}>
+                    Remove
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
           <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
-            Optional. Stores this public address with your website account so you can see
-            its balance and receive screen after signing in on another device. An address is
-            public and cannot move funds, so this is not backup or recovery: sending still
-            needs the wallet password and key on the device that signs. No balance, history,
-            wallet name or seed is stored, and unlinking deletes the entry.
+            {`Optional. Stores these public addresses with your website account so each wallet's `
+              + `balance and receive screen work after signing in on another device — one account `
+              + `can link up to ${MAX_LINKED_ADDRESSES} wallets. An address is public and cannot `
+              + 'move funds, so this is not backup or recovery: sending still needs the wallet '
+              + 'password and key on the device that signs. No balance, history, wallet name or '
+              + 'seed is stored, and Remove deletes that one entry.'}
           </p>
-          {linked ? (
+          {linked.length < MAX_LINKED_ADDRESSES ? (
+            unlinkedLocal.length > 0 || localWallets.length === 0 ? (
+              <>
+                {localWallets.length > 0 ? (
+                  <div className="nw-kv" style={{ marginTop: 8 }}>
+                    <span className="nw-k">Add</span>
+                    <span className="nw-v">
+                      <select
+                        aria-label="Wallet address to link"
+                        value={linkTarget || unlinkedLocal[0]?.pubkey || ''}
+                        onChange={(e) => setLinkTarget(e.target.value)}>
+                        {unlinkedLocal.map((wallet) => (
+                          <option key={wallet.name} value={wallet.pubkey}>
+                            {`${wallet.name} (this device)`}
+                          </option>
+                        ))}
+                      </select>
+                    </span>
+                  </div>
+                ) : (
+                  <input
+                    type="text"
+                    spellCheck={false}
+                    aria-label="Public wallet address to link"
+                    placeholder="G… public address"
+                    value={linkTarget}
+                    onChange={(e) => setLinkTarget(e.target.value)}
+                    style={{ marginTop: 8 }} />
+                )}
+                <div className="nw-btn-row" style={{ margin: '8px 0 0' }}>
+                  <button type="button" className="nw-chip-btn" onClick={linkAddress} disabled={busy}>
+                    {linked.length ? 'Link another wallet' : 'Link address'}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
+                Every wallet on this device is already linked.
+              </p>
+            )
+          ) : (
+            <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
+              {`This account links ${MAX_LINKED_ADDRESSES} wallets, which is the limit. Remove one to add another.`}
+            </p>
+          )}
+          {linked.length > 1 ? (
             <div className="nw-btn-row" style={{ margin: '8px 0 0' }}>
               <button type="button" className="nw-chip-btn" onClick={unlinkAddress} disabled={busy}>
-                Unlink address
+                Remove all
               </button>
             </div>
-          ) : (
-            <>
-              {localWallets.length > 0 ? (
-                <div className="nw-kv" style={{ marginTop: 8 }}>
-                  <span className="nw-k">Use</span>
-                  <span className="nw-v">
-                    <select
-                      aria-label="Wallet address to link"
-                      value={linkTarget}
-                      onChange={(e) => setLinkTarget(e.target.value)}>
-                      <option value="">{`${localWallets[0].name} (this device)`}</option>
-                      {localWallets.slice(1).map((w) => (
-                        <option key={w.name} value={w.pubkey}>{w.name} (this device)</option>
-                      ))}
-                    </select>
-                  </span>
-                </div>
-              ) : (
-                <input
-                  type="text"
-                  spellCheck={false}
-                  aria-label="Public wallet address to link"
-                  placeholder="G… public address"
-                  value={linkTarget}
-                  onChange={(e) => setLinkTarget(e.target.value)}
-                  style={{ marginTop: 8 }} />
-              )}
-              <div className="nw-btn-row" style={{ margin: '8px 0 0' }}>
-                <button type="button" className="nw-chip-btn" onClick={linkAddress} disabled={busy}>
-                  Link address
-                </button>
-              </div>
-            </>
-          )}
+          ) : null}
           {linkNote ? <p className="nw-small nw-dim" role="status" style={{ margin: '6px 0 0' }}>{linkNote}</p> : null}
         </div>
       ) : null}
       <DriveFailureDialog dialog={linkDialog} onClose={() => setLinkDialog(null)}
-        step="WEBSITE ACCOUNT · LINKED ADDRESS" />
+        step="WEBSITE ACCOUNT · LINKED WALLETS" />
     </section>
   );
 }

@@ -1174,6 +1174,14 @@ body:has(.nw-root) .site-main.container {
   -webkit-overflow-scrolling: touch;
 }
 
+/* Linked wallets in Settings: one row per wallet, each removable on its own, so
+ * a person with several wallets can see exactly what this account watches. */
+.nw-link-list { list-style: none; margin: 8px 0 0; padding: 0; }
+.nw-link-row {
+  align-items: center; border-top: 1px solid var(--border-soft);
+  display: flex; gap: 8px; justify-content: space-between; padding: 6px 0;
+}
+
 /* The one reminder the home screen raises: money on this device whose encrypted
  * copy in Drive is stale or missing. Warning colour, same card shell. */
 .nw-backup-remind { border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
