@@ -23,7 +23,10 @@ import {
   biometricWalletNames, enableBiometricUnlock, hasBiometricUnlock,
   removeBiometricUnlock, unlockWithBiometric,
 } from '../lib/biometricUnlock';
+import { backupSilently } from '../lib/driveBackup';
+import { bindOwner } from '../lib/walletBinding';
 import GoogleAccount from './GoogleAccount';
+import DriveBackupCard from './DriveBackupCard';
 
 // Full transactional Web Wallet rendered in the ORIGINAL DESKTOP WALLET
 // DESIGN (canonical source: nsat-core desktop/satoshicore-wallet
@@ -390,6 +393,9 @@ export default function WalletPanel() {
       activateWallet({ name: r.name, pubkey: r.pubkeyG, seed32 });
       setNewName(''); setNewPass(''); setImportSeed('');
       notify(`Wallet "${r.name}" created. Export the encrypted backup NOW (Settings) and store it privately — it is the only copy.`, 'ok');
+      // Only refreshes a Drive backup this session already has access to; it
+      // never opens a Google window on its own.
+      void backupSilentlyAfterChange(r.name);
     } catch (err) { notify(String(err.message || err), 'err'); }
     finally {
       setNewPass('');
@@ -414,12 +420,26 @@ export default function WalletPanel() {
       activateWallet({ name: r.name, pubkey: r.pubkeyG, seed32 });
       setNewName(''); setNewPass(''); setImportSeed('');
       notify(`Wallet "${r.name}" imported.`, 'ok');
+      void backupSilentlyAfterChange(r.name);
     } catch (err) { notify(String(err.message || err), 'err'); }
     finally {
       setNewPass('');
       setImportSeed('');
       setBusy(false);
     }
+  }
+
+  // A new or imported wallet is bound to the signed-in account and, when this
+  // page already has Drive access, re-uploaded as ciphertext. Failures stay
+  // silent here: Settings owns the visible status and the manual button.
+  async function backupSilentlyAfterChange(name) {
+    try {
+      const result = await backupSilently(keystoreExport());
+      if (result.backedUp && result.email) {
+        bindOwner(name, result.email);
+        setWallets(keystoreList());
+      }
+    } catch { /* no session, no Drive grant, or offline: manual backup remains */ }
   }
 
   async function doUnlock(e) {
@@ -807,7 +827,8 @@ export default function WalletPanel() {
           {page === 'settings' && (
             <SettingsPage
                               s={{ active, busy, doLock, doBackup, doRestore, wallets, biometricWallets,
-                onSwitch: switchTo, onToggleBiometric: toggleBiometricUnlock }}
+                onSwitch: switchTo, onToggleBiometric: toggleBiometricUnlock,
+                onReloadWallets: refreshWallets }}
               onShielded={() => setPage('shielded')} />
           )}
       </main>
@@ -1293,6 +1314,7 @@ function SettingsPage({ s, onShielded }) {
   return (
     <div>
       {SHOW_GOOGLE_ACCOUNT ? <GoogleAccount /> : null}
+      {SHOW_GOOGLE_ACCOUNT ? <DriveBackupCard onKeystoreChanged={s.onReloadWallets} /> : null}
       <section className="nw-card">
         <h2 style={{ color: 'var(--text)' }}>Privacy</h2>
         <div className="nw-kv" style={{ marginTop: 10 }}>
