@@ -147,7 +147,8 @@ body:has(.nw-root) .site-main.container {
   transition: background 0.15s ease, transform 0.05s ease;
 }
 .nw-root button:hover { background: var(--hover); }
-.nw-root button:active { transform: translateY(1px); }
+/* Press feedback the way a phone gives it: the control dips slightly. */
+.nw-root button:active { transform: scale(0.97); }
 .nw-root button:disabled { opacity: 0.45; cursor: not-allowed; }
 .nw-root button:focus-visible,
 .nw-root input:focus-visible,
@@ -180,15 +181,48 @@ body:has(.nw-root) .site-main.container {
  * layout on the site.
  */
 /* --------------------------- Phone shell ----------------------------
- * The wallet is the product, not a page about the product: it reads like a
- * wallet app on a phone. One column, an app bar, a status line and a bottom
- * tab bar. On a desktop it sits as a device-sized panel; under 560px it is
- * simply the screen. */
+ * The wallet is the product, not a page about the product: it reads as a wallet
+ * app running on an iPhone. The device is drawn entirely in CSS — titanium
+ * rails, bezel, side buttons, Dynamic Island, status bar and home indicator —
+ * so the phone is visible without an image or extra markup. Touch devices and
+ * the installed PWA drop the simulated hardware and use the real screen edge
+ * to edge. */
 .nw-root {
+  position: relative;
   padding: 1.75rem var(--gutter, 1.25rem) 3rem;
   display: flex;
   justify-content: center;
   align-items: flex-start;
+  /* A pool of light under the device, so the phone reads as an object on a
+     surface instead of a card floating in empty space. */
+  background: radial-gradient(48% 42% at 50% 34%, rgba(68, 100, 242, 0.14), transparent 72%);
+}
+
+/* Side hardware, on the rails beside the screen: the mute switch is not drawn,
+   the two volume keys sit on the left rail and the power key on the right. */
+.nw-root::before,
+.nw-root::after {
+  content: "";
+  position: absolute;
+  width: 3px;
+  height: 44px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.2);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+
+.nw-root::before {
+  top: calc(1.75rem + 148px);
+  left: calc(50% - 222px);
+  /* Second bump: the pair of volume keys, drawn with one element. */
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), 0 58px 0 0 rgba(255, 255, 255, 0.2);
+}
+
+.nw-root::after {
+  top: calc(1.75rem + 196px);
+  right: calc(50% - 218px);
+  height: 78px;
 }
 
 .nw-phone {
@@ -198,40 +232,100 @@ body:has(.nw-root) .site-main.container {
   flex-direction: column;
   /* A phone screen, not a page: the shell keeps its height and only the
    * content scrolls, so the tab bar is always reachable at the bottom. */
-  height: min(760px, calc(100vh - 170px));
+  height: min(780px, calc(100vh - 180px));
   min-height: 480px;
   background: var(--bg);
-  border: 8px solid var(--device-bezel);
-  border-radius: 48px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.42), 0 24px 64px rgba(0, 0, 0, 0.38);
+  /* The device: a 12px bezel, with titanium rails drawn as rings outside it. */
+  border: 12px solid var(--device-bezel);
+  border-radius: 58px;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.07),
+    0 0 0 1px rgba(255, 255, 255, 0.24),
+    0 0 0 6px rgba(255, 255, 255, 0.11),
+    0 0 0 7px rgba(0, 0, 0, 0.5),
+    0 26px 64px rgba(0, 0, 0, 0.55),
+    0 8px 20px rgba(0, 0, 0, 0.4);
   overflow: hidden;
   position: relative;
+  -webkit-tap-highlight-color: transparent;
 }
 
-/* Desktop preview: give the wallet the silhouette of an iPhone, including a
-   Dynamic Island. Touch devices render the wallet edge-to-edge instead. */
+/* Dynamic Island with its camera lens: the one unmistakable iPhone mark. */
 .nw-phone::before {
   content: "";
   position: absolute;
-  z-index: 4;
+  z-index: 5;
   top: 10px;
   left: 50%;
-  width: 112px;
-  height: 30px;
+  width: 118px;
+  height: 32px;
   transform: translateX(-50%);
   border-radius: 999px;
-  background: var(--device-island);
+  background:
+    radial-gradient(circle at 76% 50%, rgba(38, 44, 56, 0.95) 0 3.5px, transparent 4px),
+    var(--device-island);
+  pointer-events: none;
+}
+
+/* Home indicator: the gesture bar a phone always shows above its bottom edge. */
+.nw-phone::after {
+  content: "";
+  position: absolute;
+  z-index: 5;
+  bottom: 9px;
+  left: 50%;
+  width: 134px;
+  height: 5px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 55%, transparent);
+  opacity: 0.55;
   pointer-events: none;
 }
 
 .nw-appbar {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 48px 14px 8px;
+  /* Room for the island over the status line. */
+  padding: 52px 16px 8px;
   background: var(--bg);
   flex-shrink: 0;
+}
+
+/* iOS status bar: clock on the left, signal bars and battery on the right,
+   drawn as backgrounds so the app bar keeps its markup. */
+.nw-appbar::before {
+  content: "9:41";
+  position: absolute;
+  top: 15px;
+  left: 30px;
+  right: 30px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  pointer-events: none;
+  background-image:
+    linear-gradient(currentColor, currentColor),
+    linear-gradient(currentColor, currentColor),
+    linear-gradient(currentColor, currentColor),
+    linear-gradient(currentColor, currentColor),
+    linear-gradient(currentColor, currentColor),
+    linear-gradient(currentColor, currentColor);
+  background-repeat: no-repeat;
+  background-position:
+    right 38px bottom 4px,
+    right 33px bottom 4px,
+    right 28px bottom 4px,
+    right 23px bottom 4px,
+    right 6px bottom 3px,
+    right 2px bottom 7px;
+  background-size: 3px 5px, 3px 7px, 3px 9px, 3px 11px, 19px 10px, 2px 4px;
 }
 
 /* Screen-reader heading: the app bar says the same thing at app scale. */
@@ -337,11 +431,30 @@ body:has(.nw-root) .site-main.container {
   margin: 0;
   /* The tab bar floats over the content, so the last row must be able to
    * scroll clear of it instead of hiding behind it. */
-  padding: 6px 16px 96px;
+  padding: 6px 16px 104px;
   flex: 1 1 auto;
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
+  /* A phone app scrolls without a visible scrollbar. */
+  scrollbar-width: none;
+}
+
+.nw-content::-webkit-scrollbar { display: none; }
+
+/* iOS motion: a page arrives with a short push instead of snapping into
+ * place. Mounting a page's elements is the trigger, so no JS is involved. */
+.nw-content > * {
+  animation: nw-ios-push 0.32s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+@keyframes nw-ios-push {
+  from { opacity: 0; transform: translate3d(16px, 0, 0); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nw-content > * { animation: none; }
 }
 
 .nw-section-head {
@@ -368,19 +481,34 @@ body:has(.nw-root) .site-main.container {
 .nw-bottomnav {
   position: absolute;
   left: 50%;
-  bottom: 12px;
+  /* Clear of the home indicator, as a tab bar sits on a phone. */
+  bottom: 26px;
   transform: translateX(-50%);
   width: calc(100% - 26px);
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 4px;
   padding: 6px;
-  background: var(--surface);
+  /* Translucent, like the iOS tab bar: the content scrolling underneath stays
+   * visible through a blur. */
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
   border: 1px solid var(--border-card);
   border-radius: 999px;
   box-shadow: var(--shadow-card);
+  backdrop-filter: blur(20px) saturate(1.5);
+  -webkit-backdrop-filter: blur(20px) saturate(1.5);
   flex-shrink: 0;
   z-index: 3;
+}
+
+/* Chrome text is not selectable on a phone; inputs and addresses still are. */
+.nw-appbar,
+.nw-bottomnav,
+.nw-action-label,
+.nw-asset-name,
+.nw-section-title {
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .nw-navitem {
@@ -554,8 +682,14 @@ body:has(.nw-root) .site-main.container {
   .nw-root {
     padding: 0;
     height: 100%;
+    /* The device is the real phone here: no simulated hardware, no backdrop. */
+    background: none;
   }
-  .nw-phone::before {
+  .nw-root::before,
+  .nw-root::after,
+  .nw-phone::before,
+  .nw-phone::after,
+  .nw-appbar::before {
     display: none;
   }
   .nw-appbar {
@@ -622,6 +756,13 @@ body:has(.nw-root) .site-main.container {
 /* Landscape phones: the app bar and the balance take less vertical room so
  * the content still has a usable height above the tab bar. */
 @media (max-height: 520px) and (orientation: landscape) {
+  /* A short window is not a phone: the simulated hardware would eat the
+   * screen, so the app bar keeps only its controls. */
+  .nw-phone::before,
+  .nw-phone::after,
+  .nw-appbar::before {
+    display: none;
+  }
   .nw-appbar {
     padding: 6px 14px 4px;
   }
@@ -1087,6 +1228,7 @@ label.nw-chip-btn:focus-within { outline: 2px solid var(--accent); outline-offse
     min-height: 0;
     padding: 0;
     align-items: stretch;
+    background: none;
   }
 
   .nw-phone {
@@ -1099,7 +1241,11 @@ label.nw-chip-btn:focus-within { outline: 2px solid var(--accent); outline-offse
     box-shadow: none;
   }
 
-  .nw-phone::before {
+  .nw-root::before,
+  .nw-root::after,
+  .nw-phone::before,
+  .nw-phone::after,
+  .nw-appbar::before {
     display: none;
   }
 
