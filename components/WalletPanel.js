@@ -164,9 +164,13 @@ export default function WalletPanel() {
   // Lock immediately when the app leaves the foreground, and invalidate any
   // pending WebCrypto operation so an unlock cannot resurrect the session.
   useEffect(() => {
+    // Locking on background is a guarantee, not an event to announce: on a
+    // phone the user switches apps constantly, and the toast followed them
+    // back over the unlock screen. The wallet still locks; the unlock form
+    // already says so.
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') {
-        lockWallet('Wallet locked — signing key cleared when the app went to the background.');
+        lockWallet();
       }
     };
     const onPageHide = () => lockWallet();
