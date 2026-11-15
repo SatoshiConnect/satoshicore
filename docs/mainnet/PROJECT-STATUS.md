@@ -189,11 +189,20 @@ browser (live /)                                 nw-root present, Create/Import,
 - ตัดเน็ตเวิร์กจริง (emulate offline + block ทุก URL ที่ **ทั้ง page และ service-worker target** — จำเป็น เพราะ CDP แยก target ต่อ worker): `navigator.onLine === false`, reload แล้วได้ shell จาก cache, `/api/v1/chain/info` ตอบ `network-error` (ไม่เสิร์ฟจาก cache), route ที่ไม่เคยแคชตกไปที่ shell ของกระเป๋า, กลับมา online แล้วใช้งานได้
 - console สะอาดขณะ online; ขณะ offline มี 1 error ที่ถูกกักไว้ (`drawImage` กับ image ที่ broken) — **ไม่พบ `drawImage` ในโค้ดแอป** จึงยังไม่สรุปว่าเป็น defect ของเรา แต่บันทึกไว้
 
+### หลักฐาน install flow บน Chrome แบบมีหน้าจอ (headed, 2026-11-14)
+
+Chrome 157.0.8103.52 (โปรไฟล์ใหม่, ไม่ headless) กับ `https://satoshicore.org` — 5 passed / 1 not automatable:
+
+- **`beforeinstallprompt` ยิงจริง**: หน้าได้ event และ `components/InstallApp.js` แสดง **ปุ่ม "Install app" จริง** (ไม่ใช่ fallback `<details>` ที่บอกขั้นตอนเมนู) → ยืนยันว่า criteria ของ Chrome ผ่าน
+- **ติดตั้งระดับ OS อัตโนมัติไม่ได้ในเบราว์เซอร์นี้**: CDP `PWA.install` ตอบ `-32601 method not found` ทั้งที่ page target และ browser target → ต้องมี**คนกดยืนยันใน dialog ของเบราว์เซอร์หนึ่งครั้ง** (ข้อจำกัดของเครื่องมือ ไม่ใช่ของแอป)
+- **สาขา "ติดตั้งแล้ว" ของแอปถูกต้อง** (จำลอง `display-mode: standalone` เพราะ Chrome ไม่รองรับการ emulate media feature นี้ผ่าน CDP): ซ่อนปุ่มติดตั้ง, แสดงข้อความ `Installed app`, wallet shell ยังอยู่, ไม่มี horizontal overflow
+- **ในสภาวะติดตั้งแล้วและตัดเน็ต**: shell ยังเปิดจาก cache (`navigator.onLine === false`)
+
 ### ข้อจำกัดของ PWA ที่ยังไม่มีหลักฐาน (ต้องไม่ประกาศว่าผ่าน)
 
-- **ยังไม่เคยกดติดตั้งจริงและเปิดในโหมด standalone** — ยืนยันได้แค่ว่าเบราว์เซอร์ไม่พบ installability error; ไม่ได้ทดสอบ dialog, `appinstalled`, หรือหน้าต่าง standalone
+- **ยังไม่มีการติดตั้งจริงบนเครื่องและเปิดหน้าต่าง standalone** — ต้องมีคนกด "Install" ใน dialog; ส่วนที่ยืนยันได้แล้วคือ Chrome เสนอ prompt และแอปแสดงปุ่มจริง
 - **iOS/Safari ยังไม่ทดสอบ** — มี `apple-touch-icon` และอ่าน `navigator.standalone` แล้ว แต่ path "Add to Home Screen" ไม่เคยลองบนเครื่องจริง
-- **ทดสอบบน Chrome desktop headless เท่านั้น** — ไม่ได้ครอบ Android/มือถือ หรือโปรไฟล์ที่มี engagement จริง (ซึ่งเป็นเงื่อนไขที่ Chrome จะยิง `beforeinstallprompt`)
+- **ทดสอบบน Chrome desktop (headless + headed) เท่านั้น** — ไม่ได้ครอบ Android/มือถือ หรือหน้าต่าง standalone ของแอปที่ติดตั้งแล้ว
 - **offline ทดสอบด้วยการตัดเน็ตผ่าน CDP** ไม่ใช่การปิด Wi-Fi บนอุปกรณ์จริง — ผลลัพธ์เทียบเท่าในระดับ network stack แต่ยังไม่ใช่การทดสอบภาคสนาม
 - **ไม่มี UI แจ้งว่ามีเวอร์ชันใหม่** — ยอมรับได้เพราะ navigation เป็น network-first (เห็นของใหม่ในรอบถัดไป) แต่ต้องรู้ว่าไม่มี
 - **cache version ผูกกับเทสต์** — `tests/static-export.test.mjs` ยืนยันสตริง `nsat-pwa-v4`; เมื่อ bump `VERSION` ใน `public/sw.js` ต้องแก้ assertion ในเทสต์พร้อมกัน ไม่งั้น CI แดง
