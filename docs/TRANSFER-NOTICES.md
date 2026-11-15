@@ -27,6 +27,17 @@ and the destination account** (`nsat-indexer/src/db.rs`, `add_account` for
 Exactness: amounts are the ledger's integer strings, grouped for display and
 never parsed as floating point (`lib/transferNotice.js`, `tests/transfer-notice.test.mjs`).
 
+## Surviving the lock
+
+The wallet locks the moment the app leaves the foreground — on a phone, every
+time the person switches apps — and locking throws away screen state. A notice
+that vanished with the lock would never be read by the recipient, so the last 20
+notices for an address are kept in `sessionStorage` (one tab, not the whole
+browser) and restored when that address is opened again. They are the same
+public chain rows Activity shows; no seed, key or password is written, and
+signing out clears them. Verified in the browser: 8 notices were restored after
+a reload + unlock, with no duplicate toast for the rows already announced.
+
 ## Dedupe and "every time"
 
 `EventSource` reconnects and replays from its cursor, so the same row can be
@@ -58,7 +69,8 @@ ledgers produced five notices and five toasts, newest first, no duplicates
 | `node --test tests/transfer-notice.test.mjs` | 10/10 pass (stream `amount_stroops` and history `amount`, failed rows, replay gate, dedupe, cap, secret scan of notice text) |
 | `NEXT_PUBLIC_API_SAME_ORIGIN=1 npm run build` | exit 0 |
 | `npm test` | exit 0, 0 failing |
-| Browser (dev origin + local stub indexer, no chain writes) | 5 rows → 5 notices + 5 toasts, one per ledger, newest first; unlocking a wallet shows its own notices, a switch clears the list |
+| Browser (dev origin + local stub indexer, no chain writes) | 5 rows → 5 notices + 5 toasts, one per ledger, newest first; 8 notices restored from `sessionStorage` after reload + unlock with no duplicate toast |
+| Lock behaviour | Leaving the foreground clears the on-screen list (screen state dies with the lock) but not the stored notices; the next unlock shows them again |
 
 ## Not tested here
 

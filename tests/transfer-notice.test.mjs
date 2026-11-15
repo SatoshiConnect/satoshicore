@@ -2,8 +2,20 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  addNotice, buildTransferNotice, groupDigits, isNewTransfer, noticeId, shortAddress,
+  addNotice, buildTransferNotice, clearStoredNotices, groupDigits, isNewTransfer,
+  loadStoredNotices, noticeId, saveStoredNotices, shortAddress,
 } from '../lib/transferNotice.js';
+
+// Minimal sessionStorage stand-in: the module must work with any Storage-shaped
+// object (and do nothing when the browser gives it a broken one).
+function memoryStorage() {
+  const map = new Map();
+  return {
+    getItem: (key) => (map.has(key) ? map.get(key) : null),
+    setItem: (key, value) => { map.set(key, String(value)); },
+    removeItem: (key) => { map.delete(key); },
+  };
+}
 
 const HASH = 'e94ab09e71a2c4f8b3d5e6a7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8a9b';
 const SENDER = 'GDAILW75CM6I6OJHOM242PSB2NOHNBONZKOQCBTVSMHJTMYHU77LQB55';
@@ -119,6 +131,37 @@ test('address and amount helpers refuse to invent values', () => {
   assert.equal(groupDigits('1.5'), '');
   assert.equal(groupDigits('-3'), '');
   assert.equal(groupDigits(null), '');
+});
+
+test('a notice survives a lock and comes back with the same wallet', () => {
+  const storage = memoryStorage();
+  const notice = buildTransferNotice({ hash: HASH, ledger: 313951, direction: 'in', counterparty: SENDER, amount: '100' });
+  saveStoredNotices(storage, SENDER, [notice]);
+  assert.deepEqual(loadStoredNotices(storage, SENDER), [notice]);
+  // Another address does not see this wallet's notices.
+  assert.deepEqual(loadStoredNotices(storage, RECIPIENT), []);
+  // Sign-out clears them.
+  clearStoredNotices(storage, SENDER);
+  assert.deepEqual(loadStoredNotices(storage, SENDER), []);
+});
+
+test('stored notices are validated, capped and never break the wallet', () => {
+  const storage = memoryStorage();
+  storage.setItem('nsat-notices-v1:' + SENDER, JSON.stringify([
+    { id: 'a', title: 'ok', direction: 'in' },
+    { id: '', title: 'no id', direction: 'in' },
+    { id: 'b', title: 'bad direction', direction: 'sideways' },
+    null,
+    'nope',
+  ]));
+  assert.deepEqual(loadStoredNotices(storage, SENDER).map((n) => n.id), ['a']);
+  storage.setItem('nsat-notices-v1:' + SENDER, 'not json');
+  assert.deepEqual(loadStoredNotices(storage, SENDER), []);
+  // Missing or broken storage is a no-op, not a thrown error.
+  assert.deepEqual(loadStoredNotices(null, SENDER), []);
+  assert.equal(loadStoredNotices(undefined, '').length, 0);
+  saveStoredNotices(null, SENDER, []);
+  clearStoredNotices({}, SENDER);
 });
 
 test('no notice text can carry a secret-shaped string', () => {

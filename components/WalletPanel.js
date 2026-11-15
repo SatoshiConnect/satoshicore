@@ -27,7 +27,10 @@ import {
 } from '../lib/biometricUnlock';
 import { backupSilently } from '../lib/driveBackup';
 import { seesMintStatus } from '../lib/mintVisibility';
-import { addNotice, buildTransferNotice, isNewTransfer } from '../lib/transferNotice';
+import {
+  addNotice, buildTransferNotice, clearAllStoredNotices, isNewTransfer,
+  loadStoredNotices, saveStoredNotices,
+} from '../lib/transferNotice';
 import {
   bindOwner, unbindOwner, visibleWalletNamed, walletNameForAccount, walletsForAccount,
 } from '../lib/walletBinding';
@@ -254,6 +257,10 @@ export default function WalletPanel() {
     setHistory([]);
     setChainHistory({ phase: 'idle', items: [], total: null, coverage: null, next: null, loadingMore: false, error: '' });
     setMintStatus({ phase: 'idle', data: null, timeline: [], unattributed: null, error: '' });
+    // Signing out is a change of person: the stored notices for this address go
+    // with the session, so the next one does not read the previous wallet's
+    // payment history.
+    if (typeof window !== 'undefined') clearAllStoredNotices(window.sessionStorage);
     setNotices([]);
     noticesSeenRef.current = new Set();
     newestLedgerRef.current = 0;
@@ -664,7 +671,17 @@ export default function WalletPanel() {
   useEffect(() => {
     newestLedgerRef.current = 0;
     streamStartedRef.current = Date.now();
-    setNotices([]);
+    const address = active?.pubkey || watchAddress;
+    // The lock that fires when the app leaves the foreground must not erase what
+    // the wallet was told: restoring this address's last notices is what lets a
+    // recipient read them on the way back.
+    const stored = address && typeof window !== 'undefined'
+      ? loadStoredNotices(window.sessionStorage, address)
+      : [];
+    for (const notice of stored) {
+      noticesSeenRef.current.add(`${String(address).toUpperCase()}:${notice.id}`);
+    }
+    setNotices(stored);
   }, [active?.pubkey, watchAddress]);
 
   // Whatever the history already shows is not news, so it becomes the floor for
@@ -697,7 +714,11 @@ export default function WalletPanel() {
     })) return;
     noticesSeenRef.current.add(seenKey);
     if (notice.ledger) newestLedgerRef.current = Math.max(newestLedgerRef.current, notice.ledger);
-    setNotices((current) => addNotice(current, notice));
+    setNotices((current) => {
+      const next = addNotice(current, notice);
+      if (typeof window !== 'undefined') saveStoredNotices(window.sessionStorage, address, next);
+      return next;
+    });
     notify(`${notice.title}${notice.detail ? ` — ${notice.detail}` : ''}`,
       notice.failed ? 'err' : 'ok');
   }, [notify]);
