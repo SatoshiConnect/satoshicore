@@ -1008,6 +1008,46 @@ body:has(.nw-root) .site-main.container {
   flex-shrink: 0;
 }
 
+/* The website-account entry on the wallet screen: one row, the way a phone
+ * lists a setting, so signing in does not need the Settings page. */
+.nw-signin-entry {
+  margin-top: 14px;
+}
+
+.nw-signin-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid var(--border-card);
+  background: var(--surface);
+}
+
+.nw-signin-row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nw-signin-row-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.nw-signin-row .nw-small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nw-signin-row-btn {
+  flex-shrink: 0;
+}
+
 /* Links out of the wallet, shown in Settings because a phone screen has no
  * site header to carry them. */
 .nw-linklist {
