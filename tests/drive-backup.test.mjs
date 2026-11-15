@@ -3,6 +3,7 @@
 // injected, and every case asserts a refusal path the restore UI depends on.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 
 import {
   BACKUP_APP, BACKUP_FILENAME, BACKUP_VERSION, buildBackup, downloadBackup,
@@ -95,6 +96,15 @@ test('malformed files are rejected with a usable message', async () => {
   const emptyWallets = JSON.stringify({ v: 1, wallets: [] });
   const emptyEnvelope = { ...envelope, keystore: emptyWallets, sha256: await sha256Hex(emptyWallets) };
   await assert.rejects(() => parseBackup(JSON.stringify(emptyEnvelope), { email: 'a@b.c' }), /unreadable/i);
+});
+
+// Regression: reauthenticateWithPopup() takes the signed-in user, and passing
+// the Auth instance instead throws "Cannot read properties of undefined
+// (reading 'app')" from inside Firebase, which is what users saw.
+test('Drive access re-authenticates the user, not the Auth instance', async () => {
+  const source = await readFile(new URL('../lib/driveBackup.js', import.meta.url), 'utf8');
+  assert.match(source, /reauthenticateWithPopup\(user, provider\)/);
+  assert.doesNotMatch(source, /reauthenticateWithPopup\(auth,/);
 });
 
 function driveStub(files) {
