@@ -29,9 +29,11 @@ import {
   ackIds, archiveAndClearRelay, relayIdOf,
 } from '../lib/chatRelayArchive';
 import { createAckQueue, createRoomGuard } from '../lib/chatRoomGuards';
+import { createChatTabSync } from '../lib/chatTabSync';
 import {
   countNewMessages, formatUnreadAge, markPeerSeen, mergeUnreadSnapshots,
-  readCursor, readReadMarks, readUnreadSnapshot, writeCursor, writeUnreadSnapshot,
+  readCursor, readReadMarks, readUnreadSnapshot, sanitizeUnreadCounts,
+  writeCursor, writeUnreadSnapshot,
 } from '../lib/chatUnread';
 import { cleanAmount, validateAmount } from '../lib/nsatSendPreflight';
 import { createPaymentRequestText, parsePaymentRequestText } from '../lib/chatPaymentRequest';
@@ -40,7 +42,7 @@ import {
   paymentRequestTiming, readPaymentRequests, requestKeyFor, setPaymentRequestStatus,
   settlePaymentRequestForCard, upsertPaymentRequests,
 } from '../lib/chatPaymentInbox';
-import { createTransactionCardText, parseTransactionCardText } from '../lib/chatTransaction';
+import { createTransactionCardText, parseTransactionCardText, verifyTransactionCard } from '../lib/chatTransaction';
 import ChatTransactionCard from './ChatTransactionCard';
 import { resolveProfileHandle } from '../lib/profile';
 
@@ -146,6 +148,8 @@ export default function ChatPanel({
   // peerRef remains the room-identity check for the read itself.
   const roomGuard = useMemo(() => createRoomGuard(), []);
   const ackQueue = useMemo(() => createAckQueue(), []);
+  const tabSyncRef = useRef(null);
+  const [pollLeader, setPollLeader] = useState(false);
   const peerRef = useRef('');
   useEffect(() => { peerRef.current = peer; }, [peer]);
   // Blocking is a relay-side control: the list lives with the wallet address,
@@ -225,6 +229,53 @@ export default function ChatPanel({
     [],
   );
 
+  // Another tab that owns the wallet's poll lock sends its snapshot here. It is
+  // deliberately just addresses, counts and a time; this tab only filters the
+  // room it is reading and updates the same state its own poll would.
+  const applyTabSnapshot = useCallback((snapshot) => {
+    if (!address || !snapshot || typeof snapshot !== 'object') return;
+    const at = Number(snapshot.at);
+    if (!Number.isFinite(at) || at <= 0) return;
+    // A room clear can land between the leader's write and this message. Never
+    // let that older snapshot put the badge back on screen.
+    if (readUnreadSnapshot(address).at > at) return;
+    const counts = sanitizeUnreadCounts(snapshot.counts);
+    const open = peerRef.current;
+    if (open) delete counts[open];
+    setUnreadByPeer(counts);
+    if (readOnly) setLockedUnread({ at, counts });
+    setUnreadPreview((current) => {
+      const next = {};
+      for (const [peer, preview] of Object.entries(current)) {
+        if (counts[peer]) next[peer] = preview;
+      }
+      return next;
+    });
+  }, [address, readOnly]);
+
+  // One tab per wallet polls. Web Locks elect the leader and BroadcastChannel
+  // carries its snapshot to followers; a follower never calls peek/ack on the
+  // 15-second timer. When the leader locks or closes, the next tab inherits it.
+  useEffect(() => {
+    if (!address || !relayConfigured) {
+      setPollLeader(false);
+      return undefined;
+    }
+    const sync = createChatTabSync({
+      wallet: address,
+      canLead: Boolean(seed32),
+      onSnapshot: applyTabSnapshot,
+      onLeaderChange: setPollLeader,
+    });
+    tabSyncRef.current = sync;
+    sync.prime(readUnreadSnapshot(address));
+    sync.start();
+    return () => {
+      sync.close();
+      if (tabSyncRef.current === sync) tabSyncRef.current = null;
+    };
+  }, [address, relayConfigured, seed32, applyTabSnapshot]);
+
   const refreshPaymentRequests = useCallback(async () => {
     if (!seed32 || !address) {
       setPaymentRequests([]);
@@ -271,7 +322,9 @@ export default function ChatPanel({
       const request = paymentRequestFromMessage({ message, owner: address });
       if (request) requests.push(request);
       const card = parseTransactionCardText(message.text, message.from);
-      if (card?.kind === 'transaction-card') cards.push(card);
+      if (card?.kind === 'transaction-card') {
+        cards.push({ card, at: message.at ?? message.ts ?? message.receivedAt });
+      }
     }
     if (requests.length === 0 && cards.length === 0) return;
     let changed = false;
@@ -285,9 +338,20 @@ export default function ChatPanel({
         if (strict) throw error;
       }
     }
-    for (const card of cards) {
+    for (const { card, at } of cards) {
       try {
-        const settled = await settlePaymentRequestForCard({ seed32, address, card });
+        // A card parsed from peer ciphertext is only a claim. Ask the indexer for
+        // the exact hash and settle only a finalized native payment; an unknown,
+        // pending, failed or wrong-party card leaves the request pending for the
+        // person to settle explicitly with Mark paid.
+        const settled = await settlePaymentRequestForCard({
+          seed32,
+          address,
+          card,
+          verifyCard: (candidate) => verifyTransactionCard(candidate, {
+            submittedAt: Number.isSafeInteger(at) && at > 0 ? Math.floor(at / 1000) : null,
+          }),
+        });
         changed = Boolean(settled) || changed;
       } catch {
         // A card is a claim; failing to update local bookkeeping does not make
@@ -341,6 +405,10 @@ export default function ChatPanel({
   // or when the relay's 7-day retention expires.
   const pollInbox = useCallback(async () => {
     if (!client.current || !seed32) return;
+    // An in-flight poll must not write after another tab took over the lock.
+    const tabSync = tabSyncRef.current;
+    if (!tabSync?.isLeader()) return;
+    const pollStartedAt = Date.now();
     const pollToken = roomGuard.beginPoll();
     try {
       // Only what arrived after this device's cursor: re-reading the whole
@@ -400,10 +468,18 @@ export default function ChatPanel({
       // The open room is on screen, so advance its read mark before the cursor:
       // a crash between the two must not leave mail counted yet never re-read.
       if (fresh.length) markPeerSeen(address, peer, newest[peer] || 0, undefined, deviceId);
-      const at = Date.now();
-      setUnreadByPeer(counts);
-      setUnreadPreview((current) => ({ ...current, ...previews }));
-      writeUnreadSnapshot(address, { counts, at });
+      // A different tab may have cleared a room while this poll was in flight.
+      // Its snapshot is newer than this poll's start, so keep it and publish the
+      // next poll instead of putting the old badge back. A tab that lost the
+      // lock must not write at all: the new leader owns the cursor and badges.
+      if (tabSync !== tabSyncRef.current || !tabSync.isLeader()) return;
+      if (readUnreadSnapshot(address).at <= pollStartedAt) {
+        const at = Date.now();
+        setUnreadByPeer(counts);
+        setUnreadPreview((current) => ({ ...current, ...previews }));
+        const saved = writeUnreadSnapshot(address, { counts, at });
+        tabSync.publish(saved);
+      }
       if (maxId > since) writeCursor(address, maxId, undefined, deviceId);
       if (fresh.length) {
         // The room is on screen, so these lines have been read here. With saved
@@ -430,11 +506,11 @@ export default function ChatPanel({
   }, [address, peer, seed32, deviceId, collectPaymentMessages, roomGuard, ackQueue]);
 
   useEffect(() => {
-    if (!relayConfigured || !seed32) return undefined;
+    if (!relayConfigured || !seed32 || !pollLeader) return undefined;
     void pollInbox();
     const timer = window.setInterval(() => { void pollInbox(); }, 15000);
     return () => window.clearInterval(timer);
-  }, [pollInbox, relayConfigured, seed32]);
+  }, [pollInbox, relayConfigured, seed32, pollLeader]);
 
   // A new message should be visible without hunting for it: keep the end of the
   // transcript in view, the way a chat app opens on the latest line.
@@ -530,7 +606,8 @@ export default function ChatPanel({
         delete next[target];
         return next;
       });
-      writeUnreadSnapshot(address, { counts, at });
+      const saved = writeUnreadSnapshot(address, { counts, at });
+      tabSyncRef.current?.publish(saved);
       const maxId = messages.reduce((max, message) => (message.id > max ? message.id : max), readCursor(address, undefined, deviceId));
       if (maxId > 0) writeCursor(address, maxId, undefined, deviceId);
     } catch (error) {

@@ -220,9 +220,13 @@ What is different is that reading is not the same as finishing:
   peer, request key and timestamp are clear, as with archived messages.
 - The lifecycle is `pending → paid | declined | expired`. A matching encrypted
   transaction card can settle a pending request (exact payer, payee and integer
-  amount); otherwise the person can mark it paid after using the Send page, or
-  decline it. A request becomes `expired` at `createdAt + 7 days`; the expiry is
-  materialized when the inbox is read, so no background job is required.
+  amount) **only after `verifyTransactionCard()` returns `finalized` for its
+  exact hash on the configured network**. A peer-authored card is otherwise just
+  an unverified claim; unknown, pending, failed or mismatched cards leave the
+  request pending, and the person can explicitly mark it paid after using the
+  Send page or decline it. A request becomes `expired` at `createdAt + 7 days`;
+  the expiry is materialized when the inbox is read, so no background job is
+  required.
 - The Chats list shows a **Waiting to pay** queue containing this wallet's
   incoming pending requests. A request stays there after the room is read or its
   relay delivery is acknowledged. The queue removes it on paid/declined and
@@ -286,14 +290,29 @@ known device instead of one shared mailbox:
 - A message that arrived while another room was open keeps its badge; opening
   its room clears that badge and this device's delivery.
 - The bottom **Chats** tab shows the same total: it subscribes to snapshot writes
-  from `lib/chatUnread.js` (an in-memory listener, no new storage) and reads the
-  open wallet's counts, or the merged per-wallet snapshot while locked — the
-  same rule the list uses, so the two cannot disagree. No message text is
-  involved, and the listener is dropped when the screen unmounts.
+  from `lib/chatUnread.js` (an in-memory listener plus `storage` events from the
+  leader tab, no new storage) and reads the open wallet's counts, or the merged
+  per-wallet snapshot while locked — the same rule the list uses, so the two
+  cannot disagree. No message text is involved, and the listener is dropped when
+  the screen unmounts.
 - The list polls every 15 s while a wallet is unlocked, asking only for ids after
   this device's cursor (a `since=` read, never a full mailbox walk). Counts and
   the newest preview line live in memory for the session; no preview text is
   ever written to storage.
+- **One polling tab per wallet.** `lib/chatTabSync.js` takes an exclusive Web
+  Lock (`scw-chat-poll-v1:<wallet>`); only that tab runs the interval and acks
+  deliveries. Other tabs join `scw-chat-tab-v1:<wallet>` and apply the leader's
+  `{ at, counts }` snapshots, so a second tab does not duplicate `peek`/`ack` or
+  write competing badge counts. A snapshot contains addresses, integers and a
+  timestamp only — never a preview or message text. If the leader closes or
+  locks, its lock resolves and the next queued tab takes over. A new tab asks
+  for the leader's last snapshot instead of waiting for the next poll. Browsers
+  without Web Locks or BroadcastChannel fall back to one poll per tab, so an
+  unsupported browser keeps working instead of leaving a tab with no reader.
+- Before a poll writes counts, it checks whether a newer snapshot appeared while
+  it was fetching; a room clear from another tab wins, so a stale poll cannot put
+  the badge back. A follower filters out the room it currently has open, and a
+  local room clear is announced to the leader.
 - Per-device state (`lib/chatUnread.js`) is address → number only:
   - `scw-chat-read-v1:<deviceId>` — per peer, the newest relay arrival time this
     device has seen;
@@ -416,13 +435,21 @@ a seed or a wallet file on the server.
   own conversation, no-key recipient reported.
 - `tests/chat-payment-request.test.mjs` (6) — exact integer amounts, address
   normalization, sender binding, inert malformed markers and creation limits.
-- `tests/chat-payment-inbox.test.mjs` (6) — incoming/outgoing request records,
+- `tests/chat-payment-inbox.test.mjs` (7) — incoming/outgoing request records,
   relay/thread id normalization, seven-day expiry with the 48-hour warning, and
-  exact payer/payee/amount matching for transaction cards.
+  exact payer/payee/amount matching for transaction cards and refusal of an
+  unverified peer card.
+- `tests/chat-payment-inbox-store.test.mjs` (6) — v1→v2 requests-store migration,
+  encrypted read/write and status persistence, expiry materialization, and the
+  expiry-vs-paid/declined compare-and-set race.
 - `tests/chat-room-races.test.mjs` (6) — deterministic fake relay + fake poll
   timer coverage for switching rooms during a poll, opening a room during a
   poll, opening another room during an in-flight read, overlapping and stale
   acks, newer-poll invalidation, and the ChatPanel guard wiring.
+- `tests/chat-tab-sync.test.mjs` (6) — fake Web Locks/BroadcastChannel coverage
+  for one polling tab per wallet, follower snapshots, snapshot replay for a new
+  tab, handoff after the leader closes, locked tabs never leading, wallet-scoped
+  channels, the no-Web-Locks fallback, and the ChatPanel poll-leader wiring.
 - `tests/chat-unread.test.mjs` (18) — no-text snapshots, merge for a locked list,
   per-device read marks and cursor with a legacy-key fallback, stable device id,
   unread counting by arrival time, the open-room rule (no badge for the room on

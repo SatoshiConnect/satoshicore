@@ -74,19 +74,54 @@ test('a transaction card settles only the exact payer, payee and amount', () => 
     { requestKey: 'incoming:1', direction: 'incoming', peer: PEER, amount: '10', status: 'pending', createdAt: 1 },
     { requestKey: 'outgoing:2', direction: 'outgoing', peer: PEER, amount: '20', status: 'pending', createdAt: 2 },
   ];
+  const finalized = { status: 'finalized' };
   const paidIncoming = { kind: 'transaction-card', from: OWN, to: PEER, amount: '10' };
-  assert.equal(paymentRequestForCard({ card: paidIncoming, requests, owner: OWN, now: 3 }).requestKey, 'incoming:1');
-  assert.equal(paymentRequestForCard({ card: { ...paidIncoming, amount: '11' }, requests, owner: OWN, now: 3 }), null);
-  assert.equal(paymentRequestForCard({ card: { ...paidIncoming, from: PEER }, requests, owner: OWN, now: 3 }), null);
+  assert.equal(paymentRequestForCard({
+    card: paidIncoming, requests, owner: OWN, now: 3, verification: finalized,
+  }).requestKey, 'incoming:1');
+  assert.equal(paymentRequestForCard({
+    card: { ...paidIncoming, amount: '11' }, requests, owner: OWN, now: 3, verification: finalized,
+  }), null);
+  assert.equal(paymentRequestForCard({
+    card: { ...paidIncoming, from: PEER }, requests, owner: OWN, now: 3, verification: finalized,
+  }), null);
 
   const paidOutgoing = { kind: 'transaction-card', from: PEER, to: OWN, amount: '20' };
-  assert.equal(paymentRequestForCard({ card: paidOutgoing, requests, owner: OWN, now: 3 }).requestKey, 'outgoing:2');
+  assert.equal(paymentRequestForCard({
+    card: paidOutgoing, requests, owner: OWN, now: 3, verification: finalized,
+  }).requestKey, 'outgoing:2');
   assert.equal(paymentRequestForCard({
     card: paidIncoming,
     requests: [{ ...requests[0], status: 'expired' }],
     owner: OWN,
     now: 10,
+    verification: finalized,
   }), null);
+});
+
+test('a peer card cannot settle until the exact hash is finalized', () => {
+  const requests = [
+    {
+      requestKey: 'outgoing:2', direction: 'outgoing', peer: PEER,
+      amount: '20', status: 'pending', createdAt: 2,
+    },
+  ];
+  const peerClaim = {
+    kind: 'transaction-card', hash: 'f'.repeat(64), amount: '20', from: PEER, to: OWN,
+  };
+  for (const verification of [
+    undefined,
+    { status: 'unknown', reason: 'not_found' },
+    { status: 'pending' },
+    { status: 'failed', resultCode: 'txFAILED' },
+  ]) {
+    assert.equal(paymentRequestForCard({
+      card: peerClaim, requests, owner: OWN, now: 3, verification,
+    }), null, `${verification?.status || 'missing'} must not settle a request`);
+  }
+  assert.equal(paymentRequestForCard({
+    card: peerClaim, requests, owner: OWN, now: 3, verification: { status: 'finalized' },
+  }).requestKey, 'outgoing:2');
 });
 
 test('relay ids and thread ids name the same request', () => {

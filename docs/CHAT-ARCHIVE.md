@@ -39,10 +39,12 @@ row        { key, owner, peer, requestKey, createdAt, iv, ct }
 The `requests` store is the local inbox behind **Waiting to pay**. Each row is a
 payment request plus its lifecycle status (`pending`, `paid`, `declined`,
 `expired`), AES-256-GCM sealed under the same archive key. The amount, requester,
-direction and status are encrypted; `owner`, `peer`, `requestKey` and
-`createdAt` are clear so the queue can be loaded without decrypting first. AAD
-includes the request key and creation time, so a row cannot be moved to another
-wallet, peer or time.
+direction and status are encrypted; `owner`, `peer`, `requestKey`, `createdAt`
+and a monotonic `revision` are clear so the queue can be loaded without
+decrypting and expiry writes can compare-and-set. AAD includes the request key
+and creation time, so a row cannot be moved to another wallet, peer or time.
+Expiry materialization checks the clear `revision` inside a write transaction; a
+concurrent paid/declined update bumps it and wins.
 
 This ledger is written whenever a request is decrypted, even when the transcript
 archive toggle is off. It is not the transcript: it exists so reading a request
@@ -115,7 +117,8 @@ bookkeeping only — no payment is signed or submitted by the inbox.
   `restoreArchivedRows`, `countArchivedMessages`, `clearArchivedWallet`,
   `clearAllArchives`, `forgetArchiveKeys`).
 - `lib/chatPaymentInbox.js` — encrypted request records, expiry/status logic and
-  matching a transaction card to a pending obligation.
+  matching a transaction card to a pending obligation; a card settles only after
+  `verifyTransactionCard()` returns `finalized`.
 - `lib/chatArchiveBackup.js` — the Drive container (`sealArchiveBackup`,
   `openArchiveBackup`, `archiveBackupFileName`).
 - `components/ChatArchiveCard.js` — Settings → “Chat history on this device”.

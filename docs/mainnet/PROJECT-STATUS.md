@@ -327,6 +327,21 @@ browser 430×932 (/  local)                    gate มีสองปุ่ม,
 | เปลี่ยน ID / แสดง `@id` บนหน้ากระเป๋า | **DEPLOYED** (`ccd24cd`) | ID เก็บ `@` เป็นส่วนของค่า (`@somchai`) ไม่ใช่เติมตอนแสดง — label, ฟิลด์ `profileId` และเอกสาร claim `profileIds/@id` เป็นสตริงเดียวกัน; ชื่อที่ไม่มี `@` ถูกปฏิเสธ (ไม่แปลงเงียบ ๆ) การ์ดเป็นโหมดดู/แก้: `Edit profile` → แก้ ID + primary wallet → `Save changes` / `Cancel` โดยเขียนทั้งคู่ในครั้งเดียว (`saveProfileIn()`) จอง ID ใหม่ → เขียน → คืน ID เก่า; ล้มเหลว = คืน ID ใหม่และคงของเดิม; ปุ่ม `@id` ข้าง address คัดลอกค่าจริง; เทสต์ `tests/profile.test.mjs` 13/13 |
 
 ```
+รอบล่าสุด — payment request verification + multi-tab chat sync (2026-11-16; commit นี้)
+
+npm run test:chat-payments                                                    ✓ 40/40
+npm run build (NEXT_PUBLIC_API_SAME_ORIGIN=1 + CHAT_RELAY=1)                  ✓ exit 0
+static export 12/12 · security scan 63 ไฟล์                                   ✓ 0 findings
+node scripts/verify-deployed-site.mjs https://satoshicore.org                 ✓ 8 passed / 0 failed / 2 advisory
+13 routes 200 · live index.html sha256 = 864917201f8ed70e5cafef9c1408e6e4d8f71c0b6ad5476fae3cb99e578ccf06
+live JS chunk 20 sha256 = 4e91304448ed01135933d43d5253575819be817d46df35713509788a20345b54 (ตรงกับ out/)
+release: ~/nsat-ops/satoshicore-webroot-chat-inbox-20261116-164328
+symlink: ~/nsat-ops/satoshicore-webroot → release ข้างต้น
+rollback: ln -sfn ~/nsat-ops/satoshicore-webroot-swfix-5f3b3d4 ~/nsat-ops/satoshicore-webroot
+หมายเหตุ: build จาก working tree ที่ตรงกับ commit นี้ (HEAD ก่อน commit: 2599fa4); ไม่มีธุรกรรม/การใช้เงิน และไม่ได้แตะ DNS/Caddy/gateway
+```
+
+```
 รอบส่งเหรียญจากในแชท (2026-11-16, `02f5644`)
 npm run build + npm test                                                   ✓ exit 0, 0 failing
 6 routes 200 · verify-deployed 8 passed / 0 failed (advisory เดิม)
