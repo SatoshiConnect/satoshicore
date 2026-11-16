@@ -105,11 +105,18 @@ const HISTORY_PAGE = 100;
 // off unless the deployment turns it on, so a build pointed at a gateway without
 // the relay says so instead of queueing messages that can never be delivered.
 const CHAT_RELAY_ENABLED = process.env.NEXT_PUBLIC_CHAT_RELAY === '1';
+const CHAT_RELAY_SAME_ORIGIN = CHAT_RELAY_ENABLED
+  && process.env.NEXT_PUBLIC_API_SAME_ORIGIN === '1';
 const CHAT_RELAY_ORIGIN = !CHAT_RELAY_ENABLED
   ? ''
-  : process.env.NEXT_PUBLIC_API_SAME_ORIGIN === '1'
+  : CHAT_RELAY_SAME_ORIGIN
     ? ''
     : (process.env.NEXT_PUBLIC_API_GATEWAY_URL || '').replace(/\/$/, '');
+// A same-origin build still needs an absolute origin for the fetch client;
+// an empty string here used to make the enabled Messages screen say that no
+// relay was configured. Resolve it when the chat screen actually renders.
+const chatRelayOrigin = () => CHAT_RELAY_ORIGIN
+  || (CHAT_RELAY_SAME_ORIGIN && typeof window !== 'undefined' ? window.location.origin : '');
 
 function supplyAndMinted(totalCoins) {
   try {
@@ -1614,7 +1621,7 @@ export default function WalletPanel() {
             <ChatPanel seed32={active?.seed32 || null}
               address={active?.pubkey || watchAddress || ''}
               contacts={chatContacts}
-              relayOrigin={CHAT_RELAY_ORIGIN}
+              relayOrigin={chatRelayOrigin()}
               onSendTo={(address, requestedAmount = '') => {
                 setDest(address);
                 setCreateDest(false);
