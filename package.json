@@ -5,14 +5,14 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "test": "node --test tests/balance-refresh.test.mjs && node --test tests/explorer-account.test.mjs && node tests/static-export.test.mjs && node --test tests/service-worker.test.mjs && node --test tests/wallet-engine.test.mjs && node --test tests/keystore.test.mjs && node --test tests/firebase-auth.test.mjs && node --test tests/theme-sync.test.mjs && node --test tests/wallet-links.test.mjs && node --test tests/profile.test.mjs && node --test tests/chat-friends.test.mjs && node --test tests/biometric-unlock.test.mjs && node --test tests/drive-backup.test.mjs && node --test tests/wallet-binding.test.mjs && node --test tests/session-policy.test.mjs && node --test tests/mint-visibility.test.mjs && node --test tests/transfer-notice.test.mjs && node --test tests/e2e-chat.test.mjs && node --test tests/chat-relay.test.mjs && node --test tests/chat-relay-gates.test.mjs && node --test tests/chat-client.test.mjs && node --test tests/chat-payment-request.test.mjs && node --test tests/chat-coin-approval.test.mjs && node --test tests/chat-unread.test.mjs && node --test tests/chat-archive.test.mjs && node --test tests/chat-relay-archive.test.mjs && node --test tests/chat-transaction.test.mjs && node --test tests/contacts.test.mjs && node --test tests/backup-reminder.test.mjs && node --test tests/theme-contrast.test.mjs && node scripts/check-css-hex.mjs",
+    "test": "node --test tests/balance-refresh.test.mjs && node --test tests/explorer-account.test.mjs && node tests/static-export.test.mjs && node --test tests/service-worker.test.mjs && node --test tests/wallet-engine.test.mjs && node --test tests/keystore.test.mjs && node --test tests/firebase-auth.test.mjs && node --test tests/theme-sync.test.mjs && node --test tests/wallet-links.test.mjs && node --test tests/profile.test.mjs && node --test tests/chat-friends.test.mjs && node --test tests/biometric-unlock.test.mjs && node --test tests/drive-backup.test.mjs && node --test tests/wallet-binding.test.mjs && node --test tests/session-policy.test.mjs && node --test tests/mint-visibility.test.mjs && node --test tests/transfer-notice.test.mjs && node --test tests/e2e-chat.test.mjs && node --test tests/chat-relay.test.mjs && node --test tests/chat-relay-gates.test.mjs && node --test tests/chat-client.test.mjs && node --test tests/chat-payment-request.test.mjs && node --test tests/chat-payment-inbox.test.mjs && node --test tests/chat-room-races.test.mjs && node --test tests/chat-coin-approval.test.mjs && node --test tests/chat-unread.test.mjs && node --test tests/chat-archive.test.mjs && node --test tests/chat-relay-archive.test.mjs && node --test tests/chat-transaction.test.mjs && node --test tests/contacts.test.mjs && node --test tests/backup-reminder.test.mjs && node --test tests/theme-contrast.test.mjs && node scripts/check-css-hex.mjs",
     "test:auth": "node --test tests/firebase-auth.test.mjs",
     "test:theme-sync": "node --test tests/theme-sync.test.mjs",
     "test:links": "node --test tests/wallet-links.test.mjs",
     "test:profile": "node --test tests/profile.test.mjs",
     "test:contacts": "node --test tests/contacts.test.mjs",
     "test:relay-gates": "node --test tests/chat-relay-gates.test.mjs",
-    "test:chat-payments": "node --test tests/chat-payment-request.test.mjs tests/chat-coin-approval.test.mjs tests/chat-transaction.test.mjs tests/chat-client.test.mjs",
+    "test:chat-payments": "node --test tests/chat-payment-request.test.mjs tests/chat-payment-inbox.test.mjs tests/chat-coin-approval.test.mjs tests/chat-transaction.test.mjs tests/chat-client.test.mjs",
     "verify:messenger-p3": "node scripts/verify-messenger-p3.mjs",
     "test:biometric": "node --test tests/biometric-unlock.test.mjs",
     "test:drive": "node --test tests/drive-backup.test.mjs",
@@ -31,7 +31,8 @@
     "build:extension:firefox": "NSAT_EXT_TARGET=firefox node scripts/build-extension.mjs",
     "test:chat-archive": "node --test tests/chat-archive.test.mjs",
     "test:chat-archive-ack": "node --test tests/chat-relay-archive.test.mjs",
-    "test:chat-unread": "node --test tests/chat-unread.test.mjs"
+    "test:chat-unread": "node --test tests/chat-unread.test.mjs",
+    "test:chat-races": "node --test tests/chat-room-races.test.mjs"
   },
   "dependencies": {
     "firebase": "12.14.0",

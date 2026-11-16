@@ -118,6 +118,56 @@ test('a read mark is per device and per wallet, and only moves forward', async (
   assert.deepEqual(readReadMarks(OWNER, storage), {});
 });
 
+test('read marks and the cursor are scoped to one device, not just one wallet', async () => {
+  const {
+    CURSOR_KEY, READ_KEY, markPeerSeen, readCursor, readReadMarks, writeCursor,
+  } = await import('../lib/chatUnread.js');
+  const LAPTOP = 'laptop-device-0001';
+  const PHONE = 'phone-device-0001';
+  const storage = memoryStorage();
+
+  markPeerSeen(OWNER, PEER, 1_000, storage, LAPTOP);
+  assert.deepEqual(readReadMarks(OWNER, storage, LAPTOP), { [PEER]: 1_000 });
+  assert.deepEqual(readReadMarks(OWNER, storage, PHONE), {}, 'the phone keeps its own mark');
+
+  assert.equal(writeCursor(OWNER, 42, storage, LAPTOP), 42);
+  assert.equal(readCursor(OWNER, storage, LAPTOP), 42);
+  assert.equal(readCursor(OWNER, storage, PHONE), 0);
+
+  markPeerSeen(OWNER, PEER, 2_000, storage, PHONE);
+  assert.deepEqual(readReadMarks(OWNER, storage, LAPTOP), { [PEER]: 1_000 });
+
+  // State written before device ids existed is still readable as a fallback;
+  // the next write lands on the scoped key.
+  const legacy = memoryStorage({
+    [READ_KEY]: JSON.stringify({ [OWNER]: { [PEER]: 7 } }),
+    [CURSOR_KEY]: JSON.stringify({ [OWNER]: 9 }),
+  });
+  assert.deepEqual(readReadMarks(OWNER, legacy, PHONE), { [PEER]: 7 });
+  assert.equal(readCursor(OWNER, legacy, PHONE), 9);
+  markPeerSeen(OWNER, PEER, 8, legacy, PHONE);
+  assert.deepEqual(readReadMarks(OWNER, legacy, PHONE), { [PEER]: 8 });
+  assert.deepEqual(readReadMarks(OWNER, legacy, LAPTOP), { [PEER]: 7 }, 'the old key is untouched');
+});
+
+test('the browser device id is stable, validated and stored once', async () => {
+  const {
+    DEVICE_KEY, DEVICE_RE, getChatDeviceId, normalizeDeviceId,
+  } = await import('../lib/chatDevice.js');
+  const storage = memoryStorage();
+  const first = getChatDeviceId(storage);
+  assert.match(first, DEVICE_RE);
+  assert.equal(getChatDeviceId(storage), first);
+  assert.equal(storage.getItem(DEVICE_KEY), first);
+
+  // A corrupted value is replaced rather than used in a signature.
+  storage.setItem(DEVICE_KEY, 'short');
+  const repaired = getChatDeviceId(storage);
+  assert.match(repaired, DEVICE_RE);
+  assert.notEqual(repaired, 'short');
+  assert.equal(normalizeDeviceId('short'), '');
+});
+
 test('read marks drop junk and a bad write leaves the old marks alone', async () => {
   const { markPeerSeen, readReadMarks, READ_KEY } = await import('../lib/chatUnread.js');
   const storage = memoryStorage({

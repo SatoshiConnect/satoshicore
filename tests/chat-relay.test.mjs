@@ -15,10 +15,13 @@ import { encodeG } from '../lib/nsatCodec.js';
 const unhex = (text) => new Uint8Array(Buffer.from(text, 'hex'));
 const SEED_A = unhex('000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f');
 const SEED_B = unhex('1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100');
+const SEED_C = new Uint8Array(32).fill(9);
 const KEY_A = nacl.sign.keyPair.fromSeed(SEED_A);
 const KEY_B = nacl.sign.keyPair.fromSeed(SEED_B);
+const KEY_C = nacl.sign.keyPair.fromSeed(SEED_C);
 const ADDRESS_A = encodeG(KEY_A.publicKey);
 const ADDRESS_B = encodeG(KEY_B.publicKey);
+const ADDRESS_C = encodeG(KEY_C.publicKey);
 
 let dir;
 let relay;
@@ -34,11 +37,13 @@ after(() => {
 });
 
 let nonceCounter = 0;
-function signed({ keyPair, address, method, path: requestPath, body = null, ts = Date.now() }) {
+function signed({
+  keyPair, address, method, path: requestPath, body = null, ts = Date.now(), device = '',
+}) {
   nonceCounter += 1;
   const nonce = `nonce-${nonceCounter}-${Math.random().toString(36).slice(2, 10)}`;
   const signature = nacl.sign.detached(
-    Buffer.from(requestString({ method, path: requestPath, address, ts, nonce })),
+    Buffer.from(requestString({ method, path: requestPath, address, ts, nonce, device })),
     keyPair.secretKey,
   );
   return {
@@ -46,6 +51,7 @@ function signed({ keyPair, address, method, path: requestPath, body = null, ts =
     path: requestPath,
     headers: {
       'x-nsat-address': address,
+      ...(device ? { 'x-nsat-device': device } : {}),
       'x-nsat-ts': String(ts),
       'x-nsat-nonce': nonce,
       'x-nsat-signature': Buffer.from(signature).toString('base64'),
@@ -100,6 +106,28 @@ test('a published key can be read by anyone, a bad one is rejected', () => {
   assert.equal(relay.handle({ method: 'POST', path: '/api/v1/chat/keys', headers: {}, body: { bundle } }).status, 401);
 });
 
+test('a device id is signed and cannot be swapped after signing', () => {
+  const laptop = 'laptop-device-0001';
+  const phone = 'phone-device-0001';
+  const request = signed({
+    keyPair: KEY_A, address: ADDRESS_A, method: 'GET', path: '/api/v1/chat/messages', device: laptop,
+  });
+  assert.equal(verifySignedRequest(request), ADDRESS_A);
+
+  // Moving the same signature to another device changes the request line.
+  const swapped = { ...request, headers: { ...request.headers, 'x-nsat-device': phone } };
+  assert.equal(verifySignedRequest(swapped), null);
+
+  // Adding a device to a v1 signature is not a valid v2 signature either.
+  const v1 = signed({ keyPair: KEY_A, address: ADDRESS_A, method: 'GET', path: '/api/v1/chat/messages' });
+  assert.equal(verifySignedRequest({ ...v1, headers: { ...v1.headers, 'x-nsat-device': laptop } }), null);
+
+  // A malformed device header fails closed instead of falling back to legacy.
+  assert.equal(verifySignedRequest({
+    ...v1, headers: { ...v1.headers, 'x-nsat-device': 'short' },
+  }), null);
+});
+
 test('a message is delivered to its recipient only, and ack deletes it', () => {
   const bKeys = x25519KeyPairFromSeed(SEED_B);
   const envelope = sealMessage({
@@ -129,6 +157,140 @@ test('a message is delivered to its recipient only, and ack deletes it', () => {
   assert.equal(ack.status, 200);
   const afterAck = relay.handle(signed({ keyPair: KEY_B, address: ADDRESS_B, method: 'GET', path: '/api/v1/chat/messages' }));
   assert.equal(afterAck.body.messages.length, 0);
+});
+
+test('ack removes only the device that read the message', () => {
+  const laptop = 'laptop-device-0001';
+  const phone = 'phone-device-0001';
+  // Both devices have identified themselves before the message arrives, so the
+  // relay fans it out to both mailboxes.
+  relay.handle(signed({
+    keyPair: KEY_C, address: ADDRESS_C, method: 'GET', path: '/api/v1/chat/messages', device: laptop,
+  }));
+  relay.handle(signed({
+    keyPair: KEY_C, address: ADDRESS_C, method: 'GET', path: '/api/v1/chat/messages', device: phone,
+  }));
+
+  const cKeys = x25519KeyPairFromSeed(SEED_C);
+  const envelope = sealMessage({
+    seed32: SEED_A, from: ADDRESS_A, to: ADDRESS_C,
+    recipientX25519Pub: cKeys.publicKey, text: 'read on the laptop only',
+  });
+  assert.equal(relay.handle(signed({
+    keyPair: KEY_A, address: ADDRESS_A, method: 'POST', path: '/api/v1/chat/messages', body: { envelope },
+  })).status, 200);
+
+  const inbox = (device) => relay.handle(signed({
+    keyPair: KEY_C, address: ADDRESS_C, method: 'GET', path: '/api/v1/chat/messages', device,
+  })).body.messages;
+  const onLaptop = inbox(laptop);
+  const onPhone = inbox(phone);
+  assert.equal(onLaptop.length, 1);
+  assert.equal(onPhone.length, 1);
+
+  // The laptop reads and acknowledges: its copy goes, the phone's stays.
+  const laptopAck = relay.handle(signed({
+    keyPair: KEY_C, address: ADDRESS_C, method: 'POST', path: '/api/v1/chat/ack',
+    device: laptop, body: { ids: onLaptop.map((message) => message.id) },
+  }));
+  assert.deepEqual(laptopAck.body, { ok: true, acked: 1, deleted: 0 });
+  assert.equal(inbox(laptop).length, 0);
+  assert.equal(inbox(phone).length, 1);
+
+  // The phone acknowledging the same id removes the envelope for good.
+  const phoneAck = relay.handle(signed({
+    keyPair: KEY_C, address: ADDRESS_C, method: 'POST', path: '/api/v1/chat/ack',
+    device: phone, body: { ids: onPhone.map((message) => message.id) },
+  }));
+  assert.deepEqual(phoneAck.body, { ok: true, acked: 1, deleted: 1 });
+  assert.equal(inbox(phone).length, 0);
+});
+
+test('one device acking a wallet cannot clear another wallet on the same browser', () => {
+  const localDir = mkdtempSync(path.join(os.tmpdir(), 'nsat-chat-shared-device-'));
+  const local = createChatRelay({ dbPath: path.join(localDir, 'relay.sqlite') });
+  const device = 'shared-browser-0001';
+  try {
+    // The same browser profile holds two wallets, so both see this device id.
+    local.handle(signed({
+      keyPair: KEY_B, address: ADDRESS_B, method: 'GET', path: '/api/v1/chat/messages', device,
+    }));
+    local.handle(signed({
+      keyPair: KEY_C, address: ADDRESS_C, method: 'GET', path: '/api/v1/chat/messages', device,
+    }));
+
+    const toB = sealMessage({
+      seed32: SEED_A, from: ADDRESS_A, to: ADDRESS_B,
+      recipientX25519Pub: x25519KeyPairFromSeed(SEED_B).publicKey, text: 'for b',
+    });
+    const toC = sealMessage({
+      seed32: SEED_A, from: ADDRESS_A, to: ADDRESS_C,
+      recipientX25519Pub: x25519KeyPairFromSeed(SEED_C).publicKey, text: 'for c',
+    });
+    local.handle(signed({
+      keyPair: KEY_A, address: ADDRESS_A, method: 'POST', path: '/api/v1/chat/messages', body: { envelope: toB },
+    }));
+    local.handle(signed({
+      keyPair: KEY_A, address: ADDRESS_A, method: 'POST', path: '/api/v1/chat/messages', body: { envelope: toC },
+    }));
+
+    const inbox = (keyPair, address) => local.handle(signed({
+      keyPair, address, method: 'GET', path: '/api/v1/chat/messages', device,
+    })).body.messages;
+    const messageB = inbox(KEY_B, ADDRESS_B)[0];
+    const messageC = inbox(KEY_C, ADDRESS_C)[0];
+    assert.ok(messageB && messageC);
+
+    // B names C's id too; the recipient scope must ignore it.
+    const ack = local.handle(signed({
+      keyPair: KEY_B, address: ADDRESS_B, method: 'POST', path: '/api/v1/chat/ack',
+      device, body: { ids: [messageB.id, messageC.id] },
+    }));
+    assert.deepEqual(ack.body, { ok: true, acked: 1, deleted: 1 });
+    assert.equal(inbox(KEY_C, ADDRESS_C).length, 1);
+  } finally {
+    local.close();
+    rmSync(localDir, { recursive: true, force: true });
+  }
+});
+
+test('a device that registers late still receives pending mail', () => {
+  const phone = 'phone-device-0002';
+  // Legacy clients register the shared 'legacy' device and read first.
+  relay.handle(signed({
+    keyPair: KEY_C, address: ADDRESS_C, method: 'GET', path: '/api/v1/chat/messages',
+  }));
+
+  const cKeys = x25519KeyPairFromSeed(SEED_C);
+  const envelope = sealMessage({
+    seed32: SEED_A, from: ADDRESS_A, to: ADDRESS_C,
+    recipientX25519Pub: cKeys.publicKey, text: 'waiting for the phone',
+  });
+  assert.equal(relay.handle(signed({
+    keyPair: KEY_A, address: ADDRESS_A, method: 'POST', path: '/api/v1/chat/messages', body: { envelope },
+  })).status, 200);
+
+  const legacyInbox = relay.handle(signed({
+    keyPair: KEY_C, address: ADDRESS_C, method: 'GET', path: '/api/v1/chat/messages',
+  })).body.messages;
+  assert.equal(legacyInbox.length, 1);
+
+  // First contact from the phone backfills what is still pending.
+  const phoneInbox = relay.handle(signed({
+    keyPair: KEY_C, address: ADDRESS_C, method: 'GET', path: '/api/v1/chat/messages', device: phone,
+  })).body.messages;
+  assert.equal(phoneInbox.length, 1);
+
+  // The legacy client acknowledging does not remove the phone's copy.
+  const legacyAck = relay.handle(signed({
+    keyPair: KEY_C, address: ADDRESS_C, method: 'POST', path: '/api/v1/chat/ack',
+    body: { ids: legacyInbox.map((message) => message.id) },
+  }));
+  assert.deepEqual(legacyAck.body, { ok: true, acked: 1, deleted: 0 });
+  const phoneAfter = relay.handle(signed({
+    keyPair: KEY_C, address: ADDRESS_C, method: 'GET', path: '/api/v1/chat/messages', device: phone,
+  })).body.messages;
+  assert.equal(phoneAfter.length, 1);
 });
 
 test('sending on behalf of another wallet, replays and oversize bodies fail closed', () => {

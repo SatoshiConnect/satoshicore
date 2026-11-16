@@ -139,6 +139,10 @@ export default function ChatArchiveCard({ session } = {}) {
         wallet’s conversations on this device, encrypted with a key derived from its seed — there
         is no extra password to remember and no key to export.
       </p>
+      <p className="nw-small nw-dim" style={{ margin: '0 0 10px' }}>
+        Pending payment requests are kept separately in the same encrypted local database, even
+        when this history toggle is off. Deleting message history does not delete them.
+      </p>
       {!address ? (
         <p className="nw-small nw-dim" role="status">Unlock a wallet to choose what to keep on this device.</p>
       ) : (

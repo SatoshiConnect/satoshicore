@@ -20,9 +20,11 @@ const unhex = (text) => new Uint8Array(Buffer.from(text, 'hex'));
 const SEED_A = unhex('000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f');
 const SEED_B = unhex('1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100');
 const SEED_C = new Uint8Array(32).fill(7);
+const SEED_D = new Uint8Array(32).fill(9);
 const ADDRESS_A = encodeG(nacl.sign.keyPair.fromSeed(SEED_A).publicKey);
 const ADDRESS_B = encodeG(nacl.sign.keyPair.fromSeed(SEED_B).publicKey);
 const ADDRESS_C = encodeG(nacl.sign.keyPair.fromSeed(SEED_C).publicKey);
+const ADDRESS_D = encodeG(nacl.sign.keyPair.fromSeed(SEED_D).publicKey);
 
 // The relay keeps mail until it is cleared, and these tests share one database:
 // start each mailbox test from an empty one explicitly.
@@ -73,6 +75,11 @@ test('the client and the relay sign the same canonical request', () => {
     ts: 1_763_000_000_000, nonce: 'abcdef0123456789',
   };
   assert.equal(chatRequestString(fields), requestString(fields));
+
+  // A device id is part of the v2 line, so both sides must agree byte for byte.
+  const withDevice = { ...fields, device: 'laptop-device-0001' };
+  assert.equal(chatRequestString(withDevice), requestString(withDevice));
+  assert.match(chatRequestString(withDevice), /^nsc-chat\|2\|POST\|\/api\/v1\/chat\/messages\|/);
 });
 
 test('two wallets exchange encrypted messages over HTTP', async () => {
@@ -158,24 +165,31 @@ test('a request signed for another path is refused by the relay', async () => {
     /refused/);
 });
 
-test('a second device on the same wallet can read what the first one already read', async () => {
+test('ack on one device leaves the other device\'s copy intact', async () => {
   const a = createChatClient({ origin });
-  const laptop = createChatClient({ origin });
-  const phone = createChatClient({ origin });
-  await laptop.publishKey({ seed32: SEED_B, address: ADDRESS_B });
-  await clearMailbox(laptop, SEED_B, ADDRESS_B);
-  await a.send({ seed32: SEED_A, from: ADDRESS_A, to: ADDRESS_B, text: 'read on the laptop' });
+  const laptop = createChatClient({ origin, deviceId: 'laptop-device-0001' });
+  const phone = createChatClient({ origin, deviceId: 'phone-device-0001' });
+  await laptop.publishKey({ seed32: SEED_D, address: ADDRESS_D });
+  await clearMailbox(laptop, SEED_D, ADDRESS_D);
+  // Register the phone before the message so it is a known delivery target.
+  await phone.peek({ seed32: SEED_D, address: ADDRESS_D });
+  await a.send({ seed32: SEED_A, from: ADDRESS_A, to: ADDRESS_D, text: 'read on the laptop' });
 
-  // Same seed, same wallet: the laptop reading does not remove the copy the
-  // phone still needs.
-  const onLaptop = await laptop.peek({ seed32: SEED_B, address: ADDRESS_B });
+  const onLaptop = await laptop.peek({ seed32: SEED_D, address: ADDRESS_D });
   assert.deepEqual(onLaptop.messages.map((m) => m.text), ['read on the laptop']);
-  const onPhone = await phone.peek({ seed32: SEED_B, address: ADDRESS_B });
+  const onPhone = await phone.peek({ seed32: SEED_D, address: ADDRESS_D });
   assert.deepEqual(onPhone.messages.map((m) => m.text), ['read on the laptop']);
 
-  // Clearing is explicit, and it does remove it for both.
-  await phone.ack({ seed32: SEED_B, address: ADDRESS_B, ids: onPhone.messages.map((m) => m.id) });
-  assert.equal((await laptop.peek({ seed32: SEED_B, address: ADDRESS_B })).messages.length, 0);
+  // Acknowledging on the laptop removes only its delivery; the phone still has
+  // the message it has not read.
+  const [message] = onLaptop.messages;
+  assert.equal(await laptop.ack({ seed32: SEED_D, address: ADDRESS_D, ids: [message.id] }), 0);
+  assert.equal((await laptop.peek({ seed32: SEED_D, address: ADDRESS_D })).messages.length, 0);
+  assert.deepEqual((await phone.peek({ seed32: SEED_D, address: ADDRESS_D })).messages.map((m) => m.text), ['read on the laptop']);
+
+  // The phone acknowledging the same id removes the envelope for good.
+  assert.equal(await phone.ack({ seed32: SEED_D, address: ADDRESS_D, ids: [message.id] }), 1);
+  assert.equal((await phone.peek({ seed32: SEED_D, address: ADDRESS_D })).messages.length, 0);
 });
 
 test('peeking counts new mail without deleting it, and ack removes only what was named', async () => {

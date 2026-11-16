@@ -91,6 +91,14 @@ test('gateway: health, chain info proxy, signed tx relay, CORS, 404', async () =
     const badOrigin = await request(gwPort, '/api/v1/chain/info', { origin: 'https://evil.example' });
     assert.equal(badOrigin.headers['access-control-allow-origin'], undefined);
 
+    // The chat device id travels as its own signed header, so preflight must
+    // allow it alongside the signature headers.
+    const preflight = await request(gwPort, '/api/v1/chat/messages', {
+      method: 'OPTIONS', origin: 'https://satoshicore.org',
+    });
+    assert.equal(preflight.status, 204);
+    assert.match(preflight.headers['access-control-allow-headers'], /X-NSAT-Device/);
+
     // signed tx relay — envelope forwarded verbatim to core
     const tx = await request(gwPort, '/api/v1/tx', {
       method: 'POST',

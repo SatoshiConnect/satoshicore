@@ -1300,6 +1300,45 @@ body:has(.nw-root) .site-footer {
 .nw-chat-remove { font-size: 12px; padding: 6px 10px; }
 .nw-chat-empty { padding: 26px 8px; text-align: center; color: var(--text-dim); }
 .nw-chat-empty strong { display: block; margin-bottom: 4px; color: var(--text); }
+.nw-payqueue {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 38%, var(--border-soft));
+  border-radius: 14px;
+  background: var(--warn-tint);
+}
+.nw-payqueue-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.nw-payqueue-head strong { color: var(--text); }
+.nw-payqueue-warning { margin: 0; color: var(--warn); }
+.nw-payqueue-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.nw-payqueue-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--row-border);
+}
+.nw-payqueue-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 4px 2px;
+  background: none;
+  text-align: left;
+}
+.nw-payqueue-name { color: var(--text); font-weight: 600; overflow-wrap: anywhere; }
+.nw-payqueue-meta { color: var(--text-dim); font-size: 12px; }
+.nw-payqueue-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.nw-payqueue-recent { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--border-soft); border-radius: 14px; }
+.nw-payqueue-recent > summary { cursor: pointer; color: var(--text-dim); font-size: 13px; }
+.nw-payqueue-recent .nw-payqueue-list { margin-top: 6px; }
+.nw-chat-requeststate { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .nw-chat-roomhead {
   display: flex; align-items: center; gap: 8px;
   padding-bottom: 10px; border-bottom: 1px solid var(--row-border);

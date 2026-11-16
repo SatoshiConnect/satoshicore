@@ -129,7 +129,7 @@ function corsHeaders(req) {
       'Access-Control-Allow-Origin': origin,
       Vary: 'Origin',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, X-NSAT-Address, X-NSAT-Ts, X-NSAT-Nonce, X-NSAT-Signature',
+      'Access-Control-Allow-Headers': 'Content-Type, X-NSAT-Address, X-NSAT-Device, X-NSAT-Ts, X-NSAT-Nonce, X-NSAT-Signature',
       'Access-Control-Max-Age': '600'
     };
   }

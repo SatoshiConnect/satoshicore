@@ -8,17 +8,18 @@
 //
 // The thread lives in this session only: nothing readable is written to
 // localStorage, so losing the tab loses the transcript unless the person opted
-// into saved chat history. Reading never deletes by itself; a message leaves the
-// relay when this device has stored a copy in that history, or after the relay's
-// 7-day retention, whichever comes first.
+// into saved chat history. Fetching never deletes by itself; opening a room
+// acknowledges this device's copies, and a saved copy acknowledges them sooner.
+// Other devices keep their own deliveries, or lose them at the 7-day retention.
 //
 // Layout follows the shape people already know from a messenger: a list of
 // people, then one room with a header, bubbles and a single composer. The
 // wallet-specific details (address, blocking, payment request) sit behind the
 // details panel instead of in the middle of the conversation.
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { createChatClient } from '../lib/chatClient';
+import { getChatDeviceId } from '../lib/chatDevice';
 import {
   FRIEND_LIMIT, addFriend, mergeContacts, parseFriendTarget, readFriends, removeFriend,
 } from '../lib/chatFriends';
@@ -27,12 +28,18 @@ import { archiveMessages, readArchivedThread, readArchivePrefs } from '../lib/ch
 import {
   ackIds, archiveAndClearRelay, relayIdOf,
 } from '../lib/chatRelayArchive';
+import { createAckQueue, createRoomGuard } from '../lib/chatRoomGuards';
 import {
   countNewMessages, formatUnreadAge, markPeerSeen, mergeUnreadSnapshots,
   readCursor, readReadMarks, readUnreadSnapshot, writeCursor, writeUnreadSnapshot,
 } from '../lib/chatUnread';
 import { cleanAmount, validateAmount } from '../lib/nsatSendPreflight';
 import { createPaymentRequestText, parsePaymentRequestText } from '../lib/chatPaymentRequest';
+import {
+  paymentRequestFromMessage, paymentRequestStatusAt,
+  paymentRequestTiming, readPaymentRequests, requestKeyFor, setPaymentRequestStatus,
+  settlePaymentRequestForCard, upsertPaymentRequests,
+} from '../lib/chatPaymentInbox';
 import { createTransactionCardText, parseTransactionCardText } from '../lib/chatTransaction';
 import ChatTransactionCard from './ChatTransactionCard';
 import { resolveProfileHandle } from '../lib/profile';
@@ -50,6 +57,20 @@ const initials = (value, handle) => {
 const clock = (at) => (at
   ? new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   : '');
+
+// The queue is about time, not about a new message. Keep the remaining window
+// readable without making the poll timer do double duty.
+const remainingLabel = (request, now = Date.now()) => {
+  const { msLeft, expired } = paymentRequestTiming(request, now);
+  if (expired) return 'Expired';
+  if (msLeft < 60 * 60 * 1000) return `${Math.max(1, Math.ceil(msLeft / 60000))}m left`;
+  if (msLeft < 24 * 60 * 60 * 1000) return `${Math.ceil(msLeft / 3600000)}h left`;
+  return `${Math.ceil(msLeft / 86400000)}d left`;
+};
+
+const requestStatusLabel = (status) => ({
+  pending: 'Pending', paid: 'Paid', declined: 'Declined', expired: 'Expired',
+}[status] || 'Pending');
 
 // A list preview is one line of human text, so a transaction or payment request
 // reads as its amount instead of as its wire format.
@@ -120,10 +141,11 @@ export default function ChatPanel({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [sheet, setSheet] = useState('none');        // none | menu | pay | request
   const threadRef = useRef(null);
-  // Guards for the async poll: a snapshot computed while the room changed, a
-  // room was read, or a newer poll started must not overwrite the newer view.
-  const pollSeq = useRef(0);
-  const readEpoch = useRef(0);
+  // Polls and room reads have separate epochs: opening/leaving invalidates a
+  // poll, while a newer poll must not cancel a room read already on screen.
+  // peerRef remains the room-identity check for the read itself.
+  const roomGuard = useMemo(() => createRoomGuard(), []);
+  const ackQueue = useMemo(() => createAckQueue(), []);
   const peerRef = useRef('');
   useEffect(() => { peerRef.current = peer; }, [peer]);
   // Blocking is a relay-side control: the list lives with the wallet address,
@@ -136,6 +158,13 @@ export default function ChatPanel({
   const [unreadByPeer, setUnreadByPeer] = useState({});
   const [unreadPreview, setUnreadPreview] = useState({});
   const [lockedUnread, setLockedUnread] = useState({ at: 0, counts: {} });
+  // The encrypted request ledger is local and survives read/ack. Only the
+  // unlocked session can decrypt it, so a locked wallet shows no payment queue.
+  const [paymentRequests, setPaymentRequests] = useState([]);
+  const [paymentBusy, setPaymentBusy] = useState('');
+  const [paymentError, setPaymentError] = useState('');
+  const [, setClockTick] = useState(0);
+  const paymentView = useRef(0);
 
   useEffect(() => {
     setApprovalMethod(canApproveWithPasskey ? 'passkey' : 'password');
@@ -153,6 +182,20 @@ export default function ChatPanel({
   // message box and the chat list never depend on it.
   const approvalReady = !readOnly && netVerified && fee != null && balance != null
     && (approvalMethod === 'passkey' ? canApproveWithPasskey : Boolean(approvalPassword));
+  // The payer's queue is the actionable part of the inbox. Outgoing requests
+  // keep their status in the thread; they do not need a second copy here.
+  const pendingIncoming = paymentRequests
+    .map((request) => ({ ...request, status: paymentRequestStatusAt(request) }))
+    .filter((request) => request.direction === 'incoming' && request.status === 'pending')
+    .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  const expiringSoon = pendingIncoming.filter((request) => paymentRequestTiming(request).warning).length;
+  // A settled or lapsed request leaves the queue but remains readable in the
+  // encrypted ledger; show a short history so it is not an invisible status.
+  const recentRequests = paymentRequests
+    .map((request) => ({ ...request, status: paymentRequestStatusAt(request) }))
+    .filter((request) => request.status !== 'pending')
+    .sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0))
+    .slice(0, 5);
 
   // Friends are public addresses the person named themselves; the transcript
   // stays in this session. Every wallet this session may see contributes its
@@ -175,12 +218,90 @@ export default function ChatPanel({
   const known = mergeContacts(contacts, friendList);
   // The unlocked list uses live counts; a locked one uses the last snapshot.
   const unreadCounts = readOnly ? lockedUnread.counts : unreadByPeer;
+  // One stable id per browser profile: the relay keeps a delivery per device,
+  // so reading here never acknowledges the copy another device still needs.
+  const deviceId = useMemo(
+    () => (typeof window === 'undefined' ? '' : getChatDeviceId()),
+    [],
+  );
+
+  const refreshPaymentRequests = useCallback(async () => {
+    if (!seed32 || !address) {
+      setPaymentRequests([]);
+      return;
+    }
+    const view = paymentView.current + 1;
+    paymentView.current = view;
+    try {
+      const list = await readPaymentRequests({ seed32, address });
+      if (view === paymentView.current) setPaymentRequests(list);
+    } catch {
+      // A locked or unavailable archive must not make the chat itself fail.
+    }
+  }, [address, seed32]);
+
+  // Expiry is materialized by a read, so the once-a-minute tick both refreshes
+  // the remaining-time labels and persists a pending row as expired on time.
+  useEffect(() => {
+    if (!seed32 || !address) return undefined;
+    const timer = window.setInterval(() => {
+      setClockTick((value) => value + 1);
+      void refreshPaymentRequests();
+    }, 60000);
+    return () => window.clearInterval(timer);
+  }, [address, refreshPaymentRequests, seed32]);
+
+  useEffect(() => {
+    if (!seed32 || !address) {
+      paymentView.current += 1;
+      setPaymentRequests([]);
+      return undefined;
+    }
+    void refreshPaymentRequests();
+    return () => { paymentView.current += 1; };
+  }, [address, refreshPaymentRequests, seed32]);
+
+  // A request is stored as soon as its decrypted line arrives, before the
+  // relay copy is acknowledged. A transaction card can settle a pending request.
+  const collectPaymentMessages = useCallback(async (messages, { strict = false } = {}) => {
+    if (!seed32 || !address || !Array.isArray(messages) || messages.length === 0) return;
+    const requests = [];
+    const cards = [];
+    for (const message of messages) {
+      const request = paymentRequestFromMessage({ message, owner: address });
+      if (request) requests.push(request);
+      const card = parseTransactionCardText(message.text, message.from);
+      if (card?.kind === 'transaction-card') cards.push(card);
+    }
+    if (requests.length === 0 && cards.length === 0) return;
+    let changed = false;
+    if (requests.length) {
+      try {
+        const added = await upsertPaymentRequests({ seed32, address, requests });
+        changed = added > 0 || changed;
+      } catch (error) {
+        // Never acknowledge a request we could not store. The relay copy is the
+        // only remaining source, so a strict caller stops before ack.
+        if (strict) throw error;
+      }
+    }
+    for (const card of cards) {
+      try {
+        const settled = await settlePaymentRequestForCard({ seed32, address, card });
+        changed = Boolean(settled) || changed;
+      } catch {
+        // A card is a claim; failing to update local bookkeeping does not make
+        // the ledger transaction disappear. Chat delivery still continues.
+      }
+    }
+    if (changed) await refreshPaymentRequests();
+  }, [address, refreshPaymentRequests, seed32]);
 
   useEffect(() => {
     if (!relayConfigured) return undefined;
-    client.current = createChatClient({ origin: relayOrigin });
+    client.current = createChatClient({ origin: relayOrigin, deviceId });
     return () => { client.current = null; };
-  }, [relayOrigin, relayConfigured]);
+  }, [relayOrigin, relayConfigured, deviceId]);
 
   const publishOwnKey = useCallback(async () => {
     if (!client.current || !seed32 || state.published) return;
@@ -220,17 +341,14 @@ export default function ChatPanel({
   // or when the relay's 7-day retention expires.
   const pollInbox = useCallback(async () => {
     if (!client.current || !seed32) return;
-    const room = peer;
-    const seq = pollSeq.current + 1;
-    pollSeq.current = seq;
-    const epoch = readEpoch.current;
+    const pollToken = roomGuard.beginPoll();
     try {
       // Only what arrived after this device's cursor: re-reading the whole
       // mailbox every 15 s would be waste.
-      const since = readCursor(address);
+      const since = readCursor(address, undefined, deviceId);
       const { messages } = await client.current.peek({ seed32, address, since });
-      if (seq !== pollSeq.current || peerRef.current !== room || epoch !== readEpoch.current) return;
-      const marks = readReadMarks(address);
+      if (!roomGuard.isCurrentPoll(pollToken)) return;
+      const marks = readReadMarks(address, undefined, deviceId);
       // A fresh device (cursor 0) sees the whole mailbox, so counts are rebuilt
       // from it; after that they are incremental. The open room is excluded on
       // purpose: its lines are on screen, so they have been read here.
@@ -258,42 +376,58 @@ export default function ChatPanel({
           previews[from] = { text: previewText(message.text, message.from), at: message.ts || 0 };
         }
       }
-      // A stored copy lets this device free the relay copy of the same message;
-      // the helper keeps it when saving failed.
+      // Store request obligations before acknowledging the relay copy. Reading
+      // a room must never be the thing that loses a request.
+      await collectPaymentMessages(messages, { strict: true });
+      // A stored copy lets this device free its relay copy of the message; the
+      // helper keeps it when saving failed.
       if (messages.length) {
-        await archiveAndClearRelay({
-          seed32, address, messages, ack: client.current.ack.bind(client.current),
-        });
+        await ackQueue.run(() => archiveAndClearRelay({
+          seed32,
+          address,
+          messages,
+          ack: async (args) => {
+            if (!roomGuard.isCurrentPoll(pollToken)) return 0;
+            return client.current.ack(args);
+          },
+        }));
       }
       // A newer poll, a room switch, or a room read while this was in flight
-      // makes these counts stale. Dropping them is safer than writing an older
-      // view over a newer one; the next poll reads from the same cursor.
-      if (seq !== pollSeq.current || peerRef.current !== room || epoch !== readEpoch.current) return;
+      // bumps the generation and makes these counts stale. Dropping them is
+      // safer than writing an older view over a newer one; the next poll reads
+      // from the same cursor.
+      if (!roomGuard.isCurrentPoll(pollToken)) return;
       // The open room is on screen, so advance its read mark before the cursor:
       // a crash between the two must not leave mail counted yet never re-read.
-      if (fresh.length) markPeerSeen(address, peer, newest[peer] || 0);
+      if (fresh.length) markPeerSeen(address, peer, newest[peer] || 0, undefined, deviceId);
       const at = Date.now();
       setUnreadByPeer(counts);
       setUnreadPreview((current) => ({ ...current, ...previews }));
       writeUnreadSnapshot(address, { counts, at });
-      if (maxId > since) writeCursor(address, maxId);
+      if (maxId > since) writeCursor(address, maxId, undefined, deviceId);
       if (fresh.length) {
         // The room is on screen, so these lines have been read here. With saved
         // history the archive step above already acknowledged what it stored;
-        // without it they are acknowledged now, otherwise the relay keeps a copy
-        // nobody needs and a later list poll could count it again.
+        // without it they are acknowledged now, otherwise this device keeps a
+        // copy nobody needs and a later list poll could count it again.
         setThread((current) => mergeById(current, fresh));
         if (!readArchivePrefs().enabled) {
-          await ackIds({
-            seed32, address, ids: fresh.map(relayIdOf), ack: client.current.ack.bind(client.current),
-          });
+          await ackQueue.run(() => ackIds({
+            seed32,
+            address,
+            ids: fresh.map(relayIdOf),
+            ack: async (args) => {
+              if (!roomGuard.isCurrentPoll(pollToken)) return 0;
+              return client.current.ack(args);
+            },
+          }));
         }
       }
     } catch {
       // A failed poll keeps the last known counts: a stale badge is better than a
       // false "nothing new".
     }
-  }, [address, peer, seed32]);
+  }, [address, peer, seed32, deviceId, collectPaymentMessages, roomGuard, ackQueue]);
 
   useEffect(() => {
     if (!relayConfigured || !seed32) return undefined;
@@ -312,7 +446,8 @@ export default function ChatPanel({
   const openThread = useCallback(async (target) => {
     // A poll that was counting this room as unread before the tap must not write
     // its counts after the room has been read.
-    readEpoch.current += 1;
+    const roomToken = roomGuard.beginRoomRead();
+    peerRef.current = target;
     setPeer(target);
     setThread((current) => current.filter((message) => message.peer === target));
     setGate({ busy: false, blocked: false, note: '', error: '' });
@@ -324,8 +459,11 @@ export default function ChatPanel({
     // first, then add whatever the relay still holds.
     if (readArchivePrefs().enabled) {
       const archived = await readArchivedThread({ seed32, address, peer: target }).catch(() => []);
+      if (peerRef.current !== target || !roomGuard.isCurrentRoomRead(roomToken)) return;
       if (archived.length) {
         setThread((current) => mergeById(current.filter((message) => message.peer === target), archived));
+        await collectPaymentMessages(archived, { strict: true });
+        if (peerRef.current !== target || !roomGuard.isCurrentRoomRead(roomToken)) return;
       }
     }
     try {
@@ -342,30 +480,44 @@ export default function ChatPanel({
       const { messages, undecryptable } = await client.current.peek({ seed32, address, peer: target });
       // The room may have changed while the read was in flight; its lines must
       // not be merged into (or acknowledged from) another conversation.
-      if (peerRef.current !== target) return;
+      if (peerRef.current !== target || !roomGuard.isCurrentRoomRead(roomToken)) return;
       const incoming = messages.map(toThreadMessage);
       setThread((current) => mergeById(current, incoming));
+      await collectPaymentMessages(incoming, { strict: true });
+      if (peerRef.current !== target || !roomGuard.isCurrentRoomRead(roomToken)) return;
       setInboxError(undecryptable.length
         ? `${undecryptable.length} message(s) stayed on the relay: this wallet cannot open them.`
         : '');
       // This device has now read the room. Opening it only moves the local read
       // mark; the ciphertext stays on the relay until somebody clears it.
       const { newest } = countNewMessages({ messages: incoming, reset: true });
-      if (newest[target]) markPeerSeen(address, target, newest[target]);
-      // Saved history means the relay copy can go now; without it the copy stays
-      // for the retention window so another device can still fetch it.
-      await archiveAndClearRelay({
-        seed32, address, messages: incoming, ack: client.current.ack.bind(client.current),
-      });
-      // Opening a room is reading it: without saved history this is where the
-      // relay copy for these lines is dropped (with history, it was dropped as
-      // soon as the archive write succeeded).
+      if (newest[target]) markPeerSeen(address, target, newest[target], undefined, deviceId);
+      // Saved history means this device's relay copy can go now; without it the
+      // copy stays until the retention window ends.
+      await ackQueue.run(() => archiveAndClearRelay({
+        seed32,
+        address,
+        messages: incoming,
+        ack: async (args) => {
+          if (peerRef.current !== target || !roomGuard.isCurrentRoomRead(roomToken)) return 0;
+          return client.current.ack(args);
+        },
+      }));
+      // Opening a room is reading it: without saved history this is where this
+      // device's relay copies for these lines are dropped (with history, they
+      // were dropped as soon as the archive write succeeded).
       if (!readArchivePrefs().enabled && incoming.length) {
-        await ackIds({
-          seed32, address, ids: incoming.map(relayIdOf), ack: client.current.ack.bind(client.current),
-        });
+        await ackQueue.run(() => ackIds({
+          seed32,
+          address,
+          ids: incoming.map(relayIdOf),
+          ack: async (args) => {
+            if (peerRef.current !== target || !roomGuard.isCurrentRoomRead(roomToken)) return 0;
+            return client.current.ack(args);
+          },
+        }));
       }
-      if (peerRef.current !== target) return;
+      if (peerRef.current !== target || !roomGuard.isCurrentRoomRead(roomToken)) return;
       // Opening a room clears its own badge. Other badges keep what this device
       // last counted: their mail may already be stored here and gone from the
       // relay, so a relay-only recount would wrongly zero them.
@@ -379,12 +531,12 @@ export default function ChatPanel({
         return next;
       });
       writeUnreadSnapshot(address, { counts, at });
-      const maxId = messages.reduce((max, message) => (message.id > max ? message.id : max), readCursor(address));
-      if (maxId > 0) writeCursor(address, maxId);
+      const maxId = messages.reduce((max, message) => (message.id > max ? message.id : max), readCursor(address, undefined, deviceId));
+      if (maxId > 0) writeCursor(address, maxId, undefined, deviceId);
     } catch (error) {
       setInboxError(String(error?.message || error));
     }
-  }, [address, seed32]);
+  }, [address, seed32, deviceId, collectPaymentMessages, roomGuard, ackQueue]);
 
   // A chat tapped while the wallet was locked: opening it was the reason for the
   // unlock, so it opens as soon as the key exists instead of asking for a
@@ -463,6 +615,33 @@ export default function ChatPanel({
     }
   }
 
+  /** Review only prefills the existing Send page; nothing is signed here. */
+  function reviewPaymentRequest(request) {
+    if (!onSendTo || !request?.to) return;
+    onSendTo(request.to, request.amount);
+  }
+
+  /** Local inbox bookkeeping. The ledger remains the source of truth. */
+  async function changePaymentStatus(request, status) {
+    if (!seed32 || !request?.requestKey) return;
+    setPaymentBusy(request.requestKey);
+    setPaymentError('');
+    try {
+      const updated = await setPaymentRequestStatus({
+        seed32, address, requestKey: request.requestKey, status,
+      });
+      if (updated) {
+        setPaymentRequests((current) => current.map((item) => (
+          item.requestKey === updated.requestKey ? updated : item
+        )));
+      }
+    } catch (error) {
+      setPaymentError(String(error?.message || error));
+    } finally {
+      setPaymentBusy('');
+    }
+  }
+
   /** Ask the other wallet for an exact integer amount; this never signs. */
   async function sendPaymentRequest(event) {
     event.preventDefault();
@@ -476,6 +655,7 @@ export default function ChatPanel({
       };
       setThread((current) => [...current, message]);
       rememberIfEnabled({ seed32, address, peer, messages: [message] });
+      await collectPaymentMessages([message]);
       setRequest({ amount: '', busy: false, note: 'Payment request sent. It does not debit the other wallet.', error: '' });
     } catch (error) {
       setRequest((current) => ({ ...current, busy: false, error: String(error?.message || error) }));
@@ -515,6 +695,7 @@ export default function ChatPanel({
       // The ledger transaction is the record of value; the saved transcript keeps
       // the bubble that points at it, even if chat delivery fails below.
       rememberIfEnabled({ seed32, address, peer, messages: [transferMessage] });
+      await collectPaymentMessages([transferMessage]);
       setCoin({ amount: '', phase: 'idle', error: '' });
       setApprovalMethod(canApproveWithPasskey ? 'passkey' : 'password');
       // The transfer bubble in the thread is the record; the sheet has done its
@@ -649,6 +830,87 @@ export default function ChatPanel({
           </>
         )}
 
+        {!readOnly && pendingIncoming.length > 0 ? (
+          <section className="nw-payqueue" aria-label="Waiting to pay">
+            <div className="nw-payqueue-head">
+              <strong>Waiting to pay</strong>
+              <span className="nw-badge warn">{pendingIncoming.length}</span>
+            </div>
+            <p className="nw-small nw-dim" style={{ margin: 0 }}>
+              Reading a request does not clear it. It leaves this queue when you mark it paid or
+              decline it, or automatically after 7 days. These records are encrypted on this device,
+              separately from chat history.
+            </p>
+            {expiringSoon > 0 ? (
+              <p className="nw-small nw-payqueue-warning" role="status">
+                {`${expiringSoon} request${expiringSoon === 1 ? '' : 's'} expire within 48 hours.`}
+              </p>
+            ) : null}
+            {paymentError ? (
+              <p className="nw-small" style={{ margin: 0, color: 'var(--warn)' }} role="alert">
+                {paymentError}
+              </p>
+            ) : null}
+            <ul className="nw-payqueue-list">
+              {pendingIncoming.map((request) => {
+                const soon = paymentRequestTiming(request).warning;
+                const busy = paymentBusy === request.requestKey;
+                return (
+                  <li key={request.requestKey} className="nw-payqueue-row">
+                    <button type="button" className="nw-payqueue-main"
+                      onClick={() => { void openThread(request.peer); }}>
+                      <span className="nw-payqueue-name">
+                        {peerIds[request.peer] || shortAddr(request.peer)}
+                      </span>
+                      <span className="nw-payqueue-meta">
+                        {`${request.amount} NSAT · `}
+                        <span style={{ color: soon ? 'var(--warn)' : undefined }}>
+                          {remainingLabel(request)}
+                        </span>
+                      </span>
+                    </button>
+                    <div className="nw-payqueue-actions">
+                      <button type="button" className="nw-chip-btn" disabled={busy || !onSendTo}
+                        onClick={() => reviewPaymentRequest(request)}>
+                        Review
+                      </button>
+                      <button type="button" className="nw-chip-btn" disabled={busy}
+                        onClick={() => void changePaymentStatus(request, 'declined')}>
+                        {busy ? '…' : 'Decline'}
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        ) : null}
+
+        {!readOnly && recentRequests.length > 0 ? (
+          <details className="nw-payqueue-recent">
+            <summary>{`Recent payment requests (${recentRequests.length})`}</summary>
+            <ul className="nw-payqueue-list">
+              {recentRequests.map((request) => (
+                <li key={request.requestKey} className="nw-payqueue-row">
+                  <div className="nw-payqueue-main">
+                    <span className="nw-payqueue-name">
+                      {peerIds[request.peer] || shortAddr(request.peer)}
+                    </span>
+                    <span className="nw-payqueue-meta">
+                      {`${request.amount} NSAT · ${request.direction === 'outgoing' ? 'requested' : 'received'}`}
+                    </span>
+                  </div>
+                  <span className={`nw-badge ${
+                    request.status === 'paid' ? 'ok' : request.status === 'declined' ? 'err' : 'info'
+                  }`}>
+                    {requestStatusLabel(request.status)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        ) : null}
+
         {known.length === 0 ? (
           <div className="nw-chat-empty">
             <strong>No chats yet</strong>
@@ -718,8 +980,8 @@ export default function ChatPanel({
           </p>
           <p className="nw-small nw-dim" style={{ margin: 0 }}>
             Messages stay on the relay for up to 7 days so your other devices can fetch them.
-            Opening a chat removes the messages it shows; with chat history on, saving a copy removes
-            the relay copy too.
+            Opening a chat clears this device's copies; other devices keep theirs until they open it.
+            With chat history on, saving a copy clears this device's copy sooner.
           </p>
         </div>
       </section>
@@ -731,6 +993,9 @@ export default function ChatPanel({
       <header className="nw-chat-roomhead">
         <button type="button" className="nw-chat-iconbtn nw-chat-back" aria-label="Back to chats"
           onClick={() => {
+            // Leaving the room invalidates a poll still counting its mail.
+            roomGuard.leaveRoom();
+            peerRef.current = '';
             setPeer('');
             setThread([]);
             setDetailsOpen(false);
@@ -816,6 +1081,23 @@ export default function ChatPanel({
         {thread.map((message) => {
           const paymentRequest = parsePaymentRequestText(message.text, message.from);
           const transactionCard = parseTransactionCardText(message.text, message.from);
+          const requestKey = paymentRequest?.kind === 'payment-request'
+            ? requestKeyFor(message.own ? 'outgoing' : 'incoming', message.id) : '';
+          const requestRecord = requestKey
+            ? paymentRequests.find((request) => request.requestKey === requestKey) || null
+            : null;
+          const requestClock = requestRecord || {
+            status: 'pending', createdAt: message.receivedAt || message.at || Date.now(),
+          };
+          const requestStatus = requestRecord
+            ? paymentRequestStatusAt(requestRecord)
+            : (paymentRequest?.kind === 'payment-request' ? paymentRequestStatusAt(requestClock) : '');
+          const requestTiming = requestRecord || paymentRequest?.kind === 'payment-request'
+            ? paymentRequestTiming(requestClock)
+            : null;
+          const requestBadge = requestStatus === 'paid' ? 'ok'
+            : requestStatus === 'pending' ? 'warn'
+              : requestStatus === 'declined' ? 'err' : 'info';
           return (
             <li key={message.id} className={'nw-chat-bubble' + (message.own ? ' is-own' : '')}>
               {cardInThisChat(transactionCard, message, address, peer) ? (
@@ -831,17 +1113,46 @@ export default function ChatPanel({
                   <div className="nw-small nw-dim nw-mono" style={{ wordBreak: 'break-all', marginTop: 4 }}>
                     Requested receiving address: {paymentRequest.address}
                   </div>
-                  {!message.own && onSendTo ? (
-                    <button type="button" className="nw-send-btn" style={{ marginTop: 8 }}
-                      disabled={readOnly || gate.blocked}
-                      onClick={() => onSendTo(paymentRequest.address, paymentRequest.amount)}>
-                      Review payment · {paymentRequest.amount} NSAT
-                    </button>
-                  ) : (
-                    <div className="nw-small nw-dim" style={{ marginTop: 6 }}>
-                      Request sent. Waiting for the recipient to review it; no funds have moved.
+                  <div className="nw-chat-requeststate" style={{ marginTop: 6 }}>
+                    <span className={`nw-badge ${requestBadge}`}>{requestStatusLabel(requestStatus)}</span>
+                    {requestStatus === 'pending' ? (
+                      <span className="nw-small"
+                        style={{ color: requestTiming?.warning ? 'var(--warn)' : 'var(--text-dim)' }}>
+                        {requestTiming?.warning ? 'Expires soon · ' : ''}
+                        {remainingLabel(requestClock)}
+                      </span>
+                    ) : null}
+                  </div>
+                  {requestStatus === 'pending' && !message.own && onSendTo ? (
+                    <div className="nw-btn-row" style={{ marginTop: 8 }}>
+                      <button type="button" className="nw-send-btn"
+                        disabled={readOnly || gate.blocked || paymentBusy === requestKey}
+                        onClick={() => reviewPaymentRequest(requestRecord || {
+                          to: paymentRequest.address, amount: paymentRequest.amount,
+                        })}>
+                        Review payment · {paymentRequest.amount} NSAT
+                      </button>
+                      <button type="button" className="nw-chip-btn"
+                        disabled={readOnly || gate.blocked || paymentBusy === requestKey}
+                        onClick={() => void changePaymentStatus(requestRecord || { requestKey }, 'declined')}>
+                        Decline
+                      </button>
+                      <button type="button" className="nw-chip-btn"
+                        disabled={readOnly || gate.blocked || paymentBusy === requestKey}
+                        onClick={() => void changePaymentStatus(requestRecord || { requestKey }, 'paid')}>
+                        Mark paid
+                      </button>
                     </div>
-                  )}
+                  ) : requestStatus === 'pending' && message.own ? (
+                    <div className="nw-btn-row" style={{ marginTop: 8 }}>
+                      <span className="nw-small nw-dim">Waiting for payment; no funds have moved.</span>
+                      <button type="button" className="nw-chip-btn"
+                        disabled={readOnly || paymentBusy === requestKey}
+                        onClick={() => void changePaymentStatus(requestRecord || { requestKey }, 'paid')}>
+                        Mark paid
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
               ) : paymentRequest?.kind === 'invalid' ? (
                 <div className="nw-chat-text">
