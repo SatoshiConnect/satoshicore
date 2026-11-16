@@ -298,6 +298,17 @@ browser 430×932 (/  local)                    gate มีสองปุ่ม,
 | เปลี่ยน ID / แสดง `@id` บนหน้ากระเป๋า | **DEPLOYED** (`ccd24cd`) | ID เก็บ `@` เป็นส่วนของค่า (`@somchai`) ไม่ใช่เติมตอนแสดง — label, ฟิลด์ `profileId` และเอกสาร claim `profileIds/@id` เป็นสตริงเดียวกัน; ชื่อที่ไม่มี `@` ถูกปฏิเสธ (ไม่แปลงเงียบ ๆ) การ์ดเป็นโหมดดู/แก้: `Edit profile` → แก้ ID + primary wallet → `Save changes` / `Cancel` โดยเขียนทั้งคู่ในครั้งเดียว (`saveProfileIn()`) จอง ID ใหม่ → เขียน → คืน ID เก่า; ล้มเหลว = คืน ID ใหม่และคงของเดิม; ปุ่ม `@id` ข้าง address คัดลอกค่าจริง; เทสต์ `tests/profile.test.mjs` 13/13 |
 
 ```
+รอบเพิ่มเพื่อนใน Messages (2026-11-16, `0396435`)
+npm test (รวม tests/chat-friends.test.mjs 7 เคส)                            ✓ exit 0, 0 failing
+firebase deploy --only firestore:rules (get 1 profile ให้ signed-in)         ✓ compiled + released
+npm run build + deploy webroot                                              ✓ exit 0
+live index.html sha256 = 5927895c…84 · webroot → satoshicore-webroot-friends-0396435
+chunk ที่ live (`378-cd468a09ece5a14a.js`) มี "Add friend" + "scw-chat-friends"  ✓
+6 routes 200 · rollback: ln -sfn satoshicore-webroot-addr-cc565d7 ~/nsat-ops/satoshicore-webroot
+ข้อจำกัด: UI เพิ่มเพื่อนต้องปลดล็อกกระเป๋า (seed ใน memory) จึงยังไม่ได้คลิกทดสอบจริง
+```
+
+```
 รอบชื่อคู่สัญญา → Explorer (2026-11-16, `cc565d7`)
 npm run build + npm test                                                  ✓ exit 0, 0 failing
 10 routes 200 · verify-deployed 8 passed / 0 failed (advisory เดิม)
