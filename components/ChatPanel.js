@@ -35,6 +35,9 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSe
   const [peerIds, setPeerIds] = useState({});
   const [copyState, setCopyState] = useState('');
   const [coin, setCoin] = useState({ amount: '', phase: 'idle', note: '', error: '' });
+  // Blocking is a relay-side control: the list lives with the wallet address,
+  // not with this screen, so it is read back rather than remembered here.
+  const [gate, setGate] = useState({ busy: false, blocked: false, note: '', error: '' });
 
   const relayConfigured = Boolean(relayOrigin);
   const readOnly = !seed32;
@@ -77,8 +80,17 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSe
   const openThread = useCallback(async (target) => {
     setPeer(target);
     setThread((current) => current.filter((message) => message.peer === target));
+    setGate({ busy: false, blocked: false, note: '', error: '' });
     if (!client.current || !seed32) return;
     setInboxState({ phase: 'loading', error: '' });
+    try {
+      const blockedList = await client.current.blocks({ seed32, address });
+      setGate({ busy: false, blocked: blockedList.includes(String(target).toUpperCase()), note: '', error: '' });
+    } catch {
+      // An unreadable block list must not look like "not blocked": say so and
+      // leave the send path alone rather than inventing a state.
+      setGate({ busy: false, blocked: false, note: '', error: 'Could not read the block list for this wallet.' });
+    }
     try {
       const { messages, undecryptable } = await client.current.inbox({ seed32, address });
       setThread((current) => {
@@ -144,6 +156,27 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSe
       });
     } catch (error) {
       setAddState({ busy: false, note: '', error: String(error?.message || error) });
+    }
+  }
+
+  /** Block or unblock the person in this thread, on the relay itself. */
+  async function toggleBlock() {
+    if (!client.current || !seed32 || !peer) return;
+    const next = !gate.blocked;
+    setGate((current) => ({ ...current, busy: true, note: '', error: '' }));
+    try {
+      if (next) await client.current.block({ seed32, address, peer });
+      else await client.current.unblock({ seed32, address, peer });
+      setGate({
+        busy: false,
+        blocked: next,
+        note: next
+          ? 'Blocked. The relay will not store messages between this wallet and that address, and queued mail was cleared. They are not told.'
+          : 'Unblocked. Messages can be delivered again; nothing else is restored.',
+        error: '',
+      });
+    } catch (error) {
+      setGate((current) => ({ ...current, busy: false, error: String(error?.message || error) }));
     }
   }
 
@@ -363,6 +396,23 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSe
             </button>
           ) : null}
         </div>
+        {readOnly ? null : (
+          <div style={{ marginTop: 8 }}>
+            <div className="nw-btn-row" style={{ marginTop: 0 }}>
+              <button type="button" className="nw-chip-btn" onClick={toggleBlock}
+                disabled={gate.busy} aria-pressed={gate.blocked}>
+                {gate.blocked ? 'Unblock this address' : 'Block this address'}
+              </button>
+              {gate.blocked ? <span className="nw-badge warn">blocked</span> : null}
+            </div>
+            {gate.note ? (
+              <p className="nw-small nw-dim" style={{ margin: '6px 0 0' }} role="status">{gate.note}</p>
+            ) : null}
+            {gate.error ? (
+              <p className="nw-small" style={{ margin: '6px 0 0', color: 'var(--warn)' }} role="alert">{gate.error}</p>
+            ) : null}
+          </div>
+        )}
         <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
           To send coins you only need this address. An email is never stored here — the profile keeps
           an @id and a public address and nothing else — so ask for an email directly if you need one.
@@ -444,12 +494,13 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSe
 
         <form className="nw-txf" onSubmit={send} style={{ marginTop: 12 }}>
           <textarea className="nw-chat-input" value={draft} maxLength={MAX_TEXT_LENGTH}
-            placeholder={readOnly ? 'Unlock the wallet to send' : 'Write an encrypted message…'}
-            onChange={(event) => setDraft(event.target.value)} disabled={readOnly || state.busy}
+            placeholder={readOnly ? 'Unlock the wallet to send' : gate.blocked ? 'Blocked — unblock to write' : 'Write an encrypted message…'}
+            onChange={(event) => setDraft(event.target.value)}
+            disabled={readOnly || state.busy || gate.blocked}
             rows={2} aria-label="Encrypted message" />
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <button className="nw-send-btn" type="submit"
-              disabled={readOnly || state.busy || !draft.trim()}>
+              disabled={readOnly || state.busy || gate.blocked || !draft.trim()}>
               {state.busy ? 'Sending…' : 'Send encrypted'}
             </button>
             <button type="button" className="nw-chip-btn" disabled={state.busy}
