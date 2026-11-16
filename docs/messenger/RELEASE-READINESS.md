@@ -4,8 +4,8 @@ Status: **deployed to production on 2026-11-16 after owner approval; the
 two-wallet payment-request acceptance passed.** The web, Firestore rules and
 gateway P2 are live. No transaction was submitted and no funds were moved.
 
-Branch: `feat/messenger-payments-p3` · deployed commit `7d6ad99` (on top of
-`0c38578`; the fix resolves the same-origin relay origin for Messages).
+Branch: `feat/messenger-payments-p3` · deployed commit `5f3b3d4` (on top of
+`0c38578`; includes the same-origin relay and PWA root-registration fixes).
 
 ## Deployment record
 
@@ -13,18 +13,20 @@ Branch: `feat/messenger-payments-p3` · deployed commit `7d6ad99` (on top of
 |---|---|
 | Firestore rules | ruleset `e4bac944-e3f3-4765-83fd-a4583dccb127`, sha256 `5ce23c7b…` |
 | Gateway relay | `chat-relay.mjs` sha256 `a0218edb…`, launchd `org.satoshicore.gateway` running |
-| Webroot | `~/nsat-ops/satoshicore-webroot-messenger-p3fix-7d6ad99` |
-| Live index | sha256 `ddb1ac85a4489f5d030b112f0f3e6c6d67a0a3b7144aa47b2e300dcc92d4c456` |
-| Production checks | P3 checker 4/4; `verify:deployed` 8 passed / 0 failed / 2 advisory; focused payment tests 21/21 |
-| Artifact checks | markers for `NSAT-PAY-REQUEST/1`, `NSAT-TX/1`, `Finalized`, `Unverified`, `nw-chat-tx-card`, `chatEnabled:!0`; same-origin relay origin present; 66 files, no source maps or private keys |
+| Webroot | `~/nsat-ops/satoshicore-webroot-swfix-5f3b3d4` |
+| Live index | sha256 `b47b51f3f096d2cc00470f5c85bc5e043a1db0709adb656fe8764345a265da2e` |
+| Production checks | P3 checker 4/4; `verify:deployed` 8 passed / 0 failed / 2 advisory; focused payment tests 21/21; service-worker tests 4/4 |
+| Artifact checks | markers for `NSAT-PAY-REQUEST/1`, `NSAT-TX/1`, `Finalized`, `Unverified`, `nw-chat-tx-card`, `chatEnabled:!0`; same-origin relay origin present; root `/sw.js` registration; 66 files, no source maps or private keys |
 | Live acceptance | two unfunded wallets, exact `9007199254740993` NSAT request, recipient amount/address exact, Review prefilled the Send page, confirmation disabled, no modal or transaction; relay writes 200 and test rows removed |
 | Rollback | webroot `satoshicore-webroot-menu-02f5644`; gateway backups in `~/nsat-ops/backups/p3-20261116/`; previous ruleset `1f1bbce6-cf44-49f2-b2da-59b46b55a2e9` |
 
 Headless Chromium rendered the signed-out gate (`Open your wallet`) and the
-acceptance ran in two clean browser profiles. Both profiles logged one
-pre-existing, non-payment console 404: the service worker is at `/sw.js`, but
-registration resolves `/wallet/sw.js` from `document.baseURI`. This does not
-affect chat or the payment flow; it is a separate PWA fix.
+acceptance ran in two clean browser profiles. A fresh production check after
+`5f3b3d4` confirmed the PWA registration: `/wallet/` registered
+`https://satoshicore.org/sw.js` with scope `https://satoshicore.org/`; the
+`nsat-pwa-v4` cache contained both `/` and `/wallet/`; the page was controlled
+by `/sw.js` after reload; and there was no `/wallet/sw.js` request, failed
+request or console error.
 
 ## What is ready
 
@@ -142,8 +144,6 @@ build containing P3 would still send messages, but every thread would show
   transaction or funded-key use did.
 - The two-wallet acceptance used standalone wallets, not two Google-linked
   accounts; that account-specific path remains untested.
-- The accepted build has one non-blocking console 404 from service-worker
-  registration at `/wallet/sw.js`; it does not affect chat, balances or payments.
 - The first P1/P2/P3 release order matters; see above. P1 account contacts and
   relay blocks are not retroactive to clients that stay on the old build.
 - The production gateway's `/v1/confirmations/{hash}` and `/v1/tx/{hash}` routes

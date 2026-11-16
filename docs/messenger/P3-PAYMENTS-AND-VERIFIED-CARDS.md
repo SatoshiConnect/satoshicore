@@ -1,9 +1,10 @@
 # P3 — payment requests and verified transaction cards
 
-Status: **deployed to production 2026-11-16** from commit `7d6ad99`
-(`satoshicore-webroot-messenger-p3fix-7d6ad99`). The hashing/verification path
-has been checked against real Mainnet reads, the deployed gateway and synthetic
-wallets. The two-wallet browser acceptance also passed on production: the
+Status: **deployed to production 2026-11-16**; current artifact commit
+`5f3b3d4` (`satoshicore-webroot-swfix-5f3b3d4`) contains the accepted P3 build
+plus the PWA root-registration fix. The hashing/verification path has been
+checked against real Mainnet reads, the deployed gateway and synthetic wallets.
+The two-wallet browser acceptance also passed on production: the
 recipient saw the exact `9007199254740993` NSAT request, **Review payment**
 prefilled the exact destination and amount, and the confirmation button stayed
 disabled because neither disposable wallet had funds. No transaction was
@@ -146,7 +147,7 @@ script is read-only and never imports a funded key.
   4/4. See `RELEASE-READINESS.md` for the deployed hashes and rollback.
 * The browser acceptance used two independent, unfunded, standalone wallets
   (no Google sign-in). It did not exercise a Google-linked account flow.
-* The live UI still logs a pre-existing 404 for `/wallet/sw.js`: the service
-  worker is served at the site root, while registration resolves it relative to
-  `document.baseURI`. This does not affect chat or payments and is tracked
-  separately.
+* The PWA shell registration was fixed after the acceptance in `5f3b3d4`:
+  `/wallet/` now registers `https://satoshicore.org/sw.js` with scope `/`, and
+  its cache contains both `/` and `/wallet/`. This does not change payment
+  behavior.
