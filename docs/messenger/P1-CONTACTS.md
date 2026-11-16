@@ -1,8 +1,9 @@
 # P1 — contacts, requests, blocks and consent-first discovery
 
-Status: **implemented and unit-tested, not deployed.** The Firestore rules in
-this commit are not released; nothing is mounted in a screen yet. See "What this
-does not do" before reading the module as a finished feature.
+Status: **implemented, unit-tested and wired into a screen, not deployed.** The
+Firestore rules in this branch are not released, so the card will report a rules
+refusal on the live site until an owner approval covers the deploy. See "What
+this does not do" before reading the module as a finished feature.
 
 This is the first messenger phase that writes to a database. It is deliberately
 limited to the social graph: no message, no wallet address and no key is stored
@@ -82,11 +83,34 @@ operations, every refusal code and its wording, a two-account request/accept/
 block lifecycle over a fake Firestore, discovery consent on/off, the throttled
 lookup, the SDK/deadline guards, and assertions on the rules text.
 
+## Screen
+
+`components/ContactsCard.js` is a page (`page === 'contacts'`), reached from
+**Settings → Contacts → Manage contacts**; the tab bar stays a wallet, and the
+app bar's Back returns to the overview. It renders, from the same store:
+
+* one search field — `@profile` (handle → uid + primary address), `G…` (an
+  address, shown as a payment destination with no contact actions) and email
+  (only when the owner consented);
+* requests to answer (accept / refuse), requests waiting for an answer
+  (withdraw), contacts (Send NSAT / Remove / Block) and the block list
+  (unblock);
+* the discovery switch, off by default, with the honest explanation that only a
+  hash is stored — and the current state read back from the database rather than
+  remembered in the page.
+
+Signed out, the card says contacts need an account and links to Settings; the
+wallet keeps working without one. `npm run build` passes with the page in place
+(14/14 static pages). The screen has **not** been opened in a browser against a
+deployed ruleset: that needs the rules release plus a signed-in account.
+
 ## What this does not do
 
-* no screen yet: the chat's "Add friend" still uses the device-local list
-  (`lib/chatFriends.js`). Wiring `ContactsCard`/search to this store is the next
-  commit, and it must keep working for a wallet with no Google account.
+* the chat's "Add friend" (`lib/chatFriends.js`) still writes a device-local
+  list. It is deliberately untouched in this phase: a wallet with no Google
+  account can start a conversation, and that must keep working. Unifying the two
+  (local quick-add vs account contact graph) is a P2 decision, not a silent
+  migration — an address and a uid are not the same key.
 * no relay enforcement: blocking does not stop ciphertext from arriving until P2
   adds the per-sender quota and read-time drop.
 * no profile fields (display name, bio, avatar). The profile is still the two

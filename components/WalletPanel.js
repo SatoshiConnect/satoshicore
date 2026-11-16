@@ -36,6 +36,7 @@ import {
   bindOwner, unbindOwner, visibleWalletNamed, walletNameForAccount, walletsForAccount,
 } from '../lib/walletBinding';
 import GoogleAccount from './GoogleAccount';
+import ContactsCard from './ContactsCard';
 import ProfileCard from './ProfileCard';
 import { readMyProfile } from '../lib/profile';
 import DriveBackupCard from './DriveBackupCard';
@@ -74,10 +75,11 @@ const PAGE_GLYPH = {
   overview: '◆', activity: '⚡', settings: '⚙',
 };
 // Pages reached from an action; the app bar shows Back instead of Receive.
-const SUB_PAGES = ['send', 'receive', 'shielded', 'chat'];
+const SUB_PAGES = ['send', 'receive', 'shielded', 'chat', 'contacts'];
 const PAGE_TITLE = {
   overview: 'Overview', send: 'Send NSAT', receive: 'Receive NSAT',
   shielded: 'Shielded NSAT', activity: 'Activity', settings: 'Settings', chat: 'Messages',
+  contacts: 'Contacts',
 };
 // One short line per section — context only, never an essay. Overview and
 // Settings need none: the cards say what they are.
@@ -89,6 +91,7 @@ const PAGE_LEAD = {
   activity: 'Every indexed transfer, with the ledger\'s verdict.',
   settings: null,
   chat: 'End-to-end encrypted with the wallets you transacted with.',
+  contacts: 'Who may start a conversation with you — and who may not.',
 };
 
 // Founder Mint totals come from the ledger header, never from a rate applied
@@ -1602,12 +1605,19 @@ export default function WalletPanel() {
               onBack={() => setPage('activity')} />
           )}
 
+          {page === 'contacts' && (
+            <ContactsCard
+              onSendTo={(address) => { setDest(address); setPage('send'); }}
+              onOpenSettings={() => setPage('settings')} />
+          )}
+
           {page === 'settings' && (
             <SettingsPage
                               s={{ active, busy, doLock, doBackup, doRestore, wallets, biometricWallets,
                 onSwitch: switchTo, onToggleBiometric: toggleBiometricUnlock,
                 onReloadWallets: refreshWallets }}
-              onShielded={() => setPage('shielded')} />
+              onShielded={() => setPage('shielded')}
+              onOpenContacts={() => setPage('contacts')} />
           )}
       </main>
 
@@ -2759,11 +2769,25 @@ function ActivityPage({ history, activeName, chain, notices, chatEnabled, onOpen
 }
 
 /* ------------------------------- Settings -------------------------------- */
-function SettingsPage({ s, onShielded }) {
+function SettingsPage({ s, onShielded, onOpenContacts }) {
   return (
     <div>
       {SHOW_GOOGLE_ACCOUNT ? <GoogleAccount /> : null}
       {SHOW_GOOGLE_ACCOUNT ? <ProfileCard /> : null}
+      {/* Contacts are account state, so the entry point sits next to the account
+       * and the profile rather than in the tab bar: the bar stays a wallet. */}
+      {SHOW_GOOGLE_ACCOUNT ? (
+        <section className="nw-card">
+          <h2 style={{ color: 'var(--text)' }}>Contacts</h2>
+          <p className="nw-small nw-dim" style={{ margin: '8px 0 12px' }}>
+            Who may start a conversation with you, who is waiting for an answer, and who
+            is blocked. Find people by @profile ID, wallet address or a consented email.
+          </p>
+          <button type="button" className="nw-chip-btn" onClick={onOpenContacts}>
+            Manage contacts
+          </button>
+        </section>
+      ) : null}
       {SHOW_GOOGLE_ACCOUNT ? <DriveBackupCard onKeystoreChanged={s.onReloadWallets} /> : null}
       <section className="nw-card">
         <h2 style={{ color: 'var(--text)' }}>Privacy</h2>
