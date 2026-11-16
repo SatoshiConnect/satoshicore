@@ -6,10 +6,11 @@
 // key the relay never has, and decrypted here with this wallet's seed. The relay
 // only sees two addresses, a size and a timestamp (docs/E2E-CHAT-DESIGN.md).
 //
-// The thread lives in this session only. Messages are deleted from the relay as
-// soon as they are read, and nothing is written to localStorage — losing the tab
-// loses the transcript, which is the price of not keeping plaintext chats at
-// rest on a shared device.
+// The thread lives in this session only: nothing readable is written to
+// localStorage, so losing the tab loses the transcript unless the person opted
+// into saved chat history. Reading never deletes by itself; a message leaves the
+// relay when this device has stored a copy in that history, or after the relay's
+// 7-day retention, whichever comes first.
 //
 // Layout follows the shape people already know from a messenger: a list of
 // people, then one room with a header, bubbles and a single composer. The
@@ -22,6 +23,11 @@ import {
   FRIEND_LIMIT, addFriend, mergeContacts, parseFriendTarget, readFriends, removeFriend,
 } from '../lib/chatFriends';
 import { MAX_TEXT_LENGTH } from '../lib/e2eChat';
+import { archiveMessages, readArchivedThread, readArchivePrefs } from '../lib/chatArchive';
+import {
+  countUnread, formatUnreadAge, markPeerSeen, mergeUnreadSnapshots, newestArrivalByPeer,
+  readCursor, readReadMarks, readUnreadSnapshot, writeCursor, writeUnreadSnapshot,
+} from '../lib/chatUnread';
 import { cleanAmount, validateAmount } from '../lib/nsatSendPreflight';
 import { createPaymentRequestText, parsePaymentRequestText } from '../lib/chatPaymentRequest';
 import { createTransactionCardText, parseTransactionCardText } from '../lib/chatTransaction';
@@ -41,6 +47,73 @@ const initials = (value, handle) => {
 const clock = (at) => (at
   ? new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   : '');
+
+// A list preview is one line of human text, so a transaction or payment request
+// reads as its amount instead of as its wire format.
+const previewText = (text, from) => {
+  const card = parseTransactionCardText(text, from);
+  if (card?.kind === 'transaction-card') return `${card.amount} NSAT`;
+  const request = parsePaymentRequestText(text, from);
+  if (request?.kind === 'payment-request') return `Payment request · ${request.amount} NSAT`;
+  return text;
+};
+
+// One line per id, oldest first: the session transcript, the saved history and
+// a fresh relay read can all describe the same message.
+const mergeById = (...lists) => {
+  const byId = new Map();
+  for (const list of lists) {
+    for (const message of list) if (message?.id) byId.set(message.id, message);
+  }
+  return [...byId.values()].sort((a, b) => (a.at || 0) - (b.at || 0));
+};
+
+// Saving is opt-in and best-effort: a full disk or a blocked origin must never
+// stop a message from being sent or shown.
+function rememberIfEnabled({ seed32, address, peer, messages }) {
+  if (!seed32 || !peer || !messages?.length || !readArchivePrefs().enabled) return;
+  void archiveMessages({ seed32, address, peer, messages }).catch(() => {});
+}
+
+const relayIdOf = (message) => Number(
+  typeof message?.id === 'string' ? message.id.replace(/^[mr]/, '') : message?.id,
+);
+
+// Saved history is what lets the relay forget early: store the message
+// encrypted-at-rest first, then acknowledge exactly the ids this device really
+// stored. If saving fails the copy stays on the relay until its 7-day
+// retention — an archive error must never be the reason a message is lost.
+// Without saved history this is a no-op and the relay keeps the message.
+async function archiveAndClearRelay({ seed32, address, messages, ack }) {
+  if (!seed32 || !address || !readArchivePrefs().enabled || !messages?.length) return 0;
+  if (typeof ack !== 'function') return 0;
+  const byPeer = new Map();
+  for (const message of messages) {
+    const peer = String(message?.peer || message?.from || '').toUpperCase();
+    if (!peer || typeof message.text !== 'string' || !message.text) continue;
+    const relayId = relayIdOf(message);
+    if (!Number.isSafeInteger(relayId)) continue;
+    const group = byPeer.get(peer) || [];
+    // One id shape for the archive whichever screen saved the line first.
+    group.push({ ...message, id: `m${relayId}` });
+    byPeer.set(peer, group);
+  }
+  const storedIds = [];
+  for (const [peer, group] of byPeer) {
+    try {
+      const stored = await archiveMessages({ seed32, address, peer, messages: group });
+      if (stored > 0) storedIds.push(...group.map(relayIdOf));
+    } catch {
+      // Keep the relay copy.
+    }
+  }
+  if (storedIds.length === 0) return 0;
+  try {
+    return await ack({ seed32, address, ids: storedIds });
+  } catch {
+    return 0;
+  }
+}
 
 // A transfer bubble is only this chat's when the authenticated sender wrote it
 // and its two parties are the two wallets in the room.
@@ -82,6 +155,13 @@ export default function ChatPanel({
   // not with this screen, so it is read back rather than remembered here.
   const [gate, setGate] = useState({ busy: false, blocked: false, note: '', error: '' });
   const [request, setRequest] = useState({ amount: '', busy: false, note: '', error: '' });
+  // New-message signal for the list: counts and decrypted previews live in this
+  // session only; the persisted snapshot holds addresses, counts and a time and
+  // is what the locked list shows.
+  const [unreadByPeer, setUnreadByPeer] = useState({});
+  const [unreadPreview, setUnreadPreview] = useState({});
+  const [unreadAt, setUnreadAt] = useState(0);
+  const [lockedUnread, setLockedUnread] = useState({ at: 0, counts: {} });
 
   useEffect(() => {
     setApprovalMethod(canApproveWithPasskey ? 'passkey' : 'password');
@@ -119,6 +199,9 @@ export default function ChatPanel({
   const friendList = [...new Set(Object.values(friendsByOwner).flat())]
     .filter((contact) => !ownAddresses.has(String(contact).toUpperCase()));
   const known = mergeContacts(contacts, friendList);
+  // The unlocked list uses live counts; a locked one uses the last snapshot.
+  const unreadCounts = readOnly ? lockedUnread.counts : unreadByPeer;
+  const unreadCheckedAt = readOnly ? lockedUnread.at : unreadAt;
 
   useEffect(() => {
     if (!relayConfigured) return undefined;
@@ -143,6 +226,99 @@ export default function ChatPanel({
     void publishOwnKey();
   }, [publishOwnKey, relayConfigured, seed32]);
 
+  // A locked wallet cannot fetch anything (every relay call is signed with the
+  // seed), so its list shows the last snapshot: addresses, counts, and when the
+  // check happened. Message text is never part of that snapshot.
+  useEffect(() => {
+    if (!readOnly || !ownerKey) { setLockedUnread({ at: 0, counts: {} }); return; }
+    setLockedUnread(mergeUnreadSnapshots(ownerKey.split(',')));
+  }, [readOnly, ownerKey]);
+
+  // Counts survive a reload: they are this device's last known state, kept as
+  // addresses and integers only.
+  useEffect(() => {
+    if (!address) return;
+    const snapshot = readUnreadSnapshot(address);
+    setUnreadByPeer(snapshot.counts);
+    setUnreadAt(snapshot.at);
+    setUnreadPreview({});
+  }, [address]);
+
+  // Poll the mailbox for the list badges. Reading changes only this device's
+  // read mark; a copy leaves the relay when saved history has stored it here,
+  // or when the relay's 7-day retention expires.
+  const pollInbox = useCallback(async () => {
+    if (!client.current || !seed32) return;
+    try {
+      // Only what arrived after this device's cursor: the mailbox is never
+      // emptied by reading, so a full re-fetch every 15 s would be waste.
+      const since = readCursor(address);
+      const { messages } = await client.current.peek({ seed32, address, since });
+      const marks = readReadMarks(address);
+      // A fresh device (cursor 0) sees the whole mailbox, so counts are rebuilt
+      // from scratch; after that they are incremental.
+      const counts = since === 0
+        ? countUnread(messages, marks)
+        : { ...readUnreadSnapshot(address).counts };
+      const previews = {};
+      const fresh = [];
+      let maxId = since;
+      for (const message of messages) {
+        if (message.id > maxId) maxId = message.id;
+        const from = String(message.from || '').toUpperCase();
+        // The open conversation is on screen, so it is being read now: it never
+        // carries a badge, and its lines go straight into the thread.
+        if (peer && from === peer) {
+          fresh.push({
+            id: `m${message.id}`, peer: message.from, from: message.from,
+            text: message.text, at: message.ts, receivedAt: message.receivedAt, own: false,
+          });
+          continue;
+        }
+        if (since !== 0 && Number(message.receivedAt || 0) > (marks[from] || 0)) {
+          counts[from] = (counts[from] || 0) + 1;
+        }
+        const previous = previews[from];
+        if (!previous || (message.ts || 0) > previous.at) {
+          previews[from] = { text: previewText(message.text, message.from), at: message.ts || 0 };
+        }
+      }
+      // A stored copy lets this device free the relay copy of the same message;
+      // the helper keeps it when saving failed.
+      if (messages.length) {
+        await archiveAndClearRelay({
+          seed32,
+          address,
+          messages: messages.map((message) => ({
+            id: message.id, peer: message.from, from: message.from, text: message.text, at: message.ts,
+          })),
+          ack: client.current.ack.bind(client.current),
+        });
+      }
+      const at = Date.now();
+      setUnreadByPeer(counts);
+      setUnreadPreview((current) => ({ ...current, ...previews }));
+      setUnreadAt(at);
+      writeUnreadSnapshot(address, { counts, at });
+      if (maxId > since) writeCursor(address, maxId);
+      if (fresh.length) {
+        markPeerSeen(address, peer, newestArrivalByPeer(fresh)[peer] || 0);
+        setThread((current) => mergeById(current, fresh));
+        rememberIfEnabled({ seed32, address, peer, messages: fresh });
+      }
+    } catch {
+      // A failed poll keeps the last known counts: a stale badge is better than a
+      // false "nothing new".
+    }
+  }, [address, peer, seed32]);
+
+  useEffect(() => {
+    if (!relayConfigured || !seed32) return undefined;
+    void pollInbox();
+    const timer = window.setInterval(() => { void pollInbox(); }, 15000);
+    return () => window.clearInterval(timer);
+  }, [pollInbox, relayConfigured, seed32]);
+
   // A new message should be visible without hunting for it: keep the end of the
   // transcript in view, the way a chat app opens on the latest line.
   useEffect(() => {
@@ -157,6 +333,15 @@ export default function ChatPanel({
     setSheet('none');
     if (!client.current || !seed32) return;
     setInboxError('');
+    // Saved history is local and the relay keeps its copy only for its retention
+    // window, so the two are merged by message id: show the device's own archive
+    // first, then add whatever the relay still holds.
+    if (readArchivePrefs().enabled) {
+      const archived = await readArchivedThread({ seed32, address, peer: target }).catch(() => []);
+      if (archived.length) {
+        setThread((current) => mergeById(current.filter((message) => message.peer === target), archived));
+      }
+    }
     try {
       const blockedList = await client.current.blocks({ seed32, address });
       setGate({ busy: false, blocked: blockedList.includes(String(target).toUpperCase()), note: '', error: '' });
@@ -166,20 +351,45 @@ export default function ChatPanel({
       setGate({ busy: false, blocked: false, note: '', error: 'Could not read the block list for this wallet.' });
     }
     try {
-      const { messages, undecryptable } = await client.current.inbox({ seed32, address });
-      setThread((current) => {
-        const known = new Set(current.map((message) => message.id).filter(Boolean));
-        const incoming = messages
-          .filter((message) => message.from === target && !known.has(`m${message.id}`))
-          .map((message) => ({
-            id: `m${message.id}`, peer: message.from, from: message.from,
-            text: message.text, at: message.ts, own: false,
-          }));
-        return [...current, ...incoming].sort((a, b) => (a.at || 0) - (b.at || 0));
-      });
+      // Read the whole pending mailbox for this wallet. Nothing is deleted: the
+      // relay copy is how another device — or this one after a reload — still
+      // gets the conversation.
+      const { messages, undecryptable } = await client.current.peek({ seed32, address });
+      const incoming = messages
+        .filter((message) => String(message.from).toUpperCase() === String(target).toUpperCase())
+        .map((message) => ({
+          id: `m${message.id}`, peer: message.from, from: message.from,
+          text: message.text, at: message.ts, receivedAt: message.receivedAt, own: false,
+        }));
+      setThread((current) => mergeById(current, incoming));
+      rememberIfEnabled({ seed32, address, peer: target, messages: incoming });
       setInboxError(undecryptable.length
         ? `${undecryptable.length} message(s) stayed on the relay: this wallet cannot open them.`
         : '');
+      // This device has now read the room. Opening it only moves the local read
+      // mark; the ciphertext stays on the relay until somebody clears it.
+      markPeerSeen(address, target, newestArrivalByPeer(incoming)[target] || Date.now());
+      // Saved history means the relay copy can go now; without it the copy stays
+      // for the retention window so another device can still fetch it.
+      await archiveAndClearRelay({
+        seed32, address, messages: incoming, ack: client.current.ack.bind(client.current),
+      });
+      // Opening a room clears its own badge. Other badges keep what this device
+      // last counted: their mail may already be stored here and gone from the
+      // relay, so a relay-only recount would wrongly zero them.
+      const counts = { ...readUnreadSnapshot(address).counts };
+      delete counts[target];
+      const at = Date.now();
+      setUnreadByPeer(counts);
+      setUnreadAt(at);
+      setUnreadPreview((current) => {
+        const next = { ...current };
+        delete next[target];
+        return next;
+      });
+      writeUnreadSnapshot(address, { counts, at });
+      const maxId = messages.reduce((max, message) => (message.id > max ? message.id : max), readCursor(address));
+      if (maxId > 0) writeCursor(address, maxId);
     } catch (error) {
       setInboxError(String(error?.message || error));
     }
@@ -270,9 +480,11 @@ export default function ChatPanel({
     try {
       const text = createPaymentRequestText({ amount: requestDigits, address });
       await client.current.send({ seed32, from: address, to: peer, text });
-      setThread((current) => [...current, {
+      const message = {
         id: `r${Date.now()}`, peer, from: address, text, at: Date.now(), own: true,
-      }]);
+      };
+      setThread((current) => [...current, message]);
+      rememberIfEnabled({ seed32, address, peer, messages: [message] });
       setRequest({ amount: '', busy: false, note: 'Payment request sent. It does not debit the other wallet.', error: '' });
     } catch (error) {
       setRequest((current) => ({ ...current, busy: false, error: String(error?.message || error) }));
@@ -305,9 +517,13 @@ export default function ChatPanel({
       const cardText = createTransactionCardText({
         hash: result.hash, amount, from: address, to: peer,
       });
-      setThread((current) => [...current, {
+      const transferMessage = {
         id: `c${Date.now()}`, peer, from: address, text: cardText, at: Date.now(), own: true,
-      }]);
+      };
+      setThread((current) => [...current, transferMessage]);
+      // The ledger transaction is the record of value; the saved transcript keeps
+      // the bubble that points at it, even if chat delivery fails below.
+      rememberIfEnabled({ seed32, address, peer, messages: [transferMessage] });
       setCoin({ amount: '', phase: 'idle', error: '' });
       setApprovalMethod(canApproveWithPasskey ? 'passkey' : 'password');
       // The transfer bubble in the thread is the record; the sheet has done its
@@ -360,9 +576,11 @@ export default function ChatPanel({
     setState((current) => ({ ...current, busy: true, note: '' }));
     try {
       await client.current.send({ seed32, from: address, to: peer, text });
-      setThread((current) => [...current, {
+      const message = {
         id: `s${Date.now()}`, peer, from: address, text, at: Date.now(), own: true,
-      }]);
+      };
+      setThread((current) => [...current, message]);
+      rememberIfEnabled({ seed32, address, peer, messages: [message] });
       setDraft('');
       setSheet('none');
     } catch (error) {
@@ -451,6 +669,16 @@ export default function ChatPanel({
           <ul className="nw-chat-list">
             {known.map((contact) => {
               const added = friendList.includes(contact);
+              const count = unreadCounts[contact] || 0;
+              const preview = readOnly ? null : unreadPreview[contact];
+              const checked = formatUnreadAge(unreadCheckedAt);
+              const subtitle = readOnly
+                ? (count > 0
+                  ? `${count} new${checked ? ` · checked ${checked}` : ''}`
+                  : 'Locked · unlock to open')
+                : count > 0 && preview
+                  ? `${count > 1 ? `${count} new · ` : ''}${preview.text}`
+                  : added ? 'Encrypted chat' : 'From your transfers · encrypted';
               return (
                 <li key={contact} className="nw-chat-row">
                   <button type="button" className="nw-chat-rowmain"
@@ -467,12 +695,13 @@ export default function ChatPanel({
                     </span>
                     <span className="nw-chat-rowtext">
                       <span className="nw-chat-rowname">{peerIds[contact] || shortAddr(contact)}</span>
-                      <span className="nw-chat-rowsub">
-                        {readOnly
-                          ? 'Locked · unlock to open'
-                          : added ? 'Encrypted chat' : 'From your transfers · encrypted'}
-                      </span>
+                      <span className="nw-chat-rowsub">{subtitle}</span>
                     </span>
+                    {count > 0 ? (
+                      <span className="nw-chat-badge" aria-label={`${count} new message${count === 1 ? '' : 's'}`}>
+                        {count > 99 ? '99+' : count}
+                      </span>
+                    ) : null}
                     <span className="nw-chat-rowchev" aria-hidden>›</span>
                   </button>
                   {added ? (
@@ -487,9 +716,20 @@ export default function ChatPanel({
             })}
           </ul>
         )}
-        <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
-          {`Your chat list keeps only public wallet addresses on this device (up to ${FRIEND_LIMIT}). Messages themselves are never stored.`}
-        </p>
+        {readOnly && lockedUnread.at ? (
+          <p className="nw-small nw-dim" style={{ margin: 0 }} role="status">
+            {`New messages last checked ${formatUnreadAge(lockedUnread.at)}. Unlock to fetch again.`}
+          </p>
+        ) : null}
+        <div style={{ display: 'grid', gap: 6, margin: '10px 0 0' }}>
+          <p className="nw-small nw-dim" style={{ margin: 0 }}>
+            {`Your chat list keeps only public wallet addresses on this device (up to ${FRIEND_LIMIT}).`}
+          </p>
+          <p className="nw-small nw-dim" style={{ margin: 0 }}>
+            Messages stay on the relay for up to 7 days so your other devices can fetch them.
+            With chat history on, this device removes its relay copy as soon as the message is saved here.
+          </p>
+        </div>
       </section>
     );
   }
@@ -509,7 +749,7 @@ export default function ChatPanel({
         <span className="nw-chat-avatar" aria-hidden>{initials(peer, peerIds[peer])}</span>
         <div className="nw-chat-who">
           <span className="nw-chat-whoname">{peerName}</span>
-          <span className="nw-chat-whosub">Encrypted chat</span>
+          <span className="nw-chat-whosub">Encrypted · relay keeps 7 days</span>
         </div>
         <button type="button" className="nw-chat-iconbtn" aria-label="Refresh messages"
           disabled={state.busy || readOnly} onClick={() => void openThread(peer)}>↻</button>
@@ -557,6 +797,10 @@ export default function ChatPanel({
           {gate.error ? (
             <p className="nw-small" style={{ margin: 0, color: 'var(--warn)' }} role="alert">{gate.error}</p>
           ) : null}
+          <p className="nw-small nw-dim" style={{ margin: 0 }}>
+            Messages stay on the relay up to 7 days. With chat history on, a saved copy here lets the
+            relay drop its own sooner; a device that has not fetched the message in that window loses it.
+          </p>
           <p className="nw-small nw-dim" style={{ margin: 0 }}>
             An email is never stored here. The profile keeps an @id and this public address only.
           </p>

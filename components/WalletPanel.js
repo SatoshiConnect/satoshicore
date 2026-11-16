@@ -17,6 +17,7 @@ import { decodeSeed } from '../lib/nsatCodec';
 // source of truth for WHY a send is blocked; see NSAT-WALLET-BUTTON-STATES).
 import { sendPreflight, maxSendable, fmtGroup, cleanAmount } from '../lib/nsatSendPreflight';
 import { prepareChatCoinApproval } from '../lib/chatCoinApproval';
+import { clearArchivedWallet, forgetArchiveKeys, readArchivePrefs } from '../lib/chatArchive';
 import { startBalanceRefresh } from '../lib/walletBalanceRefresh.mjs';
 import {
   ACCOUNT_SIGNED_OUT_EVENT, isFirebaseWebConfigured, loadGoogleAuth, signOutGoogleSession,
@@ -37,6 +38,7 @@ import {
   bindOwner, ownerOf, unbindOwner, visibleWalletNamed, walletNameForAccount, walletsForAccount,
 } from '../lib/walletBinding';
 import GoogleAccount from './GoogleAccount';
+import ChatArchiveCard from './ChatArchiveCard';
 import ContactsCard from './ContactsCard';
 import ProfileCard from './ProfileCard';
 import { readMyProfile } from '../lib/profile';
@@ -264,6 +266,12 @@ export default function WalletPanel() {
   const lockWallet = useCallback((message) => {
     lockEpoch.current += 1;
     const current = activeRef.current;
+    // The saved-history key comes from the seed, so it must not outlive the
+    // session either. When the person asked for it, the stored history goes too.
+    forgetArchiveKeys();
+    if (current?.pubkey && readArchivePrefs().wipeOnLock) {
+      void clearArchivedWallet(current.pubkey).catch(() => { /* storage may be unavailable */ });
+    }
     if (current?.seed32) zeroSeed(current.seed32);
     for (const seed32 of pendingSeedsRef.current) zeroSeed(seed32);
     pendingSeedsRef.current.clear();
@@ -2948,6 +2956,7 @@ function SettingsPage({ s, onShielded, onOpenContacts }) {
           </button>
         </section>
       ) : null}
+      <ChatArchiveCard session={s.active} />
       {SHOW_GOOGLE_ACCOUNT ? <DriveBackupCard onKeystoreChanged={s.onReloadWallets} /> : null}
       <section className="nw-card">
         <h2 style={{ color: 'var(--text)' }}>Privacy</h2>

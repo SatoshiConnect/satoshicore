@@ -1,0 +1,103 @@
+# Saved chat history on this device (opt-in)
+
+Status: implemented. Off by default. The chat itself still keeps the transcript in
+the session only; this is an explicit choice a person makes in Settings →
+“Chat history on this device”.
+
+## Why it is opt-in
+
+The messenger's original rule is that losing the tab loses the transcript, because
+a plaintext conversation left on a shared device is worse than a lost one. That
+rule stays the default. Someone who wants history has to turn it on for the device,
+and can additionally have it wiped whenever the wallet locks.
+
+## What is stored, and how
+
+```
+IndexedDB  scw-chat-archive-v1       (one database, per origin)
+store      messages
+key        `${wallet}|${peer}|${messageId}`
+row        { key, owner, peer, id, at, iv, ct }        ← owner/peer/at are clear
+```
+
+- `ct` / `iv` are AES-256-GCM over `{ own, text }` with a fresh 12-byte IV.
+- Additional authenticated data binds the record to its wallet, peer, message id
+  and timestamp: `nsc-archive|1|<wallet>|<peer>|<id>|<at>`. A copied row cannot be
+  re-opened under another conversation, id or time, and a tampered body fails.
+- The key is `HKDF-SHA256(seed32, salt = wallet address, info = "nsc-chat-archive-v1")`
+  → AES-256-GCM, non-extractable. It is cached in memory for the session and
+  dropped by `forgetArchiveKeys()` on every lock. Nothing is persisted: no extra
+  password, no wrapped key, no key export.
+- Writes are idempotent by message id, so re-reading the relay or restoring a
+  backup cannot duplicate a line.
+
+## Backup to Google Drive
+
+- Reuses the wallet's existing OAuth grant and `drive.appdata` scope
+  (`lib/driveBackup.js`), one file per wallet:
+  `nsat-chat-archive.<walletaddress>.json`.
+- The file is the raw encrypted rows inside a second AES-GCM envelope, so Drive
+  cannot read even the peer list or timestamps. Readable parts: the app marker,
+  format version, the wallet address, the creation time and the row count.
+- Restore needs the same wallet seed. A file for another address, another seed,
+  a newer format version or a foreign file is refused with a specific message,
+  never “restored anyway”.
+- Backups are manual (a button), because an upload on its own reveals timing to
+  Google; there is no background auto-upload.
+
+## Limitations (stated, not hidden)
+
+1. **Seed compromise reads the archive.** The key comes from the seed, so an
+   attacker with the seed reads this history (and the relay's 7-day envelopes).
+   There is no forward secrecy here, exactly as documented for the chat itself.
+2. **Metadata is in the clear on the device.** `owner`, `peer` and `at` are
+   readable from IndexedDB without the key; they are what allows the list and
+   ordering to work while the wallet is locked. Message text is not.
+3. **The origin can read it while the wallet is unlocked.** Any script running on
+   this origin (an XSS, a malicious extension, a debugger) can ask the page to
+   decrypt. It protects the disk, not a live unlocked session.
+4. **Wipe-on-lock is a delete, not a forensic erase.** Flash storage and
+   copy-on-write filesystems may keep old blocks until they are overwritten.
+   Clearing site data or the browser profile is the stronger action.
+5. **Drive backup is not protected from Google's account metadata.** Google sees
+   which account uploaded a file, its size and when; it cannot read the contents.
+   A hostile Drive account holder can delete or replace the file — the restore
+   path refuses anything that does not decrypt with this wallet's key, so a
+   replaced file fails instead of installing attacker-chosen history.
+6. **No multi-device sync.** The archive is per browser profile. The relay is
+   what lets a second device see recent mail; restoring saved history there is a
+   manual pull from Drive and needs the wallet seed on that device.
+7. **Not covered:** attachments (none exist yet), messages that are no longer on
+   the relay (older than its 7-day retention, or already dropped because another
+   device archived them), and messages from a blocked sender (the relay never
+   stored them). Turning the archive on picks up what the relay still holds, up
+   to the mailbox cap — the archive does not backfill from another device.
+8. **Saving here shortens the relay's copy.** Once a message is in this archive,
+   the relay is asked to delete its copy, which is what keeps the mailbox small.
+   A device that has not fetched that message yet will not find it; with history
+   off, the relay copy instead lasts the full 7 days.
+
+## Implementation
+
+- `lib/chatArchive.js` — preferences, key derivation, record crypto, IndexedDB
+  operations (`archiveMessages`, `readArchivedThread`, `readArchivedRows`,
+  `restoreArchivedRows`, `countArchivedMessages`, `clearArchivedWallet`,
+  `clearAllArchives`, `forgetArchiveKeys`).
+- `lib/chatArchiveBackup.js` — the Drive container (`sealArchiveBackup`,
+  `openArchiveBackup`, `archiveBackupFileName`).
+- `components/ChatArchiveCard.js` — Settings → “Chat history on this device”.
+- `components/ChatPanel.js` — loads saved history when a conversation opens and
+  saves both directions as they happen; every write is best-effort, so a blocked
+  or full store never stops a send.
+- `components/WalletPanel.js` — on lock: drop the derived key, and wipe this
+  wallet's saved history when that preference is on.
+- `lib/driveBackup.js` — `uploadBackup` / `downloadBackup` take an optional
+  `fileName`, so the chat archive rides the existing Drive plumbing unchanged.
+
+## Tests
+
+`tests/chat-archive.test.mjs` (7): preferences default off and reset when the
+archive is turned off; key derivation is stable per seed+address and different for
+another wallet; a sealed line is bound to wallet/peer/id/time and rejects tamper;
+the Drive container round-trips, keeps text and peer addresses out of the clear,
+and refuses another wallet, a wrong seed, a newer version or a foreign file.

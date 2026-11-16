@@ -21,6 +21,13 @@ const SEED_B = unhex('1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403
 const ADDRESS_A = encodeG(nacl.sign.keyPair.fromSeed(SEED_A).publicKey);
 const ADDRESS_B = encodeG(nacl.sign.keyPair.fromSeed(SEED_B).publicKey);
 
+// The relay keeps mail until it is cleared, and these tests share one database:
+// start each mailbox test from an empty one explicitly.
+const clearMailbox = async (client, seed32, address) => {
+  const { messages } = await client.peek({ seed32, address });
+  if (messages.length) await client.ack({ seed32, address, ids: messages.map((m) => m.id) });
+};
+
 let dir;
 let relay;
 let server;
@@ -71,6 +78,7 @@ test('two wallets exchange encrypted messages over HTTP', async () => {
 
   await a.publishKey({ seed32: SEED_A, address: ADDRESS_A });
   await b.publishKey({ seed32: SEED_B, address: ADDRESS_B });
+  await clearMailbox(b, SEED_B, ADDRESS_B);
 
   // B can find and verify A's key by address alone.
   const bundle = await b.fetchKey(ADDRESS_A);
@@ -78,18 +86,20 @@ test('two wallets exchange encrypted messages over HTTP', async () => {
 
   await a.send({ seed32: SEED_A, from: ADDRESS_A, to: ADDRESS_B, text: 'ledger 313951 — ยืนยันแล้ว' });
 
-  const inboxB = await b.inbox({ seed32: SEED_B, address: ADDRESS_B });
-  assert.equal(inboxB.messages.length, 1);
-  assert.equal(inboxB.messages[0].text, 'ledger 313951 — ยืนยันแล้ว');
-  assert.equal(inboxB.messages[0].from, ADDRESS_A);
-  assert.equal(inboxB.undecryptable.length, 0);
+  const peekB = await b.peek({ seed32: SEED_B, address: ADDRESS_B });
+  assert.equal(peekB.messages.length, 1);
+  assert.equal(peekB.messages[0].text, 'ledger 313951 — ยืนยันแล้ว');
+  assert.equal(peekB.messages[0].from, ADDRESS_A);
+  assert.equal(peekB.undecryptable.length, 0);
 
-  // The relay removed it after the ack: the second read is empty.
-  const again = await b.inbox({ seed32: SEED_B, address: ADDRESS_B });
-  assert.equal(again.messages.length, 0);
+  // Reading alone no longer deletes: only the explicit clear does.
+  const again = await b.peek({ seed32: SEED_B, address: ADDRESS_B });
+  assert.equal(again.messages.length, 1);
+  await b.ack({ seed32: SEED_B, address: ADDRESS_B, ids: [peekB.messages[0].id] });
+  assert.equal((await b.peek({ seed32: SEED_B, address: ADDRESS_B })).messages.length, 0);
 
   // A's own inbox never contains what A sent.
-  const inboxA = await a.inbox({ seed32: SEED_A, address: ADDRESS_A });
+  const inboxA = await a.peek({ seed32: SEED_A, address: ADDRESS_A });
   assert.equal(inboxA.messages.length, 0);
 });
 
@@ -97,10 +107,11 @@ test('payment requests and transaction cards travel encrypted and bind to the en
   const a = createChatClient({ origin });
   const b = createChatClient({ origin });
   await b.publishKey({ seed32: SEED_B, address: ADDRESS_B });
+  await clearMailbox(b, SEED_B, ADDRESS_B);
 
   const request = createPaymentRequestText({ amount: '9007199254740993', address: ADDRESS_A });
   await a.send({ seed32: SEED_A, from: ADDRESS_A, to: ADDRESS_B, text: request });
-  const requestInbox = await b.inbox({ seed32: SEED_B, address: ADDRESS_B });
+  const requestInbox = await b.peek({ seed32: SEED_B, address: ADDRESS_B });
   assert.equal(requestInbox.messages.length, 1);
   assert.deepEqual(parsePaymentRequestText(requestInbox.messages[0].text, requestInbox.messages[0].from), {
     kind: 'payment-request', amount: '9007199254740993', address: ADDRESS_A,
@@ -110,13 +121,14 @@ test('payment requests and transaction cards travel encrypted and bind to the en
     hash: 'c'.repeat(64), amount: '9007199254740993', from: ADDRESS_A, to: ADDRESS_B,
   });
   await a.send({ seed32: SEED_A, from: ADDRESS_A, to: ADDRESS_B, text: card });
-  const cardInbox = await b.inbox({ seed32: SEED_B, address: ADDRESS_B });
-  assert.equal(cardInbox.messages.length, 1);
-  assert.deepEqual(parseTransactionCardText(cardInbox.messages[0].text, cardInbox.messages[0].from), {
+  const cardInbox = await b.peek({ seed32: SEED_B, address: ADDRESS_B });
+  const newest = cardInbox.messages[cardInbox.messages.length - 1];
+  assert.equal(cardInbox.messages.length, 2);
+  assert.deepEqual(parseTransactionCardText(newest.text, newest.from), {
     kind: 'transaction-card', hash: 'c'.repeat(64), amount: '9007199254740993',
     from: ADDRESS_A, to: ADDRESS_B,
   });
-  assert.equal(cardInbox.messages[0].from, ADDRESS_A);
+  assert.equal(newest.from, ADDRESS_A);
   assert.equal(cardInbox.undecryptable.length, 0);
 });
 
@@ -143,14 +155,47 @@ test('a request signed for another path is refused by the relay', async () => {
     /refused/);
 });
 
-test('an envelope that was already opened is not handed out twice', async () => {
+test('a second device on the same wallet can read what the first one already read', async () => {
+  const a = createChatClient({ origin });
+  const laptop = createChatClient({ origin });
+  const phone = createChatClient({ origin });
+  await laptop.publishKey({ seed32: SEED_B, address: ADDRESS_B });
+  await clearMailbox(laptop, SEED_B, ADDRESS_B);
+  await a.send({ seed32: SEED_A, from: ADDRESS_A, to: ADDRESS_B, text: 'read on the laptop' });
+
+  // Same seed, same wallet: the laptop reading does not remove the copy the
+  // phone still needs.
+  const onLaptop = await laptop.peek({ seed32: SEED_B, address: ADDRESS_B });
+  assert.deepEqual(onLaptop.messages.map((m) => m.text), ['read on the laptop']);
+  const onPhone = await phone.peek({ seed32: SEED_B, address: ADDRESS_B });
+  assert.deepEqual(onPhone.messages.map((m) => m.text), ['read on the laptop']);
+
+  // Clearing is explicit, and it does remove it for both.
+  await phone.ack({ seed32: SEED_B, address: ADDRESS_B, ids: onPhone.messages.map((m) => m.id) });
+  assert.equal((await laptop.peek({ seed32: SEED_B, address: ADDRESS_B })).messages.length, 0);
+});
+
+test('peeking counts new mail without deleting it, and ack removes only what was named', async () => {
   const a = createChatClient({ origin });
   const b = createChatClient({ origin });
   await b.publishKey({ seed32: SEED_B, address: ADDRESS_B });
-  await a.send({ seed32: SEED_A, from: ADDRESS_A, to: ADDRESS_B, text: 'one' });
-  await a.send({ seed32: SEED_A, from: ADDRESS_A, to: ADDRESS_B, text: 'two' });
-  const first = await b.inbox({ seed32: SEED_B, address: ADDRESS_B });
-  assert.deepEqual(first.messages.map((m) => m.text), ['one', 'two']);
-  const second = await b.inbox({ seed32: SEED_B, address: ADDRESS_B });
-  assert.equal(second.messages.length, 0);
+  await clearMailbox(b, SEED_B, ADDRESS_B);
+  await a.send({ seed32: SEED_A, from: ADDRESS_A, to: ADDRESS_B, text: 'first' });
+  await a.send({ seed32: SEED_A, from: ADDRESS_A, to: ADDRESS_B, text: 'second' });
+
+  // Two polls in a row see the same two messages: nothing was acknowledged.
+  const peek1 = await b.peek({ seed32: SEED_B, address: ADDRESS_B });
+  const peek2 = await b.peek({ seed32: SEED_B, address: ADDRESS_B });
+  assert.deepEqual(peek1.messages.map((m) => m.text), ['first', 'second']);
+  assert.deepEqual(peek2.messages.map((m) => m.text), ['first', 'second']);
+
+  // Acknowledging one id leaves the other message on the relay.
+  const deleted = await b.ack({ seed32: SEED_B, address: ADDRESS_B, ids: [peek1.messages[0].id] });
+  assert.equal(deleted, 1);
+  const peek3 = await b.peek({ seed32: SEED_B, address: ADDRESS_B });
+  assert.deepEqual(peek3.messages.map((m) => m.text), ['second']);
+
+  // Clearing the rest removes it for this mailbox.
+  assert.equal(await b.ack({ seed32: SEED_B, address: ADDRESS_B, ids: [peek3.messages[0].id] }), 1);
+  assert.equal((await b.peek({ seed32: SEED_B, address: ADDRESS_B })).messages.length, 0);
 });

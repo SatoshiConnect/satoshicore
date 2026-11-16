@@ -24,10 +24,17 @@ import { DatabaseSync } from 'node:sqlite';
 
 const B58_FREE = /^G[A-Z2-7]{55}$/;
 const MAX_ENVELOPE_BYTES = 8 * 1024;
-const MAX_MESSAGES_PER_RECIPIENT = 500;
+// Mail is addressed to a mailbox, not to one device, so a copy has to survive
+// long enough for another device to fetch it. Seven days is the window: after
+// that the relay forgets it, and a device that opted into saved chat history
+// asks for it to be forgotten as soon as its own copy is stored.
+const MAX_MESSAGES_PER_RECIPIENT = 2_000;
+const RETENTION_DAYS = 7;
+// Housekeeping runs on request at most this often, so a quiet relay still
+// forgets expired mail instead of waiting for the next delivery.
+const GC_INTERVAL_MS = 60_000;
 const MAX_KEYS_PER_ADDRESS = 3;
 const FRESHNESS_MS = 120_000;
-const RETENTION_DAYS = 30;
 // One wallet cannot fill somebody else's mailbox: this is the per-day ceiling
 // for mail that is actually stored, counted per sender.
 const MAX_MESSAGES_PER_SENDER_PER_DAY = 200;
@@ -155,10 +162,23 @@ export function createChatRelay({
   now = () => Date.now(),
   maxPerSenderPerDay = MAX_MESSAGES_PER_SENDER_PER_DAY,
   maxBlocksPerOwner = MAX_BLOCKS_PER_OWNER,
+  maxPerRecipient = MAX_MESSAGES_PER_RECIPIENT,
+  retentionDays = RETENTION_DAYS,
+  gcIntervalMs = GC_INTERVAL_MS,
 } = {}) {
   if (!dbPath) throw new Error('A chat relay needs a database path.');
   const db = openDatabase(dbPath);
   const seenNonces = new Map(); // nonce → expiry, replay guard
+  let lastGcAt = 0;
+
+  /** Drop mail past retention and stale quota rows. Safe to call any time. */
+  function runGc(at) {
+    const expired = db.prepare('DELETE FROM chat_messages WHERE received_at < ?')
+      .run(at - retentionDays * 86_400_000);
+    db.prepare('DELETE FROM chat_quota WHERE day < ?').run(Math.floor(at / 86_400_000) - 1);
+    lastGcAt = at;
+    return Number(expired?.changes || 0);
+  }
 
   function freshNonce(nonce) {
     const at = now();
@@ -177,8 +197,14 @@ export function createChatRelay({
       try { db.close(); } catch { /* already closed */ }
     },
 
+    /** Exposed so a test (or an operator) can collect without waiting a minute. */
+    gc(at = now()) {
+      return runGc(at);
+    },
+
     handle({ method, path, query = {}, headers = {}, body = null }) {
       const at = now();
+      if (at - lastGcAt >= gcIntervalMs) runGc(at);
 
       // A published messaging key is public information: anyone may read one.
       if (method === 'GET' && path === '/api/v1/chat/keys') {
@@ -255,10 +281,13 @@ export function createChatRelay({
           return json(429, { error: 'daily message limit reached' });
         }
 
+        // Expired mail must not make a mailbox look full: enforce retention on
+        // the send path itself, not only on the once-a-minute housekeeping pass.
+        runGc(at);
         const pending = db.prepare(
           'SELECT COUNT(*) c FROM chat_messages WHERE recipient = ?',
         ).get(recipient).c;
-        if (pending >= MAX_MESSAGES_PER_RECIPIENT) {
+        if (pending >= maxPerRecipient) {
           return json(429, { error: 'recipient mailbox is full' });
         }
         db.prepare(
@@ -268,9 +297,6 @@ export function createChatRelay({
           `INSERT INTO chat_quota (address, day, count) VALUES (?, ?, 1)
            ON CONFLICT (address, day) DO UPDATE SET count = count + 1`,
         ).run(address, day);
-        db.prepare('DELETE FROM chat_messages WHERE received_at < ?')
-          .run(at - RETENTION_DAYS * 86_400_000);
-        db.prepare('DELETE FROM chat_quota WHERE day < ?').run(day - 1);
         return json(200, { ok: true });
       }
 
@@ -286,13 +312,16 @@ export function createChatRelay({
         });
       }
 
+      // Explicit clear only: the client no longer acknowledges on read, so this
+      // runs when a person asks for their mailbox to be emptied. It removes the
+      // copies of every device on purpose; the UI warns before calling it.
       if (method === 'POST' && path === '/api/v1/chat/ack') {
         const ids = Array.isArray(body?.ids) ? body.ids.filter((id) => Number.isInteger(id)).slice(0, 200) : [];
         if (ids.length === 0) return json(400, { error: 'ids required' });
         const placeholders = ids.map(() => '?').join(',');
-        db.prepare(`DELETE FROM chat_messages WHERE recipient = ? AND id IN (${placeholders})`)
+        const cleared = db.prepare(`DELETE FROM chat_messages WHERE recipient = ? AND id IN (${placeholders})`)
           .run(address, ...ids);
-        return json(200, { ok: true, deleted: ids.length });
+        return json(200, { ok: true, deleted: Number(cleared?.changes || 0) });
       }
 
       // ---------------- block list ----------------

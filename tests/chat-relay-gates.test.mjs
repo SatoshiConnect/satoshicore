@@ -199,3 +199,93 @@ test('the block endpoints need a signature, a real address and a bounded list', 
     h.done();
   }
 });
+
+test('a mailbox holds a month of conversation and refuses only past its ceiling', () => {
+  const h = harness({ maxPerRecipient: 2 });
+  try {
+    assert.equal(h.sendBToA('one').status, 200);
+    assert.equal(h.sendBToA('two').status, 200);
+    const full = h.sendBToA('three');
+    assert.equal(full.status, 429);
+    assert.match(full.body.error, /mailbox is full/);
+    assert.equal(h.inboxOf(KEY_A, ADDRESS_A).length, 2);
+
+    // Clearing one makes room again: reading alone never does.
+    const [first] = h.inboxOf(KEY_A, ADDRESS_A);
+    const cleared = h.relay.handle(h.signed({
+      keyPair: KEY_A, address: ADDRESS_A, method: 'POST', path: '/api/v1/chat/ack',
+      body: { ids: [first.id] },
+    }));
+    assert.equal(cleared.status, 200);
+    assert.equal(cleared.body.deleted, 1);
+    assert.equal(h.sendBToA('four').status, 200);
+  } finally {
+    h.done();
+  }
+});
+
+test('mail is kept for 7 days, then collected even on a quiet relay', () => {
+  const h = harness({ gcIntervalMs: 60_000 });
+  try {
+    assert.equal(h.sendBToA('older').status, 200);
+    h.advance(6 * DAY);
+    assert.equal(h.inboxOf(KEY_A, ADDRESS_A).length, 1, 'still inside retention');
+
+    h.advance(2 * DAY);
+    // The next request runs the housekeeping pass; nothing had to be delivered.
+    assert.equal(h.inboxOf(KEY_A, ADDRESS_A).length, 0);
+
+    assert.equal(h.sendBToA('after the window').status, 200);
+    assert.equal(h.relay.gc(), 0, 'nothing left to collect');
+    assert.equal(h.inboxOf(KEY_A, ADDRESS_A).length, 1);
+  } finally {
+    h.done();
+  }
+});
+
+test('a mailbox is paged in arrival order and ack reports what it really removed', () => {
+  const h = harness();
+  try {
+    for (const text of ['one', 'two', 'three']) assert.equal(h.sendBToA(text).status, 200);
+    const page = (query) => h.relay.handle({
+      ...h.signed({ keyPair: KEY_A, address: ADDRESS_A, method: 'GET', path: '/api/v1/chat/messages' }),
+      query,
+    });
+    const first = page({ limit: 2 });
+    assert.equal(first.status, 200);
+    assert.equal(first.body.messages.length, 2);
+
+    // `since` is the last id already seen, so the next page starts after it.
+    const rest = page({ since: first.body.messages[1].id });
+    assert.equal(rest.body.messages.length, 1);
+    assert.equal(rest.body.messages[0].id > first.body.messages[1].id, true);
+    assert.equal(h.inboxOf(KEY_A, ADDRESS_A).length, 3);
+
+    const ids = first.body.messages.map((message) => message.id);
+    const cleared = h.relay.handle(h.signed({
+      keyPair: KEY_A, address: ADDRESS_A, method: 'POST', path: '/api/v1/chat/ack',
+      // A stale id that is already gone must not be counted as deleted.
+      body: { ids: [...ids, 999_999] },
+    }));
+    assert.equal(cleared.status, 200);
+    assert.equal(cleared.body.deleted, 2);
+    assert.equal(h.inboxOf(KEY_A, ADDRESS_A).length, 1);
+  } finally {
+    h.done();
+  }
+});
+
+test('expired mail is collected before the mailbox ceiling is applied', () => {
+  // The periodic pass is effectively disabled, so only the send path can free
+  // the slot: a full mailbox must not reject a sender because of mail that has
+  // already outlived retention.
+  const h = harness({ gcIntervalMs: 24 * 60 * 60 * 1000, maxPerRecipient: 1, retentionDays: 1 });
+  try {
+    assert.equal(h.sendBToA('old').status, 200);
+    h.advance(2 * DAY);
+    assert.equal(h.sendBToA('new').status, 200);
+    assert.equal(h.inboxOf(KEY_A, ADDRESS_A).length, 1);
+  } finally {
+    h.done();
+  }
+});
