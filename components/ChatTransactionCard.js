@@ -17,6 +17,9 @@ function cardLabel(status) {
   return 'Unverified · status unknown';
 }
 
+// A transfer in the conversation reads as one bubble: the amount first, then
+// its verdict. The hash, ledger and parties are evidence, not conversation, so
+// they stay behind a Details disclosure instead of filling the bubble.
 export default function ChatTransactionCard({ card, sentAt }) {
   const [state, setState] = useState({ status: 'checking' });
   const [attempt, setAttempt] = useState(0);
@@ -36,39 +39,43 @@ export default function ChatTransactionCard({ card, sentAt }) {
 
   const verified = state.status === 'finalized' || state.status === 'failed';
   const href = explorerHrefFor(card.hash);
+  const amount = verified ? state.amount : card.amount;
+  const from = verified ? state.from : card.from;
+  const to = verified ? state.to : card.to;
   const time = verified && state.closeTime
     ? new Date(state.closeTime * 1000).toLocaleString()
     : '';
 
   return (
     <div className="nw-chat-text nw-chat-tx-card">
-      <strong>{cardLabel(state.status)}</strong>
-      {verified ? (
-        <>
-          <div style={{ marginTop: 5 }}>{groupDigits(state.amount)} NSAT</div>
-          <div className="nw-small nw-dim">
-            From {shortAddress(state.from)} · to {shortAddress(state.to)}
-          </div>
+      <div className="nw-chat-tx-top">
+        <span className="nw-chat-tx-mark" aria-hidden>◎</span>
+        <span className="nw-chat-tx-amount">{groupDigits(amount)} NSAT</span>
+      </div>
+      <div className="nw-chat-tx-status">{cardLabel(state.status)}</div>
+      {state.status === 'failed' ? (
+        <div className="nw-small nw-dim">Included in the ledger but failed on-chain — only the fee moved.</div>
+      ) : null}
+      {state.status === 'pending' ? (
+        <div className="nw-small nw-dim">Waiting for the exact hash to close in a ledger.</div>
+      ) : null}
+      <details className="nw-chat-tx-more">
+        <summary>Details</summary>
+        <div className="nw-small nw-dim">From {shortAddress(from)} · to {shortAddress(to)}</div>
+        {verified ? (
           <div className="nw-small nw-dim">
             {state.status === 'finalized' ? 'Ledger' : 'Failed in ledger'} {state.ledger}
             {state.resultCode ? ` · ${state.resultCode}` : ''}
           </div>
-          <div className="nw-small nw-dim">Network: {state.network || 'verified NSAT network'}</div>
-          {time ? <div className="nw-small nw-dim">{time}</div> : null}
-        </>
-      ) : (
-        <>
-          <div className="nw-small nw-dim" style={{ marginTop: 5 }}>
-            {state.status === 'pending'
-            ? `Claimed amount: ${groupDigits(card.amount)} NSAT · waiting for the exact hash to close.`
-            : `Claimed amount: ${groupDigits(card.amount)} NSAT · details have not been verified.`}
-          </div>
-          <div className="nw-small nw-dim">From {shortAddress(card.from)} · to {shortAddress(card.to)}</div>
-        </>
-      )}
-      <div className="nw-small nw-mono" style={{ wordBreak: 'break-all', marginTop: 5 }}>
-        Hash: {card.hash}
-      </div>
+        ) : null}
+        {verified && state.network ? (
+          <div className="nw-small nw-dim">Network: {state.network}</div>
+        ) : null}
+        {time ? <div className="nw-small nw-dim">{time}</div> : null}
+        <div className="nw-small nw-mono" style={{ wordBreak: 'break-all', marginTop: 4 }}>
+          Hash: {card.hash}
+        </div>
+      </details>
       <div className="nw-btn-row" style={{ marginTop: 6 }}>
         <button type="button" className="nw-chip-btn" onClick={() => setAttempt((value) => value + 1)}>
           {state.status === 'checking' ? 'Check again' : state.status === 'pending' ? 'Check status' : 'Recheck'}

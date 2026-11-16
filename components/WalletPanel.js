@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   isGatewayConfigured, isIndexerConfigured, EXPECTED_NETWORK_ID,
   verifyNetworkIdentity, getChainInfo, getAccount, getAccountHistory, getMintStatus,
@@ -16,6 +16,7 @@ import { decodeSeed } from '../lib/nsatCodec';
 // Shared send gate (mirror of the desktop/prototype reason contract — one
 // source of truth for WHY a send is blocked; see NSAT-WALLET-BUTTON-STATES).
 import { sendPreflight, maxSendable, fmtGroup } from '../lib/nsatSendPreflight';
+import { prepareChatCoinApproval } from '../lib/chatCoinApproval';
 import { startBalanceRefresh } from '../lib/walletBalanceRefresh.mjs';
 import {
   ACCOUNT_SIGNED_OUT_EVENT, isFirebaseWebConfigured, loadGoogleAuth, signOutGoogleSession,
@@ -33,7 +34,7 @@ import {
   loadStoredNotices, saveStoredNotices,
 } from '../lib/transferNotice';
 import {
-  bindOwner, unbindOwner, visibleWalletNamed, walletNameForAccount, walletsForAccount,
+  bindOwner, ownerOf, unbindOwner, visibleWalletNamed, walletNameForAccount, walletsForAccount,
 } from '../lib/walletBinding';
 import GoogleAccount from './GoogleAccount';
 import ContactsCard from './ContactsCard';
@@ -62,23 +63,37 @@ import { NSAT } from '../lib/nsatToken';
 
 const ACCOUNT_RE = /^G[A-Z2-7]{55}$/;
 const SHOW_GOOGLE_ACCOUNT = process.env.NEXT_PUBLIC_EXTENSION_BUILD !== '1';
-// Phone-style app: three tabs, arranged the way the iPhone build arranges
-// them. Send and Receive are actions on the wallet screen, not tabs — a phone
-// wallet does not spend a third of its tab bar on one form. Shielded is
-// desktop-only, so Settings links to the explanation instead of advertising a
-// feature the browser cannot run.
-const NAV_PAGES = ['overview', 'activity', 'settings'];
+// Chat is the landing tab only on builds configured for the encrypted relay.
+const CHAT_RELAY_ENABLED = process.env.NEXT_PUBLIC_CHAT_RELAY === '1';
+const CHAT_RELAY_SAME_ORIGIN = CHAT_RELAY_ENABLED
+  && process.env.NEXT_PUBLIC_API_SAME_ORIGIN === '1';
+const CHAT_RELAY_ORIGIN = !CHAT_RELAY_ENABLED
+  ? ''
+  : CHAT_RELAY_SAME_ORIGIN
+    ? ''
+    : (process.env.NEXT_PUBLIC_API_GATEWAY_URL || '').replace(/\/$/, '');
+const chatRelayOrigin = () => CHAT_RELAY_ORIGIN
+  || (CHAT_RELAY_SAME_ORIGIN && typeof window !== 'undefined' ? window.location.origin : '');
+// Phone-style app, arranged the way the iPhone build arranges it. Chats is a
+// permanent tab: whether a relay is configured is a deployment detail, not a
+// reason to make the messages screen disappear — the screen itself says so
+// when delivery is unavailable. Send and Receive are actions on the wallet
+// screen, not tabs — a phone wallet does not spend a third of its tab bar on
+// one form. Shielded is desktop-only, so Settings links to the explanation
+// instead of advertising a feature the browser cannot run.
+const NAV_PAGES = ['chat', 'overview', 'activity', 'settings'];
 const NAV_LABEL = {
-  overview: 'Wallet', activity: 'Activity', settings: 'Settings',
+  chat: 'Chats', overview: 'Wallet', activity: 'Activity', settings: 'Settings',
 };
 const PAGE_GLYPH = {
-  overview: '◆', activity: '⚡', settings: '⚙',
+  chat: '✉', overview: '◆', activity: '⚡', settings: '⚙',
 };
 // Pages reached from an action; the app bar shows Back instead of Receive.
-const SUB_PAGES = ['send', 'receive', 'shielded', 'chat', 'contacts'];
+// Chats is a tab, so it is never one of these.
+const SUB_PAGES = ['send', 'receive', 'shielded', 'contacts'];
 const PAGE_TITLE = {
   overview: 'Overview', send: 'Send NSAT', receive: 'Receive NSAT',
-  shielded: 'Shielded NSAT', activity: 'Activity', settings: 'Settings', chat: 'Messages',
+  shielded: 'Shielded NSAT', activity: 'Activity', settings: 'Settings', chat: 'Chats',
   contacts: 'Contacts',
 };
 // One short line per section — context only, never an essay. Overview and
@@ -90,7 +105,7 @@ const PAGE_LEAD = {
   shielded: 'Desktop only — the native prover is required.',
   activity: 'Every indexed transfer, with the ledger\'s verdict.',
   settings: null,
-  chat: 'End-to-end encrypted with the wallets you transacted with.',
+  chat: 'Encrypted conversations with the wallets you transact with.',
   contacts: 'Who may start a conversation with you — and who may not.',
 };
 
@@ -100,23 +115,6 @@ const PAGE_LEAD = {
 // exceed 2^53, which is why this is BigInt and never a Number.
 const GENESIS_SUPPLY = 2_100_000_000_000_000_000_000_000n;
 const HISTORY_PAGE = 100;
-
-// Encrypted chat needs a relay that stores ciphertext and nothing else. It is
-// off unless the deployment turns it on, so a build pointed at a gateway without
-// the relay says so instead of queueing messages that can never be delivered.
-const CHAT_RELAY_ENABLED = process.env.NEXT_PUBLIC_CHAT_RELAY === '1';
-const CHAT_RELAY_SAME_ORIGIN = CHAT_RELAY_ENABLED
-  && process.env.NEXT_PUBLIC_API_SAME_ORIGIN === '1';
-const CHAT_RELAY_ORIGIN = !CHAT_RELAY_ENABLED
-  ? ''
-  : CHAT_RELAY_SAME_ORIGIN
-    ? ''
-    : (process.env.NEXT_PUBLIC_API_GATEWAY_URL || '').replace(/\/$/, '');
-// A same-origin build still needs an absolute origin for the fetch client;
-// an empty string here used to make the enabled Messages screen say that no
-// relay was configured. Resolve it when the chat screen actually renders.
-const chatRelayOrigin = () => CHAT_RELAY_ORIGIN
-  || (CHAT_RELAY_SAME_ORIGIN && typeof window !== 'undefined' ? window.location.origin : '');
 
 function supplyAndMinted(totalCoins) {
   try {
@@ -179,7 +177,7 @@ export default function WalletPanel() {
   // visible where they use it. Display only: it grants no spending power.
   const [profileId, setProfileId] = useState('');
   // ui
-  const [page, setPage] = useState('overview');
+  const [page, setPage] = useState(CHAT_RELAY_ENABLED ? 'chat' : 'overview');
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);      // { text, kind }
   // forms
@@ -201,6 +199,10 @@ export default function WalletPanel() {
   const [importSeed, setImportSeed] = useState('');
   const [unlockName, setUnlockName] = useState('');
   const [unlockPass, setUnlockPass] = useState('');
+  const [usePasswordUnlock, setUsePasswordUnlock] = useState(false);
+  // Chats ask for the password only when a conversation is opened, so that
+  // request moves focus to this field instead of navigating away.
+  const unlockPassRef = useRef(null);
   // Account switcher, opened from the name pill in the app bar — the same
   // gesture as the iPhone build, where tapping the account name lists the
   // wallets on this device instead of jumping into Settings.
@@ -311,7 +313,7 @@ export default function WalletPanel() {
     setProfileId('');
     setSendRecipientBalances({});
     setToast(null);
-    setPage('overview');
+    setPage(CHAT_RELAY_ENABLED ? 'chat' : 'overview');
     // Signing out also leaves standalone mode: the gate is the starting point
     // for whoever uses this browser next, with or without an account.
     setStandalone(false);
@@ -438,7 +440,15 @@ export default function WalletPanel() {
     const listed = visibleWallets();
     setWallets(listed);
     setBiometricWallets(biometricWalletNames().filter((name) => listed.some((w) => w.name === name)));
-  }, [visibleWallets]);
+    const accountWallet = listed.find((wallet) => accountEmail
+      && ownerOf(wallet.name).toLowerCase() === accountEmail.trim().toLowerCase());
+    const suggested = accountEmail ? walletNameForAccount(accountEmail) : '';
+    const selected = accountWallet
+      || listed.find((wallet) => wallet.name === suggested)
+      || listed[0];
+    setUnlockName((current) => current && listed.some((wallet) => wallet.name === current)
+      ? current : selected?.name || '');
+  }, [accountEmail, visibleWallets]);
 
   // The list depends on who is signed in, so it is rebuilt whenever that
   // changes — including sign-out, where it must empty.
@@ -498,6 +508,14 @@ export default function WalletPanel() {
   // Mint status belongs to the wallet the Founder Mint pays and to no other:
   // the unlocked wallet in view, or a linked watch-only address for it.
   const mintVisible = seesMintStatus(active?.pubkey || watchAddress);
+  // Every wallet this account may see contributes its saved chat list, so the
+  // Chats tab still lists conversations while the wallet is locked. These are
+  // public addresses from the device's own storage, never key material.
+  const chatAddresses = useMemo(
+    () => wallets.map((wallet) => wallet.pubkey).filter(Boolean),
+    [wallets],
+  );
+
   // Chat contacts are the other side of transfers this address already has, so
   // nobody can start a conversation with a wallet that never touched this one.
   const chatContacts = Array.from(new Set((chainHistory.items || [])
@@ -948,8 +966,10 @@ export default function WalletPanel() {
 
   async function doUnlock(e) {
     e.preventDefault();
-    if (!unlockName) return;
-    const name = unlockName;
+    // A single wallet needs no picker: locking clears the selection, so the
+    // one visible wallet is the target instead of leaving Unlock disabled.
+    const name = unlockName || (wallets.length === 1 ? wallets[0].name : '');
+    if (!name) return;
     const password = unlockPass;
     setUnlockPass('');
     const ok = await unlockWithPassword(name, password);
@@ -1258,7 +1278,14 @@ export default function WalletPanel() {
   // conversation without duplicating any of this: it calls the same function,
   // with its own explicit confirmation in front of it. `createOverride` keeps a
   // stale CREATE-account checkbox from changing a chat payment operation.
-  async function submitSend({ toOverride = null, amountOverride = null, createOverride = null } = {}) {
+  async function submitSend({
+    toOverride = null,
+    amountOverride = null,
+    createOverride = null,
+    approvalSeed = null,
+    requireSufficientBalance = false,
+    approvedFee = null,
+  } = {}) {
     const target = String(toOverride ?? dest).trim();
     const value = String(amountOverride ?? amount);
     const create = createOverride ?? createDest;
@@ -1291,7 +1318,8 @@ export default function WalletPanel() {
       && activeRef.current === session;
     // Sign from a tracked private copy. Lock zeroizes session and pending copy,
     // and the signing engine checks canContinue after every async boundary.
-    const seed32 = session.seed32.slice();
+    const seed32 = approvalSeed instanceof Uint8Array
+      ? approvalSeed.slice() : session.seed32.slice();
     pendingSeedsRef.current.add(seed32);
     const requireActiveSession = () => {
       if (!canContinue()) throw new Error('Wallet locked — transaction signing cancelled.');
@@ -1313,6 +1341,19 @@ export default function WalletPanel() {
       }
       const baseFee = await estimateFee();
       requireActiveSession();
+      if (approvedFee !== null && baseFee !== approvedFee) {
+        notify('The live network fee changed after review. Review the payment again; nothing was signed.', 'err');
+        return false;
+      }
+      const currentBalance = requireSufficientBalance ? readAccountBalance(source) : null;
+      if (requireSufficientBalance) {
+        const amountText = value.replace(/[,_ ]/g, '');
+        if (currentBalance?.kind !== 'exact' || !/^\d+$/.test(amountText)
+          || BigInt(currentBalance.value) < BigInt(amountText) + BigInt(baseFee)) {
+          notify('Current confirmed balance is below amount plus network fee; nothing was signed.', 'err');
+          return false;
+        }
+      }
       const info = await getChainInfo();
       requireActiveSession();
       const reserve = Number(info?.info?.ledger?.baseReserve || 0);
@@ -1414,18 +1455,71 @@ export default function WalletPanel() {
     }
   }
 
-  // Chat-side payment: the same pipeline, the same guards, with the person in
-  // the conversation as the destination. The chat shows its own confirmation
-  // step before this is called, so a stray tap cannot move anything.
-  async function sendCoinsFromChat(to, coinAmount) {
-    const ok = await submitSend({
-      toOverride: to, amountOverride: coinAmount, createOverride: false,
+  // Chat payments require a fresh local approval on every transfer. A Google
+  // session only selects the account; it never supplies signing authority.
+  async function sendCoinsFromChat(to, coinAmount, approvalPasswordInput = '', approvalMethod = 'passkey') {
+    if (!active?.seed32 || !activeRef.current) {
+      return { ok: false, error: 'Unlock the wallet before approving this payment.' };
+    }
+    const approval = prepareChatCoinApproval({
+      from: active.pubkey,
+      to,
+      amount: coinAmount,
+      balance,
+      fee,
+      network: net?.network,
+      expectedNetwork: EXPECTED_NETWORK_ID,
     });
-    return {
-      ok,
-      hash: lastSendRef.current?.hash || '',
-      status: lastSendRef.current?.status || '',
-    };
+    if (!approval.ok) return { ok: false, error: approval.reason };
+
+    const session = activeRef.current;
+    const operationEpoch = lockEpoch.current;
+    let approvalSeed;
+    let approvalPassword = approvalPasswordInput;
+    try {
+      if (approvalMethod === 'passkey' && biometricWallets.includes(session.name)) {
+        // A new user-verified platform assertion is required for every chat send.
+        approvalSeed = await unlockWithBiometric(session.name, session.pubkey);
+      } else {
+        if (approvalMethod === 'passkey') {
+          return { ok: false, error: 'Device passkey approval is not enrolled for this wallet.' };
+        }
+        if (!approvalPassword) {
+          return { ok: false, error: 'Enter this wallet’s password to approve the payment.' };
+        }
+        approvalSeed = await keystoreUnlock(session.name, approvalPassword);
+        approvalPassword = '';
+      }
+      if (operationEpoch !== lockEpoch.current || activeRef.current !== session) {
+        return { ok: false, error: 'Wallet locked during approval; nothing was signed.' };
+      }
+      const signingSeed = approvalSeed;
+      approvalSeed = null;
+      let pendingSend;
+      try {
+        pendingSend = submitSend({
+          toOverride: to,
+          amountOverride: coinAmount,
+          createOverride: false,
+          approvalSeed: signingSeed,
+          requireSufficientBalance: true,
+          approvedFee: Number(approval.fee),
+        });
+      } finally {
+        zeroSeed(signingSeed);
+      }
+      const ok = await pendingSend;
+      return {
+        ok,
+        hash: lastSendRef.current?.hash || '',
+        status: lastSendRef.current?.status || '',
+      };
+    } catch (error) {
+      return { ok: false, error: String(error?.message || 'Payment approval failed.') };
+    } finally {
+      approvalPassword = '';
+      if (approvalSeed) zeroSeed(approvalSeed);
+    }
   }
 
   function openReview() {
@@ -1446,6 +1540,8 @@ export default function WalletPanel() {
   // not signed in here: they are not listed, and the unlock form says so instead
   // of looking empty.
   const hiddenWallets = Math.max(0, keystoreList().length - wallets.length);
+  // The chosen unlock target, defaulting to the only wallet on the device.
+  const unlockTarget = unlockName || (wallets.length === 1 ? wallets[0].name : '');
 
   const ledger = net?.ledger ?? null;
 
@@ -1518,7 +1614,9 @@ export default function WalletPanel() {
             </p>
           )}
 
-          {page !== 'overview' && (
+          {/* Chats carries its own header, so it does not repeat the page title
+           * above the conversation list. */}
+          {page !== 'overview' && page !== 'chat' && (
             <div className="nw-section-head">
               <h2 className="nw-section-title">{PAGE_TITLE[page]}</h2>
               {PAGE_LEAD[page] ? <p className="nw-page-lead">{PAGE_LEAD[page]}</p> : null}
@@ -1536,16 +1634,50 @@ export default function WalletPanel() {
           {!active && hasWallets && (
             <form className="nw-unlock nw-unlock-card" onSubmit={doUnlock}>
               <label className="nw-label" htmlFor="nw-unlock-name">Unlock a wallet</label>
-              <select id="nw-unlock-name" value={unlockName}
-                onChange={(e) => setUnlockName(e.target.value)}>
-                <option value="">— choose a wallet —</option>
-                {wallets.map(w => <option key={w.name} value={w.name}>{w.name}</option>)}
-              </select>
-              <input type="password" placeholder="Password" value={unlockPass}
-                onChange={(e) => setUnlockPass(e.target.value)} autoComplete="current-password"
-                aria-label="Wallet password" />
-              <button className="nw-send-btn" type="submit"
-                disabled={busy || !unlockName}>Unlock with password</button>
+              {wallets.length === 1 ? (
+                <p className="nw-small nw-dim" style={{ margin: '0 0 8px' }}>{wallets[0].name}</p>
+              ) : null}
+              {wallets.length > 1 ? (
+                <select id="nw-unlock-name" value={unlockName}
+                  onChange={(e) => {
+                    setUnlockName(e.target.value);
+                    setUsePasswordUnlock(false);
+                    setUnlockPass('');
+                  }}>
+                  <option value="">— choose a wallet —</option>
+                  {wallets.map(w => <option key={w.name} value={w.name}>{w.name}</option>)}
+                </select>
+              ) : null}
+              {unlockTarget && biometricWallets.includes(unlockTarget) && !usePasswordUnlock ? (
+                <>
+                  <button type="button" className="nw-send-btn" disabled={busy}
+                    onClick={() => void unlockWithDevice(unlockTarget)}>
+                    Continue with Face ID / device passkey
+                  </button>
+                  <button type="button" className="nw-chip-btn" disabled={busy}
+                    onClick={() => setUsePasswordUnlock(true)}>
+                    Use wallet password instead
+                  </button>
+                </>
+              ) : (
+                <>
+                  <input type="password" placeholder="Wallet password" value={unlockPass}
+                    ref={unlockPassRef}
+                    onChange={(e) => setUnlockPass(e.target.value)} autoComplete="current-password"
+                    aria-label="Wallet password" />
+                  <button className="nw-send-btn" type="submit"
+                    disabled={busy || !unlockTarget || !unlockPass}>Unlock with password</button>
+                  {unlockTarget && biometricWallets.includes(unlockTarget) ? (
+                    <button type="button" className="nw-chip-btn" disabled={busy}
+                      onClick={() => {
+                        setUsePasswordUnlock(false);
+                        setUnlockPass('');
+                      }}>
+                      Use Face ID / device passkey
+                    </button>
+                  ) : null}
+                </>
+              )}
               {hiddenWallets > 0 && (
                 <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
                   {`${hiddenWallets} wallet${hiddenWallets === 1 ? '' : 's'} on this device `
@@ -1555,12 +1687,6 @@ export default function WalletPanel() {
                     + 'Nothing was deleted.'}
                 </p>
               )}
-              {unlockName && biometricWallets.includes(unlockName) ? (
-                <button type="button" className="nw-chip-btn" disabled={busy}
-                  onClick={() => void unlockWithDevice()}>
-                  Unlock with this device
-                </button>
-              ) : null}
             </form>
           )}
 
@@ -1611,8 +1737,6 @@ export default function WalletPanel() {
               activeName={active?.name || (watchAddress ? `watch only · ${shortAddr(watchAddress, 6)}` : '')}
               chain={chainHistory}
               notices={notices}
-              onOpenChat={() => setPage('chat')}
-              chatEnabled={Boolean(CHAT_RELAY_ORIGIN) || CHAT_RELAY_ENABLED}
               onLoadOlder={loadOlderHistory}
               onRecheck={recheckTransfer} canRecheck={isIndexerConfigured()} />
           )}
@@ -1620,16 +1744,29 @@ export default function WalletPanel() {
           {page === 'chat' && (
             <ChatPanel seed32={active?.seed32 || null}
               address={active?.pubkey || watchAddress || ''}
+              addresses={chatAddresses}
               contacts={chatContacts}
+              onRequestUnlock={() => {
+                const input = unlockPassRef.current;
+                if (input) {
+                  input.scrollIntoView({ block: 'center' });
+                  input.focus({ preventScroll: true });
+                }
+                notify('Unlock the wallet to open that chat.', 'warn');
+              }}
               relayOrigin={chatRelayOrigin()}
+              fee={fee}
+              balance={balance == null ? null : formatExactBalance(balance)}
+              netVerified={Boolean(net?.ok && net.network === EXPECTED_NETWORK_ID)}
+              networkIdentity={net?.network || ''}
+              canApproveWithPasskey={Boolean(active && biometricWallets.includes(active.name))}
               onSendTo={(address, requestedAmount = '') => {
                 setDest(address);
                 setCreateDest(false);
                 if (requestedAmount) setAmount(requestedAmount);
                 setPage('send');
               }}
-              onSendCoins={sendCoinsFromChat}
-              onBack={() => setPage('activity')} />
+              onSendCoins={sendCoinsFromChat} />
           )}
 
           {page === 'contacts' && (
@@ -2615,7 +2752,7 @@ function TransferNotices({ notices }) {
   );
 }
 
-function ActivityPage({ history, activeName, chain, notices, chatEnabled, onOpenChat, onLoadOlder, onRecheck, canRecheck }) {
+function ActivityPage({ history, activeName, chain, notices, onLoadOlder, onRecheck, canRecheck }) {
   // Anything the index already knows is shown from the index; the local list
   // keeps only what the chain has not reported yet (a transfer sent moments
   // ago, or one the node rejected before inclusion).
@@ -2641,12 +2778,6 @@ function ActivityPage({ history, activeName, chain, notices, chatEnabled, onOpen
           {activeName ? `On-chain activity — ${activeName}` : 'On-chain activity'}
           <span className="nw-badge info">from the chain index · read-only</span>
         </h2>
-        {chatEnabled && onOpenChat ? (
-          <button type="button" className="nw-chip-btn" style={{ marginTop: 10 }}
-            onClick={onOpenChat}>
-            ✉ Messages <span className="nw-badge ok">end-to-end encrypted</span>
-          </button>
-        ) : null}
         {chain?.phase === 'none' ? (
           <EmptyState text="No wallet selected." />
         ) : chain?.phase === 'loading' || chain?.phase === 'idle' ? (

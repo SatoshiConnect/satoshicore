@@ -556,7 +556,9 @@ body:has(.nw-root) .site-footer {
   transform: translateX(-50%);
   width: calc(100% - 26px);
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  /* One column per tab, so adding Chats keeps the bar a single row. */
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
   gap: 4px;
   padding: 6px;
   /* Translucent, like the iOS tab bar: the content scrolling underneath stays
@@ -1215,25 +1217,152 @@ body:has(.nw-root) .site-footer {
 .nw-notice-title { color: var(--text); font-weight: 600; }
 
 /* Encrypted chat: bubbles are local to this device; the relay only ever holds
- * ciphertext, so nothing here is rendered from a server-supplied string. */
-.nw-chat-thread { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+ * ciphertext, so nothing here is rendered from a server-supplied string.
+ *
+ * The screen follows the shape people already know from a messenger: a list of
+ * people, then one room with a header, a scrolling transcript and a single
+ * composer. Wallet-specific controls live behind the room's details panel so
+ * the conversation itself stays readable. */
+.nw-chat-shell, .nw-chat-room { display: flex; flex-direction: column; gap: 10px; }
+/* The room fills the phone screen so the composer sits at the bottom, where a
+ * thumb expects it, even while the transcript is empty. */
+.nw-chat-room { min-height: 100%; }
+.nw-chat-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.nw-chat-bar h2, .nw-chat-bar strong { margin: 0; color: var(--text); }
+.nw-chat-hint { margin: 0; }
+.nw-chat-iconbtn {
+  width: 38px; height: 38px; min-width: 38px; padding: 0;
+  border-radius: 999px; display: grid; place-items: center;
+  font-size: 18px; line-height: 1;
+  background: var(--card); border: 1px solid var(--border-soft); color: var(--text);
+}
+.nw-chat-back {
+  width: 34px; height: 34px; min-width: 34px; padding: 0;
+  border-radius: 999px; display: grid; place-items: center;
+  font-size: 22px; line-height: 1;
+  background: none; color: var(--text);
+}
+.nw-chat-avatar {
+  width: 42px; height: 42px; min-width: 42px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--accent-tint); color: var(--link);
+  font-size: 14px; font-weight: 600; letter-spacing: 0;
+}
+.nw-chat-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--row-border); }
+.nw-chat-row { display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--row-border); }
+.nw-chat-rowmain {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px;
+  background: none; padding: 10px 4px; text-align: left;
+}
+.nw-chat-rowmain:hover { background: var(--hover); }
+.nw-chat-rowtext { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.nw-chat-rowname {
+  color: var(--text); font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.nw-chat-rowsub {
+  color: var(--text-dim); font-size: 12px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.nw-chat-rowchev { color: var(--text-dim); font-size: 18px; }
+.nw-chat-remove { font-size: 12px; padding: 6px 10px; }
+.nw-chat-empty { padding: 26px 8px; text-align: center; color: var(--text-dim); }
+.nw-chat-empty strong { display: block; margin-bottom: 4px; color: var(--text); }
+.nw-chat-roomhead {
+  display: flex; align-items: center; gap: 8px;
+  padding-bottom: 10px; border-bottom: 1px solid var(--row-border);
+}
+.nw-chat-who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.nw-chat-whoname {
+  color: var(--text); font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.nw-chat-whosub { color: var(--text-dim); font-size: 12px; }
+.nw-chat-details, .nw-chat-sheet {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px 12px;
+  background: var(--card); border: 1px solid var(--border-soft); border-radius: 14px;
+}
+.nw-chat-details .nw-kv { padding: 4px 0; }
+.nw-chat-thread {
+  list-style: none; margin: 0; padding: 2px 2px 6px;
+  display: flex; flex: 1 1 auto; flex-direction: column; gap: 8px;
+  min-height: 120px; overflow-y: auto; overscroll-behavior: contain;
+}
+.nw-chat-thread .nw-chat-empty { list-style: none; margin: auto 0; }
 .nw-chat-bubble {
-  align-self: flex-start; max-width: 86%;
-  background: var(--surface-2, rgba(255, 255, 255, 0.05));
-  border: 1px solid var(--row-border); border-radius: 14px;
+  align-self: flex-start; max-width: 82%;
+  background: var(--card);
+  border: 1px solid var(--row-border); border-radius: 16px;
   padding: 8px 12px;
 }
 .nw-chat-bubble.is-own {
-  align-self: flex-end; background: var(--accent-tint); border-color: rgba(76, 111, 255, 0.28);
+  align-self: flex-end; background: var(--accent-tint); border-color: var(--accent);
 }
 .nw-chat-text { color: var(--text); white-space: pre-wrap; word-break: break-word; }
+.nw-chat-meta { margin-top: 3px; font-size: 11px; color: var(--text-dim); text-align: right; }
+.nw-chat-end { height: 1px; list-style: none; }
+/* Attachments above the composer, like a messenger's "+" tray: round icons
+ * with a label, so money reads as one more thing you can send. */
+.nw-chat-attach {
+  display: flex; gap: 18px; padding: 12px 4px;
+  border-top: 1px solid var(--row-border);
+}
+.nw-chat-attachitem {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  background: none; padding: 0; color: var(--text-dim); font-size: 11px;
+  width: 68px;
+}
+.nw-chat-attachitem:hover { color: var(--text); }
+.nw-chat-attachicon {
+  width: 46px; height: 46px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 20px; line-height: 1;
+  background: var(--card); border: 1px solid var(--border-soft); color: var(--accent);
+}
+/* Transfer sheet: one number, then an explicit next step. */
+.nw-chat-amount { display: flex; align-items: baseline; gap: 6px; }
+.nw-chat-amountinput {
+  flex: 1; min-width: 0; background: none; border: none;
+  color: var(--text); font-size: 30px; font-weight: 600; padding: 0;
+  font-variant-numeric: tabular-nums;
+}
+.nw-chat-amountinput::placeholder { color: var(--text-dim); font-weight: 500; }
+.nw-chat-amountinput:focus-visible { outline: none; }
+.nw-chat-composer {
+  display: flex; align-items: flex-end; gap: 8px;
+  margin-top: auto;
+  padding-top: 8px; border-top: 1px solid var(--row-border);
+}
+.nw-chat-composer .nw-chat-input {
+  min-height: 44px; max-height: 120px; border-radius: 22px;
+  padding: 11px 14px; resize: none;
+}
+.nw-chat-send {
+  width: 44px; height: 44px; min-width: 44px; padding: 0;
+  border-radius: 50%; display: grid; place-items: center;
+  font-size: 16px; background: var(--accent); color: var(--on-accent);
+}
+.nw-chat-send:hover { background: var(--accent-pressed); }
 /* A transaction card is a claim with a verdict attached, so it gets its own
  * edge and a compact action row instead of reading as ordinary message text. */
 .nw-chat-tx-card {
-  display: flex; flex-direction: column; gap: 2px; min-width: 0;
-  border-left: 3px solid var(--accent); padding-left: 9px;
+  display: flex; flex-direction: column; gap: 3px; min-width: 0;
 }
-.nw-chat-tx-card > strong { font-size: 13px; }
+.nw-chat-tx-top { display: flex; align-items: center; gap: 8px; }
+.nw-chat-tx-mark {
+  width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+  display: grid; place-items: center; font-size: 15px;
+  background: var(--accent-tint); color: var(--accent);
+}
+.nw-chat-tx-amount { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.nw-chat-tx-status { font-size: 12px; color: var(--text-dim); }
+.nw-chat-tx-more summary {
+  cursor: pointer; font-size: 12px; color: var(--text-dim);
+  padding: 3px 0; list-style: none;
+}
+.nw-chat-tx-more summary::-webkit-details-marker { display: none; }
+.nw-chat-tx-more summary::after { content: ' ›'; }
+.nw-chat-tx-more[open] summary::after { content: ' ⌄'; }
 .nw-chat-tx-card .nw-btn-row { margin-top: 6px; }
 .nw-chat-tx-card .nw-chip-btn { padding: 5px 9px; font-size: 12px; }
 .nw-chat-input {

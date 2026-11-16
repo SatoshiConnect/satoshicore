@@ -10,6 +10,11 @@
 // soon as they are read, and nothing is written to localStorage — losing the tab
 // loses the transcript, which is the price of not keeping plaintext chats at
 // rest on a shared device.
+//
+// Layout follows the shape people already know from a messenger: a list of
+// people, then one room with a header, bubbles and a single composer. The
+// wallet-specific details (address, blocking, payment request) sit behind the
+// details panel instead of in the middle of the conversation.
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { createChatClient } from '../lib/chatClient';
@@ -24,24 +29,57 @@ import { resolveProfileHandle } from '../lib/profile';
 
 const shortAddr = (value) => (value ? `${value.slice(0, 6)}…${value.slice(-4)}` : '');
 
-export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSendTo, onSendCoins, onBack }) {
+// Avatar letters: a handle keeps its first two letters, a G… address skips the
+// network prefix so the circle does not read as "GA" for everyone.
+const initials = (value, handle) => {
+  const source = String(handle || value || '').replace(/^@/, '');
+  const letters = /^G[A-Z2-7]{55}$/.test(source) ? source.slice(1, 3) : source.slice(0, 2);
+  return (letters || '?').toUpperCase();
+};
+
+const clock = (at) => (at
+  ? new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  : '');
+
+export default function ChatPanel({
+  seed32, address, addresses = [], contacts, relayOrigin, onSendTo, onSendCoins,
+  fee, balance, netVerified = false, networkIdentity = '',
+  canApproveWithPasskey = false, onRequestUnlock = null,
+}) {
   const client = useRef(null);
   const [peer, setPeer] = useState('');
   const [thread, setThread] = useState([]);          // { id, from, text, ts|at, own }
   const [draft, setDraft] = useState('');
   const [state, setState] = useState({ busy: false, note: '', published: false });
   const [inboxState, setInboxState] = useState({ phase: 'idle', error: '' });
-  const [friends, setFriends] = useState([]);
+  // Saved chats per wallet address. The list is readable while the wallet is
+  // locked: these are public addresses this device already stored, not keys.
+  const [friendsByOwner, setFriendsByOwner] = useState({});
+  // A chat tapped while locked; after unlocking it opens on its own.
+  const [pendingPeer, setPendingPeer] = useState('');
   const [addTarget, setAddTarget] = useState('');
   const [addState, setAddState] = useState({ busy: false, note: '', error: '' });
   // Which @id resolved to which address, for the lifetime of this screen.
   const [peerIds, setPeerIds] = useState({});
   const [copyState, setCopyState] = useState('');
   const [coin, setCoin] = useState({ amount: '', phase: 'idle', note: '', error: '' });
-  const [request, setRequest] = useState({ amount: '', busy: false, note: '', error: '' });
+  const [approvalPassword, setApprovalPassword] = useState('');
+  const [approvalMethod, setApprovalMethod] = useState(canApproveWithPasskey ? 'passkey' : 'password');
+  // Presentation: the add form, the room's details panel, and which composer
+  // option (send NSAT / request NSAT) is open.
+  const [showAdd, setShowAdd] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [sheet, setSheet] = useState('none');        // none | menu | pay | request
+  const threadEndRef = useRef(null);
   // Blocking is a relay-side control: the list lives with the wallet address,
   // not with this screen, so it is read back rather than remembered here.
   const [gate, setGate] = useState({ busy: false, blocked: false, note: '', error: '' });
+  const [request, setRequest] = useState({ amount: '', busy: false, note: '', error: '' });
+
+  useEffect(() => {
+    setApprovalMethod(canApproveWithPasskey ? 'passkey' : 'password');
+    setApprovalPassword('');
+  }, [address, canApproveWithPasskey]);
 
   const relayConfigured = Boolean(relayOrigin);
   const readOnly = !seed32;
@@ -49,16 +87,32 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSe
   const coinAmountOk = /^\d+$/.test(coinDigits) && BigInt(coinDigits || '0') > 0n;
   const requestDigits = request.amount.replace(/[,_ ]/g, '');
   const requestAmountOk = /^\d+$/.test(requestDigits) && BigInt(requestDigits || '0') > 0n;
+  const peerName = peer ? (peerIds[peer] || shortAddr(peer)) : '';
 
   // Friends are public addresses the person named themselves; the transcript
-  // stays in this session. Loading is deferred to an effect so the first render
-  // matches the static export.
+  // stays in this session. Every wallet this session may see contributes its
+  // own saved list, so a locked wallet still shows the chats it saved instead of
+  // looking like it never had any. Loading is deferred to an effect so the first
+  // render matches the static export.
+  const ownerKey = [address, ...addresses].filter(Boolean).join(',');
   useEffect(() => {
-    if (!address || typeof window === 'undefined') return;
-    setFriends(readFriends(window.localStorage, address));
-  }, [address]);
+    if (!ownerKey || typeof window === 'undefined') return;
+    const next = {};
+    for (const owner of ownerKey.split(',')) {
+      next[owner] = readFriends(window.localStorage, owner);
+    }
+    setFriendsByOwner(next);
+  }, [ownerKey]);
 
-  const known = mergeContacts(contacts, friends);
+  const ownAddresses = new Set([address, ...addresses].filter(Boolean).map((value) => value.toUpperCase()));
+  const savedFriends = new Set();
+  for (const list of Object.values(friendsByOwner)) {
+    for (const contact of list) {
+      if (!ownAddresses.has(String(contact).toUpperCase())) savedFriends.add(contact);
+    }
+  }
+  const friendList = [...savedFriends];
+  const known = mergeContacts(contacts, friendList);
 
   useEffect(() => {
     if (!relayConfigured) return undefined;
@@ -83,10 +137,20 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSe
     void publishOwnKey();
   }, [publishOwnKey, relayConfigured, seed32]);
 
+  // A new message should be visible without hunting for it: keep the end of the
+  // transcript in view, the way a chat app opens on the latest line.
+  useEffect(() => {
+    const end = threadEndRef.current;
+    if (end && typeof end.scrollIntoView === 'function') {
+      end.scrollIntoView({ block: 'nearest' });
+    }
+  }, [thread.length, peer]);
+
   const openThread = useCallback(async (target) => {
     setPeer(target);
     setThread((current) => current.filter((message) => message.peer === target));
     setGate({ busy: false, blocked: false, note: '', error: '' });
+    setSheet('none');
     if (!client.current || !seed32) return;
     setInboxState({ phase: 'loading', error: '' });
     try {
@@ -120,6 +184,17 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSe
     }
   }, [address, seed32]);
 
+  // A chat tapped while the wallet was locked: opening it was the reason for the
+  // unlock, so it opens as soon as the key exists instead of asking for a
+  // second tap.
+  useEffect(() => {
+    if (!seed32 || !pendingPeer) return;
+    const target = pendingPeer;
+    setPendingPeer('');
+    void publishOwnKey();
+    void openThread(target);
+  }, [seed32, pendingPeer, publishOwnKey, openThread]);
+
   /** @id → the wallet its profile points at, else the address as typed. */
   async function resolveTarget(parsed) {
     if (parsed.kind === 'address') return parsed.value;
@@ -151,7 +226,7 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSe
     try {
       const walletAddress = await resolveTarget(parsed);
       const stored = addFriend(typeof window === 'undefined' ? null : window.localStorage, address, walletAddress);
-      setFriends(stored.friends);
+      setFriendsByOwner((current) => ({ ...current, [address]: stored.friends }));
       if (parsed.kind === 'id') setPeerIds((current) => ({ ...current, [walletAddress]: parsed.value }));
       setAddTarget('');
       const label = parsed.kind === 'id' ? `${parsed.value} · ${shortAddr(walletAddress)}` : shortAddr(walletAddress);
@@ -209,14 +284,16 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSe
     if (!onSendCoins || !peer) return;
     setCoin((current) => ({ ...current, phase: 'sending', error: '', note: '' }));
     try {
-      const result = await onSendCoins(peer, amount);
+      const pendingApproval = onSendCoins(peer, amount, approvalPassword, approvalMethod);
+      setApprovalPassword('');
+      const result = await pendingApproval;
       const status = String(result?.status || '');
       if (!result?.ok || !result.hash || status === 'rejected') {
         setCoin((current) => ({
           ...current, phase: 'idle',
-          error: status === 'rejected'
+          error: result?.error || (status === 'rejected'
             ? 'The node rejected this payment, so nothing moved. See the message the wallet showed.'
-            : 'The wallet did not submit this payment — nothing moved. See the message the wallet showed.',
+            : 'The wallet did not submit this payment — nothing moved. See the message the wallet showed.'),
         }));
         return;
       }
@@ -230,7 +307,12 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSe
       setThread((current) => [...current, {
         id: `c${Date.now()}`, peer, from: address, text: cardText, at: Date.now(), own: true,
       }]);
-      setCoin({ amount: '', phase: 'idle', note: 'Transaction card added. The indexer is checking the exact hash.', error: '' });
+      setCoin({ amount: '', phase: 'idle', note: '', error: '' });
+      setApprovalPassword('');
+      setApprovalMethod(canApproveWithPasskey ? 'passkey' : 'password');
+      // The transfer bubble in the thread is the record; the sheet has done its
+      // job and the conversation comes back.
+      setSheet('none');
       if (client.current && seed32) {
         try {
           await client.current.send({ seed32, from: address, to: peer, text: cardText });
@@ -238,6 +320,8 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSe
       }
     } catch (error) {
       setCoin((current) => ({ ...current, phase: 'idle', error: String(error?.message || error) }));
+    } finally {
+      setApprovalPassword('');
     }
   }
 
@@ -253,7 +337,13 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSe
 
   function forgetFriend(target) {
     if (typeof window === 'undefined') return;
-    setFriends(removeFriend(window.localStorage, address, target));
+    // The address can live in more than one visible wallet's list; remove it
+    // from each list that holds it rather than only the active wallet's.
+    const next = { ...friendsByOwner };
+    for (const [owner, list] of Object.entries(friendsByOwner)) {
+      if (list.includes(target)) next[owner] = removeFriend(window.localStorage, owner, target);
+    }
+    setFriendsByOwner(next);
     setAddState({ busy: false, note: `${shortAddr(target)} removed from your list.`, error: '' });
   }
 
@@ -268,6 +358,7 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSe
         id: `s${Date.now()}`, peer, from: address, text, at: Date.now(), own: true,
       }]);
       setDraft('');
+      setSheet('none');
     } catch (error) {
       setState((current) => ({ ...current, note: String(error?.message || error) }));
     } finally {
@@ -277,327 +368,418 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSe
 
   if (!relayConfigured) {
     return (
-      <div>
-        <button type="button" className="nw-chip-btn" onClick={onBack}>← Back</button>
-        <section className="nw-card" style={{ marginTop: 12 }}>
-          <h2 style={{ color: 'var(--text)', margin: 0 }}>Messages</h2>
-          <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
-            This build has no chat relay configured, so messages cannot be delivered. Nothing is
-            uploaded and nothing is queued.
-          </p>
-        </section>
-      </div>
+      <section className="nw-card" aria-label="Chats">
+        <h2 style={{ margin: 0 }}>Chats</h2>
+        <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
+          Chats are not available in this version of the wallet. Nothing is uploaded and nothing is
+          queued, so your messages and keys stay on this device.
+        </p>
+      </section>
     );
   }
 
   if (!peer) {
     return (
-      <div>
-        <button type="button" className="nw-chip-btn" onClick={onBack}>← Back</button>
-        <section className="nw-card" style={{ marginTop: 12 }}>
-          <h2 style={{ color: 'var(--text)', margin: 0 }}>Messages</h2>
-          <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
-            End-to-end encrypted: the wallet encrypts on this device and the relay only stores
-            ciphertext. Pick a past counterparty, or add a friend by @profile ID or wallet address.
+      <section className="nw-chat-shell" aria-label="Chats">
+        <div className="nw-chat-bar">
+          <h2>Chats</h2>
+          <button type="button" className="nw-chat-iconbtn"
+            aria-label={showAdd ? 'Close add chat' : 'Start a new chat'}
+            aria-expanded={showAdd}
+            onClick={() => {
+              // A new chat is saved against the wallet that owns it, so it needs
+              // an unlocked wallet to know whose list to write to.
+              if (readOnly) { onRequestUnlock?.(); return; }
+              setShowAdd((value) => !value);
+              setAddState({ busy: false, note: '', error: '' });
+            }}>
+            {showAdd ? '×' : '＋'}
+          </button>
+        </div>
+        <p className="nw-small nw-dim nw-chat-hint">
+          Only you and the person you write to can read these messages.
+        </p>
+        {readOnly && (
+          <p className="nw-small" style={{ color: 'var(--warn)', margin: '8px 0 0' }}>
+            {known.length
+              ? 'Your saved chats are below. Unlock the wallet to open one.'
+              : 'Unlock the wallet to start a chat.'}
           </p>
-          {readOnly && (
-            <p className="nw-small" style={{ color: 'var(--warn)', margin: '8px 0 0' }}>
-              Unlock the wallet to read and send messages.
-            </p>
-          )}
-          <form className="nw-txf" onSubmit={addFriendTarget} style={{ marginTop: 12, gap: 8 }}>
-            <input value={addTarget} onChange={(event) => {
-              setAddTarget(event.target.value);
-              if (addState.error) setAddState({ busy: false, note: '', error: '' });
-            }} placeholder="@profile or G… address"
-              aria-label="Friend profile ID or wallet address" spellCheck={false}
-              disabled={addState.busy} />
-            <button className="nw-send-btn" type="submit"
-              disabled={addState.busy || !addTarget.trim()}>
-              {addState.busy ? 'Adding…' : 'Add friend'}
-            </button>
-          </form>
-          {addState.error ? (
-            <p className="nw-small" style={{ margin: '6px 0 0', color: 'var(--warn)' }} role="alert">
-              {addState.error}
-            </p>
-          ) : null}
-          {addState.note ? (
-            <p className="nw-small nw-dim" style={{ margin: '6px 0 0' }} role="status">
-              {addState.note}
-            </p>
-          ) : null}
+        )}
 
-          {known.length === 0 ? (
-            <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
-              No one to message yet — add a friend above, or wait for a transfer to appear in the
-              index.
-            </p>
-          ) : (
-            <ul className="nw-tx-list" style={{ marginTop: 8 }}>
-              {known.map((contact) => {
-                const added = friends.includes(contact);
-                return (
-                  <li key={contact} className="nw-tx-row">
-                    <div className="nw-tx-dir rec" aria-hidden>✉</div>
-                    <div style={{ flex: 1 }}>
-                      <div className="nw-notice-title">
-                        {shortAddr(contact)}{' '}
-                        {added ? <span className="nw-badge info">friend</span> : null}
-                      </div>
-                      <div className="nw-small nw-dim">
-                        {added ? 'added by you · encrypted message' : 'from your transfers · encrypted message'}
-                      </div>
-                    </div>
-                    <button type="button" className="nw-chip-btn"
-                      onClick={() => { void publishOwnKey(); void openThread(contact); }}>
-                      Open
+        {showAdd && (
+          <>
+            <form className="nw-txf" onSubmit={addFriendTarget} style={{ marginTop: 10 }}>
+              <input value={addTarget} onChange={(event) => {
+                setAddTarget(event.target.value);
+                if (addState.error) setAddState({ busy: false, note: '', error: '' });
+              }} placeholder="@profile or G… address"
+                aria-label="Friend profile ID or wallet address" spellCheck={false}
+                disabled={addState.busy} />
+              <button className="nw-send-btn" type="submit"
+                disabled={addState.busy || !addTarget.trim()}>
+                {addState.busy ? 'Adding…' : 'Start chat'}
+              </button>
+            </form>
+            {addState.error ? (
+              <p className="nw-small" style={{ margin: '6px 0 0', color: 'var(--warn)' }} role="alert">
+                {addState.error}
+              </p>
+            ) : null}
+            {addState.note ? (
+              <p className="nw-small nw-dim" style={{ margin: '6px 0 0' }} role="status">
+                {addState.note}
+              </p>
+            ) : null}
+          </>
+        )}
+
+        {known.length === 0 ? (
+          <div className="nw-chat-empty">
+            <strong>No chats yet</strong>
+            {readOnly
+              ? 'Unlock the wallet to start one with someone’s @profile or G… address.'
+              : `Tap ＋ to start one with someone’s @profile or G… address.`}
+          </div>
+        ) : (
+          <ul className="nw-chat-list">
+            {known.map((contact) => {
+              const added = friendList.includes(contact);
+              return (
+                <li key={contact} className="nw-chat-row">
+                  <button type="button" className="nw-chat-rowmain"
+                    onClick={() => {
+                      // Opening a conversation needs the wallet key (the messages
+                      // are encrypted with it), so that — and only that — asks
+                      // for the unlock. The list itself never does.
+                      if (readOnly) {
+                        setPendingPeer(contact);
+                        onRequestUnlock?.(contact);
+                        return;
+                      }
+                      void publishOwnKey();
+                      void openThread(contact);
+                    }}>
+                    <span className="nw-chat-avatar" aria-hidden>
+                      {initials(contact, peerIds[contact])}
+                    </span>
+                    <span className="nw-chat-rowtext">
+                      <span className="nw-chat-rowname">{peerIds[contact] || shortAddr(contact)}</span>
+                      <span className="nw-chat-rowsub">
+                        {readOnly
+                          ? 'Locked · unlock to open'
+                          : added ? 'Encrypted chat' : 'From your transfers · encrypted'}
+                      </span>
+                    </span>
+                    <span className="nw-chat-rowchev" aria-hidden>›</span>
+                  </button>
+                  {added ? (
+                    <button type="button" className="nw-chip-btn nw-chat-remove"
+                      title={`Remove ${contact} from your chat list`}
+                      onClick={() => forgetFriend(contact)}>
+                      Remove
                     </button>
-                    {added ? (
-                      <button type="button" className="nw-chip-btn"
-                        title={`Remove ${contact} from your friend list`}
-                        onClick={() => forgetFriend(contact)}>
-                        Remove
-                      </button>
-                    ) : null}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-          <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
-            {`Your friend list keeps only public wallet addresses on this device (up to ${FRIEND_LIMIT}). Messages themselves are never stored.`}
-          </p>
-        </section>
-      </div>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
+          {`Your chat list keeps only public wallet addresses on this device (up to ${FRIEND_LIMIT}). Messages themselves are never stored.`}
+        </p>
+      </section>
     );
   }
 
   return (
-    <div>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <button type="button" className="nw-chip-btn" onClick={() => { setPeer(''); setThread([]); }}>
-          ← Messages
+    <section className="nw-chat-room" aria-label={`Chat with ${peerName}`}>
+      <header className="nw-chat-roomhead">
+        <button type="button" className="nw-chat-back" aria-label="Back to chats"
+          onClick={() => {
+            setPeer('');
+            setThread([]);
+            setDetailsOpen(false);
+            setSheet('none');
+          }}>
+          ‹
         </button>
-        <span className="nw-small nw-dim">{shortAddr(peer)}</span>
-      </div>
-
-      <section className="nw-card" style={{ marginTop: 12 }}>
-        <h2 style={{ color: 'var(--text)', margin: 0, display: 'flex', gap: 8, alignItems: 'center' }}>
-          {shortAddr(peer)}
-          <span className="nw-badge ok">end-to-end encrypted</span>
-        </h2>
-        <p className="nw-small nw-dim" style={{ margin: '6px 0 0' }}>
-          Ciphertext only on the relay. Keys come from this wallet — nobody else can read these.
-        </p>
-
-        {/* Everything needed to pay this person, in one place: the public
-         * address is the only thing the chat can hand over — the site never
-         * stores an email, and a profile is an @id plus this same address. */}
-        <div className="nw-kv" style={{ marginTop: 10 }}>
-          <span className="nw-k">Wallet address</span>
-          <span className="nw-v nw-small nw-mono" style={{ wordBreak: 'break-all' }}>{peer}</span>
+        <span className="nw-chat-avatar" aria-hidden>{initials(peer, peerIds[peer])}</span>
+        <div className="nw-chat-who">
+          <span className="nw-chat-whoname">{peerName}</span>
+          <span className="nw-chat-whosub">Encrypted chat</span>
         </div>
-        {peerIds[peer] ? (
+        <button type="button" className="nw-chat-iconbtn" aria-label="Refresh messages"
+          disabled={state.busy || readOnly} onClick={() => void openThread(peer)}>↻</button>
+        <button type="button" className="nw-chat-iconbtn" aria-label="Chat details"
+          aria-expanded={detailsOpen} onClick={() => setDetailsOpen((value) => !value)}>ⓘ</button>
+      </header>
+
+      {detailsOpen && (
+        <div className="nw-chat-details">
           <div className="nw-kv">
-            <span className="nw-k">Profile</span>
-            <span className="nw-v nw-small nw-mono">{peerIds[peer]}</span>
+            <span className="nw-k">Wallet address</span>
+            <span className="nw-v nw-small nw-mono" style={{ wordBreak: 'break-all' }}>{peer}</span>
           </div>
-        ) : null}
-        <div className="nw-btn-row" style={{ marginTop: 8 }}>
-          <button type="button" className="nw-chip-btn" onClick={copyPeerAddress}>
-            {copyState === 'done' ? 'Address copied ✓' : copyState === 'failed' ? 'Copy failed — select it above' : 'Copy address'}
-          </button>
+          {peerIds[peer] ? (
+            <div className="nw-kv">
+              <span className="nw-k">Profile</span>
+              <span className="nw-v nw-small nw-mono">{peerIds[peer]}</span>
+            </div>
+          ) : null}
+          <div className="nw-btn-row" style={{ marginTop: 2 }}>
+            <button type="button" className="nw-chip-btn" onClick={copyPeerAddress}>
+              {copyState === 'done' ? 'Address copied ✓' : copyState === 'failed' ? 'Copy failed — select it above' : 'Copy address'}
+            </button>
+            {onSendTo ? (
+              <button type="button" className="nw-chip-btn" onClick={() => onSendTo(peer)}>
+                Open in Send
+              </button>
+            ) : null}
+            {readOnly || !onSendTo ? null : (
+              <button type="button" className="nw-chip-btn" onClick={() => setSheet('request')}>
+                Request NSAT
+              </button>
+            )}
+            {readOnly ? null : (
+              <button type="button" className="nw-chip-btn" onClick={toggleBlock}
+                disabled={gate.busy} aria-pressed={gate.blocked}>
+                {gate.blocked ? 'Unblock' : 'Block'}
+              </button>
+            )}
+          </div>
+          {gate.blocked ? <span className="nw-badge warn">blocked</span> : null}
+          {gate.note ? (
+            <p className="nw-small nw-dim" style={{ margin: 0 }} role="status">{gate.note}</p>
+          ) : null}
+          {gate.error ? (
+            <p className="nw-small" style={{ margin: 0, color: 'var(--warn)' }} role="alert">{gate.error}</p>
+          ) : null}
+          <p className="nw-small nw-dim" style={{ margin: 0 }}>
+            An email is never stored here. The profile keeps an @id and this public address only.
+          </p>
+        </div>
+      )}
+
+      {inboxState.error ? (
+        <p className="nw-small" style={{ margin: 0, color: 'var(--warn)' }} role="alert">
+          {inboxState.error}
+        </p>
+      ) : null}
+
+      <ul className="nw-chat-thread" aria-live="polite">
+        {thread.length === 0 && (
+          <li className="nw-chat-empty">
+            <strong>No messages yet</strong>
+            {`Say hello — only you and ${peerName} can read this chat.`}
+          </li>
+        )}
+        {thread.map((message) => {
+          const paymentRequest = parsePaymentRequestText(message.text, message.from);
+          const transactionCard = parseTransactionCardText(message.text, message.from);
+          return (
+            <li key={message.id} className={'nw-chat-bubble' + (message.own ? ' is-own' : '')}>
+              {transactionCard?.kind === 'transaction-card'
+                && transactionCard.from === message.from
+                && ((transactionCard.from === address && transactionCard.to === peer)
+                  || (transactionCard.from === peer && transactionCard.to === address)) ? (
+                <ChatTransactionCard card={transactionCard} sentAt={message.at} />
+              ) : transactionCard ? (
+                <div className="nw-chat-text">
+                  <strong>Unverified transaction message</strong>
+                  <div className="nw-small nw-dim">{transactionCard.reason}</div>
+                </div>
+              ) : paymentRequest?.kind === 'payment-request' ? (
+                <div className="nw-chat-text">
+                  <strong>Payment request · {paymentRequest.amount} NSAT</strong>
+                  <div className="nw-small nw-dim nw-mono" style={{ wordBreak: 'break-all', marginTop: 4 }}>
+                    Requested receiving address: {paymentRequest.address}
+                  </div>
+                  {!message.own && onSendTo ? (
+                    <button type="button" className="nw-send-btn" style={{ marginTop: 8 }}
+                      disabled={readOnly || gate.blocked}
+                      onClick={() => onSendTo(paymentRequest.address, paymentRequest.amount)}>
+                      Review payment · {paymentRequest.amount} NSAT
+                    </button>
+                  ) : (
+                    <div className="nw-small nw-dim" style={{ marginTop: 6 }}>
+                      Request sent. Waiting for the recipient to review it; no funds have moved.
+                    </div>
+                  )}
+                </div>
+              ) : paymentRequest?.kind === 'invalid' ? (
+                <div className="nw-chat-text">
+                  <strong>Invalid payment request</strong>
+                  <div className="nw-small nw-dim">{paymentRequest.reason}</div>
+                </div>
+              ) : (
+                <div className="nw-chat-text">{message.text}</div>
+              )}
+              <div className="nw-chat-meta">{clock(message.at)}</div>
+            </li>
+          );
+        })}
+        <li ref={threadEndRef} className="nw-chat-end" aria-hidden />
+      </ul>
+
+      {/* Attachments sit beside the conversation, the way a photo or a sticker
+       * does: money is one more thing you can send to the person, not a mode
+       * the chat switches into. Only the transfer itself asks for approval. */}
+      {sheet === 'menu' ? (
+        <div className="nw-chat-attach" role="group" aria-label="Send an attachment">
+          {onSendCoins ? (
+            <button type="button" className="nw-chat-attachitem" onClick={() => setSheet('pay')}>
+              <span className="nw-chat-attachicon" aria-hidden>◎</span>
+              <span>Send money</span>
+            </button>
+          ) : null}
           {onSendTo ? (
-            <button type="button" className="nw-send-btn" onClick={() => onSendTo(peer)}>
-              Send NSAT to this address
+            <button type="button" className="nw-chat-attachitem" onClick={() => setSheet('request')}>
+              <span className="nw-chat-attachicon" aria-hidden>↓</span>
+              <span>Request money</span>
             </button>
           ) : null}
         </div>
-        {readOnly ? null : (
-          <div style={{ marginTop: 8 }}>
-            <div className="nw-btn-row" style={{ marginTop: 0 }}>
-              <button type="button" className="nw-chip-btn" onClick={toggleBlock}
-                disabled={gate.busy} aria-pressed={gate.blocked}>
-                {gate.blocked ? 'Unblock this address' : 'Block this address'}
-              </button>
-              {gate.blocked ? <span className="nw-badge warn">blocked</span> : null}
-            </div>
-            {gate.note ? (
-              <p className="nw-small nw-dim" style={{ margin: '6px 0 0' }} role="status">{gate.note}</p>
-            ) : null}
-            {gate.error ? (
-              <p className="nw-small" style={{ margin: '6px 0 0', color: 'var(--warn)' }} role="alert">{gate.error}</p>
-            ) : null}
+      ) : null}
+
+      {sheet === 'pay' && onSendCoins ? (
+        <div className="nw-chat-sheet">
+          <div className="nw-chat-bar">
+            <strong>Send money</strong>
+            <button type="button" className="nw-chat-iconbtn" aria-label="Close send money"
+              onClick={() => {
+                setSheet('none');
+                setCoin({ amount: '', phase: 'idle', note: '', error: '' });
+                setApprovalPassword('');
+              }}>×</button>
           </div>
-        )}
-        <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
-          To send coins you only need this address. An email is never stored here — the profile keeps
-          an @id and a public address and nothing else — so ask for an email directly if you need one.
-        </p>
-
-        {onSendTo ? (
-          <form className="nw-txf" onSubmit={sendPaymentRequest} style={{ marginTop: 12 }}>
-            <label className="nw-small nw-dim" htmlFor="nw-chat-payment-request">
-              Request an amount from {shortAddr(peer)}
-            </label>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <input id="nw-chat-payment-request" className="nw-chat-input"
-                value={request.amount} inputMode="numeric" placeholder="Amount in NSAT"
-                aria-label="NSAT amount to request" style={{ maxWidth: 160 }}
-                onChange={(event) => setRequest({
-                  amount: event.target.value.replace(/[^\d,_ ]/g, ''),
-                  busy: false, note: '', error: '',
-                })}
-                disabled={readOnly || request.busy || gate.blocked} />
-              <button type="submit" className="nw-chip-btn"
-                disabled={readOnly || request.busy || gate.blocked || !requestAmountOk}>
-                {request.busy ? 'Sending request…' : 'Request payment'}
-              </button>
+          {coin.phase === 'confirm' ? (
+            <div aria-label="Confirm NSAT transfer">
+              <p className="nw-small nw-dim" style={{ margin: '0 0 6px' }}>
+                {`${coinDigits} NSAT to ${peerName} · signing needs your approval`}
+              </p>
+              <dl style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 12px', margin: '0 0 8px' }}>
+                <dt>To</dt><dd className="nw-mono" style={{ margin: 0, wordBreak: 'break-all' }}>{peer}</dd>
+                <dt>Amount</dt><dd style={{ margin: 0 }}>{coinDigits} NSAT</dd>
+                <dt>Network fee</dt><dd style={{ margin: 0 }}>{fee == null ? 'Unavailable' : `${String(fee)} NSAT`}</dd>
+                <dt>Total</dt><dd style={{ margin: 0 }}>{fee == null ? 'Unavailable' : `${(BigInt(coinDigits || '0') + BigInt(fee)).toString()} NSAT`}</dd>
+                <dt>Network</dt><dd className="nw-mono" style={{ margin: 0, wordBreak: 'break-all' }}>{netVerified ? networkIdentity : 'Not verified'}</dd>
+                <dt>Balance</dt><dd style={{ margin: 0 }}>{balance == null ? 'Unavailable' : `${String(balance)} NSAT`}</dd>
+              </dl>
+              {canApproveWithPasskey ? (
+                <>
+                  <p className="nw-small nw-dim">Choose how to approve this payment.</p>
+                  <div className="nw-btn-row" style={{ marginTop: 0 }}>
+                    <button type="button" className="nw-chip-btn" aria-pressed={approvalMethod === 'passkey'}
+                      onClick={() => { setApprovalMethod('passkey'); setApprovalPassword(''); }}>
+                      Face ID / passkey
+                    </button>
+                    <button type="button" className="nw-chip-btn" aria-pressed={approvalMethod === 'password'}
+                      onClick={() => setApprovalMethod('password')}>
+                      Wallet password
+                    </button>
+                  </div>
+                </>
+              ) : null}
+              {approvalMethod === 'password' ? (
+                <label className="nw-small" style={{ display: 'grid', gap: 4 }}>
+                  Wallet password
+                  <input className="nw-chat-input" type="password" autoComplete="current-password"
+                    value={approvalPassword} onChange={(event) => setApprovalPassword(event.target.value)}
+                    aria-label="Wallet password to approve payment" />
+                </label>
+              ) : <p className="nw-small nw-dim">Confirm with Face ID / device passkey to sign.</p>}
+              <div className="nw-btn-row" style={{ marginTop: 8 }}>
+                <button type="button" className="nw-send-btn" onClick={sendCoinSticker}
+                  disabled={readOnly || coin.phase === 'sending' || !netVerified || fee == null || balance == null || (approvalMethod === 'password' && !approvalPassword) || (approvalMethod === 'passkey' && !canApproveWithPasskey)}>
+                  {coin.phase === 'sending' ? 'Waiting for approval…' : approvalMethod === 'passkey' ? 'Approve with Face ID' : 'Approve and send'}
+                </button>
+                <button type="button" className="nw-chip-btn"
+                  onClick={() => {
+                    setCoin((current) => ({ ...current, phase: 'idle', error: '', note: '' }));
+                    setApprovalPassword('');
+                  }}
+                  disabled={coin.phase === 'sending'}>Cancel</button>
+              </div>
             </div>
-            {request.error ? <p className="nw-small" role="alert" style={{ margin: 0, color: 'var(--warn)' }}>{request.error}</p> : null}
-            {request.note ? <p className="nw-small nw-dim" role="status" style={{ margin: 0 }}>{request.note}</p> : null}
-          </form>
-        ) : null}
-
-        {/* Sending from the conversation: the same wallet pipeline the Send
-         * page uses, with an explicit confirm in between. Nothing moves from a
-         * stray tap, and the payment itself is the signature — not a message. */}
-        {onSendCoins ? (
-          <div style={{ marginTop: 12 }}>
-            {coin.phase === 'confirm' ? (
-              <>
-                <p className="nw-small" style={{ margin: 0 }}>
-                  {`Send ${coinDigits} NSAT to ${shortAddr(peer)}? The network fee is charged on top, and this is signed with the key already unlocked in this tab.`}
-                </p>
-                <div className="nw-btn-row" style={{ marginTop: 8 }}>
-                  <button type="button" className="nw-send-btn" onClick={sendCoinSticker}
-                    disabled={readOnly || coin.phase === 'sending'}>
-                    {coin.phase === 'sending' ? 'Signing & sending…' : 'Confirm payment'}
-                  </button>
-                  <button type="button" className="nw-chip-btn"
-                    onClick={() => setCoin({ amount: '', phase: 'idle', note: '', error: '' })}
-                    disabled={coin.phase === 'sending'}>
-                    Cancel
-                  </button>
-                </div>
-              </>
-            ) : (
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <input className="nw-chat-input" value={coin.amount} inputMode="numeric"
-                  placeholder="Amount in NSAT" aria-label="Amount of NSAT to send"
-                  style={{ maxWidth: 160 }}
+          ) : (
+            <>
+              <div className="nw-chat-amount">
+                <input className="nw-chat-amountinput" value={coin.amount} inputMode="numeric"
+                  placeholder="0" aria-label="Amount of NSAT to send"
                   onChange={(event) => setCoin({
                     amount: event.target.value.replace(/[^\d,_ ]/g, ''),
                     phase: 'idle', note: '', error: '',
                   })}
                   disabled={readOnly || coin.phase === 'sending'} />
-                <button type="button" className="nw-chip-btn"
-                  onClick={() => setCoin((current) => ({ ...current, phase: 'confirm', note: '', error: '' }))}
-                  disabled={readOnly || coin.phase === 'sending' || !coinAmountOk}>
-                  {coin.phase === 'sending' ? 'Sending…' : '🪙 Send coins'}
-                </button>
+                <span className="nw-small nw-dim">NSAT</span>
               </div>
-            )}
-            {coin.error ? (
-              <p className="nw-small" style={{ margin: '6px 0 0', color: 'var(--warn)' }} role="alert">
-                {coin.error}
+              <p className="nw-small nw-dim" style={{ margin: 0 }}>
+                {balance == null ? 'Balance unavailable' : `Available ${String(balance)} NSAT`}
               </p>
-            ) : null}
-            {coin.note ? (
-              <p className="nw-small nw-dim" style={{ margin: '6px 0 0' }} role="status">{coin.note}</p>
-            ) : null}
-          </div>
-        ) : null}
-
-        {inboxState.phase === 'loading' && (
-          <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>Checking for messages…</p>
-        )}
-        {inboxState.error ? (
-          <p className="nw-small" style={{ margin: '8px 0 0', color: 'var(--warn)' }}>{inboxState.error}</p>
-        ) : null}
-
-        <ul className="nw-chat-thread" aria-live="polite" style={{ marginTop: 10 }}>
-          {thread.length === 0 && (
-            <li className="nw-small nw-dim" style={{ padding: '6px 2px' }}>
-              No messages in this session yet.
-            </li>
+              <button type="button" className="nw-send-btn"
+                onClick={() => setCoin((current) => ({ ...current, phase: 'confirm', note: '', error: '' }))}
+                disabled={readOnly || coin.phase === 'sending' || !coinAmountOk}>
+                Next
+              </button>
+            </>
           )}
-          {thread.map((message) => {
-            const paymentRequest = parsePaymentRequestText(message.text, message.from);
-            const transactionCard = parseTransactionCardText(message.text, message.from);
-            return (
-              <li key={message.id} className={'nw-chat-bubble' + (message.own ? ' is-own' : '')}>
-                {transactionCard?.kind === 'transaction-card'
-                  && transactionCard.from === message.from
-                  && ((transactionCard.from === address && transactionCard.to === peer)
-                    || (transactionCard.from === peer && transactionCard.to === address)) ? (
-                  <ChatTransactionCard card={transactionCard} sentAt={message.at} />
-                ) : transactionCard ? (
-                  <div className="nw-chat-text">
-                    <strong>Unverified transaction message</strong>
-                    <div className="nw-small nw-dim">{transactionCard.reason}</div>
-                  </div>
-                ) : paymentRequest?.kind === 'payment-request' ? (
-                  <div className="nw-chat-text">
-                    <strong>Payment request · {paymentRequest.amount} NSAT</strong>
-                    <div className="nw-small nw-dim nw-mono" style={{ wordBreak: 'break-all', marginTop: 4 }}>
-                      Requested receiving address: {paymentRequest.address}
-                    </div>
-                    {!message.own && onSendTo ? (
-                      <button type="button" className="nw-send-btn" style={{ marginTop: 8 }}
-                        disabled={readOnly || gate.blocked}
-                        onClick={() => onSendTo(paymentRequest.address, paymentRequest.amount)}>
-                        Review payment · {paymentRequest.amount} NSAT
-                      </button>
-                    ) : (
-                      <div className="nw-small nw-dim" style={{ marginTop: 6 }}>
-                        Request sent. Waiting for the recipient to review it; no funds have moved.
-                      </div>
-                    )}
-                  </div>
-                ) : paymentRequest?.kind === 'invalid' ? (
-                  <div className="nw-chat-text">
-                    <strong>Invalid payment request</strong>
-                    <div className="nw-small nw-dim">{paymentRequest.reason}</div>
-                  </div>
-                ) : (
-                  <div className="nw-chat-text">{message.text}</div>
-                )}
-                <div className="nw-small nw-dim">
-                  {message.own ? 'sent' : shortAddr(message.from)}
-                  {message.at ? ` · ${new Date(message.at).toLocaleTimeString()}` : ''}
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+          {coin.error ? (
+            <p className="nw-small" style={{ margin: 0, color: 'var(--warn)' }} role="alert">{coin.error}</p>
+          ) : null}
+          {coin.note ? (
+            <p className="nw-small nw-dim" style={{ margin: 0 }} role="status">{coin.note}</p>
+          ) : null}
+        </div>
+      ) : null}
 
-        <form className="nw-txf" onSubmit={send} style={{ marginTop: 12 }}>
-          <textarea className="nw-chat-input" value={draft} maxLength={MAX_TEXT_LENGTH}
-            placeholder={readOnly ? 'Unlock the wallet to send' : gate.blocked ? 'Blocked — unblock to write' : 'Write an encrypted message…'}
-            onChange={(event) => setDraft(event.target.value)}
-            disabled={readOnly || state.busy || gate.blocked}
-            rows={2} aria-label="Encrypted message" />
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <button className="nw-send-btn" type="submit"
-              disabled={readOnly || state.busy || gate.blocked || !draft.trim()}>
-              {state.busy ? 'Sending…' : 'Send encrypted'}
-            </button>
-            <button type="button" className="nw-chip-btn" disabled={state.busy}
-              onClick={() => void openThread(peer)}>
-              Check inbox
+      {sheet === 'request' && onSendTo ? (
+        <form className="nw-chat-sheet" onSubmit={sendPaymentRequest}>
+          <div className="nw-chat-bar">
+            <strong>{`Request from ${peerName}`}</strong>
+            <button type="button" className="nw-chat-iconbtn" aria-label="Close payment request"
+              onClick={() => setSheet('none')}>×</button>
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <input className="nw-chat-input" value={request.amount} inputMode="numeric"
+              placeholder="Amount in NSAT" aria-label="NSAT amount to request" style={{ maxWidth: 160 }}
+              onChange={(event) => setRequest({
+                amount: event.target.value.replace(/[^\d,_ ]/g, ''),
+                busy: false, note: '', error: '',
+              })}
+              disabled={readOnly || request.busy || gate.blocked} />
+            <button type="submit" className="nw-send-btn"
+              disabled={readOnly || request.busy || gate.blocked || !requestAmountOk}>
+              {request.busy ? 'Sending…' : 'Send request'}
             </button>
           </div>
-          {state.note ? (
-            <p className="nw-small" style={{ margin: 0, color: 'var(--warn)' }}>{state.note}</p>
+          {request.error ? (
+            <p className="nw-small" style={{ margin: 0, color: 'var(--warn)' }} role="alert">{request.error}</p>
           ) : null}
-          <p className="nw-small nw-dim" style={{ margin: 0 }}>
-            The other wallet receives this only when it opens its own messages; the relay keeps it
-            for up to 30 days and deletes it after it is read.
-          </p>
+          {request.note ? (
+            <p className="nw-small nw-dim" style={{ margin: 0 }} role="status">{request.note}</p>
+          ) : null}
         </form>
-      </section>
-    </div>
+      ) : null}
+
+      <form className="nw-chat-composer" onSubmit={send}>
+        <button type="button" className="nw-chat-iconbtn" aria-label="More actions"
+          aria-expanded={sheet !== 'none'}
+          disabled={readOnly || gate.blocked || (!onSendCoins && !onSendTo)}
+          onClick={() => setSheet((value) => (value === 'none' ? 'menu' : 'none'))}>＋</button>
+        <textarea className="nw-chat-input" value={draft} maxLength={MAX_TEXT_LENGTH}
+          placeholder={readOnly ? 'Unlock the wallet to send' : gate.blocked ? 'Blocked — unblock to write' : 'Message'}
+          onChange={(event) => setDraft(event.target.value)}
+          disabled={readOnly || state.busy || gate.blocked}
+          rows={1} aria-label="Encrypted message" />
+        <button className="nw-chat-send" type="submit" aria-label="Send message"
+          disabled={readOnly || state.busy || gate.blocked || !draft.trim()}>
+          ➤
+        </button>
+      </form>
+      {state.note ? (
+        <p className="nw-small" style={{ margin: 0, color: 'var(--warn)' }} role="status">{state.note}</p>
+      ) : null}
+    </section>
   );
 }
