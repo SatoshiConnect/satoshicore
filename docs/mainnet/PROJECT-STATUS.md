@@ -1,7 +1,7 @@
 # NSAT Universal Wallet — Project Status
 
-อัปเดต: 2026-11-14 · Repo: `SatoshiConnect/satoshicore` (โฟลเดอร์ `satoshicore-web`) · Branch: `feat/sponsored-accounts-wallet`
-Commit ล่าสุดของรอบนี้: `e013e06` (ก่อน tranche homepage) · ดู §6 สำหรับ tranche 2026-11-14
+อัปเดต: 2026-11-16 · Repo: `SatoshiConnect/satoshicore` (โฟลเดอร์ `satoshicore-web`) · Branch: `feat/messenger-payments-p3`
+Commit ล่าสุดของรอบนี้: `5f3b3d4` (Messenger P3 + same-origin chat/PWA fixes) · ดู §0 สำหรับ deployment log
 
 สถานะที่ใช้: **IMPLEMENTED → VERIFIED → REVIEWED → MERGED → RELEASE-READY → DEPLOYED**
 สถานะการตรวจ: IMPLEMENTED / VERIFIED / BROKEN / MISSING / BLOCKED / NOT INSPECTED
@@ -32,6 +32,35 @@ Commit ล่าสุดของรอบนี้: `e013e06` (ก่อน tr
 | หลักฐาน | `index.html` sha256 `d2b6030e055d24b16c9dffb7eec415733e6d54d3558afb45f59a3d69fb8a6ddd`; `verify:deployed` 8 passed / 0 failed / 2 advisory; incognito 430×932: gate มีสองปุ่ม, `Use without an account` เข้าหน้าตัว wallet ได้, reload กลับมาที่ gate; `/privacy/` `/security/` `/terms/` แสดงข้อความ optional; console ว่าง |
 | ไม่ได้แตะ | Mainnet/genesis/ledger/validator/คีย์จริง, DNS, Caddy config, ไม่มีธุรกรรมใด ๆ |
 | ยังไม่ deploy | `6f2e7cd` (session idle limit 30 วัน) — รออนุมัติแยก |
+
+### Deploy 2026-11-16 (Messenger P3) — payment requests + verified cards (commit `7d6ad99`)
+
+| รายการ | ค่า |
+|---|---|
+| Commit ที่ build | `7d6ad99` บน `feat/messenger-payments-p3` (`694dcf0` + same-origin chat relay fix) |
+| สิ่งที่เปลี่ยน | คำขอจ่ายแบบ exact integer ในแชท; การ์ดธุรกรรมที่ตรวจ exact hash กับ indexer; P2 block gate บน relay; Firestore rules สำหรับ contact graph |
+| แก้ระหว่าง acceptance | build แรก (`694dcf0`) ตั้ง `relayOrigin=''` ใน same-origin mode ทำให้ Messages ขึ้นว่าไม่มี relay; `7d6ad99` resolve เป็น `window.location.origin` เมื่อเปิดหน้าแชท |
+| Firestore | ruleset `e4bac944-e3f3-4765-83fd-a4583dccb127`; sha256 `5ce23c7b4e38e9b389eb7dc6f17d167a4415e5f0d93477c2051f2c5263415f81` |
+| Gateway | `server.js` ไม่เปลี่ยน; `chat-relay.mjs` sha256 `a0218edb7939cb6ceaf6794f2e4c3c006652c2d149a53ef5651f00d5f637c02c`; launchd running |
+| Caddy root | `satoshicore-webroot-messenger-p3fix-7d6ad99` |
+| Rollback | webroot `satoshicore-webroot-menu-02f5644`; gateway backups `~/nsat-ops/backups/p3-20261116/`; ruleset เดิม `1f1bbce6-cf44-49f2-b2da-59b46b55a2e9` |
+| หลักฐาน | live index sha256 `ddb1ac85a4489f5d030b112f0f3e6c6d67a0a3b7144aa47b2e300dcc92d4c456`; P3 checker 4/4; `verify:deployed` 8 passed / 0 failed / 2 advisory; focused payment tests 21/21; live bundle มี `window.location.origin`, marker P3 และ `chatEnabled:!0`; artifact 66 ไฟล์ ไม่มี source map/private key |
+| Live acceptance | กระเป๋า unfunded สองใบแยก browser profile: ส่งคำขอ `9007199254740993` NSAT สำเร็จ; ผู้รับเห็นจำนวน/address ตรง, กด Review แล้ว `#nw-amt`/`#nw-dest` ตรงเป๊ะ, ปุ่ม `Review Transaction` ถูกปิดเพราะยังไม่มีเงิน, ไม่เปิด modal และไม่มีธุรกรรม; relay 200 ทุกเส้นทาง, ack สำเร็จ, ลบ key/quota ทดสอบแล้วเหลือ 0, account ทั้งคู่ 404 |
+| หมายเหตุ | headless console มี 404 จาก service-worker registration ที่ `/wallet/sw.js` (pre-existing; ไม่กระทบ payment/chat) — แก้แล้วใน deploy ถัดไป `5f3b3d4` |
+| ยังไม่ได้ทดสอบ | การ์ดจากธุรกรรมที่ส่งใหม่ผ่าน UI (ห้ามส่งธุรกรรม); acceptance ใช้ standalone wallets ไม่ได้ลงชื่อด้วย Google |
+| ไม่ได้แตะ | Mainnet/genesis/ledger/validator/คีย์จริง/DNS/Caddy config; ไม่มีธุรกรรมหรือการใช้เงิน |
+
+### Deploy 2026-11-16 — PWA service worker root registration (commit `5f3b3d4`)
+
+| รายการ | ค่า |
+|---|---|
+| Commit ที่ build | `5f3b3d4` — PWA fix ต่อจาก P3 ที่ deploy แล้ว (`7d6ad99`) |
+| สิ่งที่เปลี่ยน | `SwRegister` resolve `sw.js` จาก `NEXT_PUBLIC_BASE_PATH` แทน `document.baseURI`; หน้า `/wallet/` จึงลงทะเบียน `/sw.js` ด้วย scope `/` ไม่ใช่ `/wallet/sw.js` |
+| Caddy root | `satoshicore-webroot-swfix-5f3b3d4` |
+| Rollback | `satoshicore-webroot-messenger-p3fix-7d6ad99` (P3 ใช้งานได้แต่ยังมี PWA 404) หรือ `satoshicore-webroot-menu-02f5644` |
+| หลักฐาน | live index sha256 `b47b51f3f096d2cc00470f5c85bc5e043a1db0709adb656fe8764345a265da2e`; live `/sw.js` sha256 `bab838d7ac4579247c259d68719ef7ce338b6f3d695bcfc97e67049adcc1596b`; `verify:deployed` 8 passed / 0 failed / 2 advisory; P3 checker 4/4; service-worker test 4/4 |
+| Browser acceptance | Chrome profile ใหม่ที่ `/wallet/`: registration `scriptURL=https://satoshicore.org/sw.js`, `scope=https://satoshicore.org/`, state `activated`; cache `nsat-pwa-v4` มี `/` และ `/wallet/`; controller เป็น `/sw.js` หลัง reload; ไม่มี request `/wallet/sw.js`, ไม่มี failed request หรือ console error |
+| ไม่ได้แตะ | Mainnet/genesis/ledger/validator/คีย์จริง/DNS/Caddy config; ไม่มีธุรกรรมหรือการใช้เงิน |
 
 ### Deploy 2026-11-16 (รอบสี่) — แจ้งเตือนการโอน (commit `94ab5ed`)
 

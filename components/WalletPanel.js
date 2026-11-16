@@ -36,6 +36,7 @@ import {
   bindOwner, unbindOwner, visibleWalletNamed, walletNameForAccount, walletsForAccount,
 } from '../lib/walletBinding';
 import GoogleAccount from './GoogleAccount';
+import ContactsCard from './ContactsCard';
 import ProfileCard from './ProfileCard';
 import { readMyProfile } from '../lib/profile';
 import DriveBackupCard from './DriveBackupCard';
@@ -74,10 +75,11 @@ const PAGE_GLYPH = {
   overview: '◆', activity: '⚡', settings: '⚙',
 };
 // Pages reached from an action; the app bar shows Back instead of Receive.
-const SUB_PAGES = ['send', 'receive', 'shielded', 'chat'];
+const SUB_PAGES = ['send', 'receive', 'shielded', 'chat', 'contacts'];
 const PAGE_TITLE = {
   overview: 'Overview', send: 'Send NSAT', receive: 'Receive NSAT',
   shielded: 'Shielded NSAT', activity: 'Activity', settings: 'Settings', chat: 'Messages',
+  contacts: 'Contacts',
 };
 // One short line per section — context only, never an essay. Overview and
 // Settings need none: the cards say what they are.
@@ -89,6 +91,7 @@ const PAGE_LEAD = {
   activity: 'Every indexed transfer, with the ledger\'s verdict.',
   settings: null,
   chat: 'End-to-end encrypted with the wallets you transacted with.',
+  contacts: 'Who may start a conversation with you — and who may not.',
 };
 
 // Founder Mint totals come from the ledger header, never from a rate applied
@@ -102,11 +105,18 @@ const HISTORY_PAGE = 100;
 // off unless the deployment turns it on, so a build pointed at a gateway without
 // the relay says so instead of queueing messages that can never be delivered.
 const CHAT_RELAY_ENABLED = process.env.NEXT_PUBLIC_CHAT_RELAY === '1';
+const CHAT_RELAY_SAME_ORIGIN = CHAT_RELAY_ENABLED
+  && process.env.NEXT_PUBLIC_API_SAME_ORIGIN === '1';
 const CHAT_RELAY_ORIGIN = !CHAT_RELAY_ENABLED
   ? ''
-  : process.env.NEXT_PUBLIC_API_SAME_ORIGIN === '1'
+  : CHAT_RELAY_SAME_ORIGIN
     ? ''
     : (process.env.NEXT_PUBLIC_API_GATEWAY_URL || '').replace(/\/$/, '');
+// A same-origin build still needs an absolute origin for the fetch client;
+// an empty string here used to make the enabled Messages screen say that no
+// relay was configured. Resolve it when the chat screen actually renders.
+const chatRelayOrigin = () => CHAT_RELAY_ORIGIN
+  || (CHAT_RELAY_SAME_ORIGIN && typeof window !== 'undefined' ? window.location.origin : '');
 
 function supplyAndMinted(totalCoins) {
   try {
@@ -1246,11 +1256,24 @@ export default function WalletPanel() {
   //
   // `toOverride` / `amountOverride` exist so the chat can pay the person in the
   // conversation without duplicating any of this: it calls the same function,
-  // with its own explicit confirmation in front of it.
-  async function submitSend({ toOverride = null, amountOverride = null } = {}) {
+  // with its own explicit confirmation in front of it. `createOverride` keeps a
+  // stale CREATE-account checkbox from changing a chat payment operation.
+  async function submitSend({ toOverride = null, amountOverride = null, createOverride = null } = {}) {
     const target = String(toOverride ?? dest).trim();
     const value = String(amountOverride ?? amount);
+    const create = createOverride ?? createDest;
     lastSendRef.current = null;
+    if (toOverride != null) {
+      const clean = value.replace(/[,_ ]/g, '');
+      if (!/^\d+$/.test(clean) || BigInt(clean) <= 0n) {
+        notify('Enter a whole-number amount greater than zero.', 'err');
+        return false;
+      }
+      if (target === active?.pubkey) {
+        notify('This wallet cannot pay itself from a chat request.', 'err');
+        return false;
+      }
+    }
     if (!active?.seed32) { notify('Unlock the wallet first.', 'err'); return false; }
     if (!net?.ok) { notify('Network identity not verified — refusing to sign.', 'err'); return false; }
     if (net.network !== EXPECTED_NETWORK_ID) {
@@ -1294,7 +1317,7 @@ export default function WalletPanel() {
       requireActiveSession();
       const reserve = Number(info?.info?.ledger?.baseReserve || 0);
       const amtClean = value.replace(/[,_ ]/g, '');
-      if (createDest && reserve > 0 && /^\d+$/.test(amtClean)
+      if (create && reserve > 0 && /^\d+$/.test(amtClean)
         && BigInt(amtClean) < BigInt(2 * reserve)) {
         notify(`CREATE starting balance must be ≥ ${BigInt(2 * reserve).toLocaleString()} NSAT (2× base reserve) — the chain would charge the fee and fail the operation.`, 'err');
         setBusy(false);
@@ -1307,7 +1330,7 @@ export default function WalletPanel() {
         destG: target,
         amount: value.trim(),
         fee: baseFee,
-        create: createDest,
+        create,
         shouldCancel: () => !canContinue(),
       });
       requireActiveSession();
@@ -1395,7 +1418,9 @@ export default function WalletPanel() {
   // the conversation as the destination. The chat shows its own confirmation
   // step before this is called, so a stray tap cannot move anything.
   async function sendCoinsFromChat(to, coinAmount) {
-    const ok = await submitSend({ toOverride: to, amountOverride: coinAmount });
+    const ok = await submitSend({
+      toOverride: to, amountOverride: coinAmount, createOverride: false,
+    });
     return {
       ok,
       hash: lastSendRef.current?.hash || '',
@@ -1596,10 +1621,26 @@ export default function WalletPanel() {
             <ChatPanel seed32={active?.seed32 || null}
               address={active?.pubkey || watchAddress || ''}
               contacts={chatContacts}
-              relayOrigin={CHAT_RELAY_ORIGIN}
-              onSendTo={(address) => { setDest(address); setPage('send'); }}
+              relayOrigin={chatRelayOrigin()}
+              onSendTo={(address, requestedAmount = '') => {
+                setDest(address);
+                setCreateDest(false);
+                if (requestedAmount) setAmount(requestedAmount);
+                setPage('send');
+              }}
               onSendCoins={sendCoinsFromChat}
               onBack={() => setPage('activity')} />
+          )}
+
+          {page === 'contacts' && (
+            <ContactsCard
+              onSendTo={(address, requestedAmount = '') => {
+                setDest(address);
+                setCreateDest(false);
+                if (requestedAmount) setAmount(requestedAmount);
+                setPage('send');
+              }}
+              onOpenSettings={() => setPage('settings')} />
           )}
 
           {page === 'settings' && (
@@ -1607,7 +1648,8 @@ export default function WalletPanel() {
                               s={{ active, busy, doLock, doBackup, doRestore, wallets, biometricWallets,
                 onSwitch: switchTo, onToggleBiometric: toggleBiometricUnlock,
                 onReloadWallets: refreshWallets }}
-              onShielded={() => setPage('shielded')} />
+              onShielded={() => setPage('shielded')}
+              onOpenContacts={() => setPage('contacts')} />
           )}
       </main>
 
@@ -2759,11 +2801,25 @@ function ActivityPage({ history, activeName, chain, notices, chatEnabled, onOpen
 }
 
 /* ------------------------------- Settings -------------------------------- */
-function SettingsPage({ s, onShielded }) {
+function SettingsPage({ s, onShielded, onOpenContacts }) {
   return (
     <div>
       {SHOW_GOOGLE_ACCOUNT ? <GoogleAccount /> : null}
       {SHOW_GOOGLE_ACCOUNT ? <ProfileCard /> : null}
+      {/* Contacts are account state, so the entry point sits next to the account
+       * and the profile rather than in the tab bar: the bar stays a wallet. */}
+      {SHOW_GOOGLE_ACCOUNT ? (
+        <section className="nw-card">
+          <h2 style={{ color: 'var(--text)' }}>Contacts</h2>
+          <p className="nw-small nw-dim" style={{ margin: '8px 0 12px' }}>
+            Who may start a conversation with you, who is waiting for an answer, and who
+            is blocked. Find people by @profile ID, wallet address or a consented email.
+          </p>
+          <button type="button" className="nw-chip-btn" onClick={onOpenContacts}>
+            Manage contacts
+          </button>
+        </section>
+      ) : null}
       {SHOW_GOOGLE_ACCOUNT ? <DriveBackupCard onKeystoreChanged={s.onReloadWallets} /> : null}
       <section className="nw-card">
         <h2 style={{ color: 'var(--text)' }}>Privacy</h2>

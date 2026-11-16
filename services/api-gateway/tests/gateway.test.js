@@ -1,5 +1,5 @@
 // API Gateway tests: unit (validation) + integration (mock nsat-core node).
-// Run: node --test tests/
+// Run: npm test (explicit test files; Node 24 no longer accepts a directory).
 'use strict';
 
 const test = require('node:test');

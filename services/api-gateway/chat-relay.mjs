@@ -14,6 +14,11 @@
 //
 // Metadata the relay does see, and does not hide: sender address, recipient
 // address, message size, and arrival time. See docs/E2E-CHAT-DESIGN.md.
+//
+// Two recipient-side gates are enforced here rather than in the client, because
+// a client check is not a control: a per-sender daily quota on stored mail, and
+// a block list the recipient owns. Neither tells the sender anything it could
+// act on — a blocked message is accepted and dropped, not refused.
 import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -23,6 +28,10 @@ const MAX_MESSAGES_PER_RECIPIENT = 500;
 const MAX_KEYS_PER_ADDRESS = 3;
 const FRESHNESS_MS = 120_000;
 const RETENTION_DAYS = 30;
+// One wallet cannot fill somebody else's mailbox: this is the per-day ceiling
+// for mail that is actually stored, counted per sender.
+const MAX_MESSAGES_PER_SENDER_PER_DAY = 200;
+const MAX_BLOCKS_PER_OWNER = 500;
 
 const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
@@ -118,6 +127,21 @@ function openDatabase(dbPath) {
     );
     CREATE INDEX IF NOT EXISTS chat_messages_inbox ON chat_messages (recipient, id);
     CREATE INDEX IF NOT EXISTS chat_messages_gc ON chat_messages (received_at);
+    -- A recipient's block list. The relay never publishes it and never tells a
+    -- sender that a block exists; it only stops storing their mail.
+    CREATE TABLE IF NOT EXISTS chat_blocks (
+      owner TEXT NOT NULL,
+      blocked TEXT NOT NULL,
+      at INTEGER NOT NULL,
+      PRIMARY KEY (owner, blocked)
+    );
+    CREATE TABLE IF NOT EXISTS chat_quota (
+      address TEXT NOT NULL,
+      day INTEGER NOT NULL,
+      count INTEGER NOT NULL,
+      PRIMARY KEY (address, day)
+    );
+    CREATE INDEX IF NOT EXISTS chat_quota_gc ON chat_quota (day);
   `);
   return db;
 }
@@ -126,7 +150,12 @@ function openDatabase(dbPath) {
  * Build the relay. `handle()` takes a parsed request and returns a parsed
  * response, so it can be tested without a socket and mounted by server.js.
  */
-export function createChatRelay({ dbPath, now = () => Date.now() } = {}) {
+export function createChatRelay({
+  dbPath,
+  now = () => Date.now(),
+  maxPerSenderPerDay = MAX_MESSAGES_PER_SENDER_PER_DAY,
+  maxBlocksPerOwner = MAX_BLOCKS_PER_OWNER,
+} = {}) {
   if (!dbPath) throw new Error('A chat relay needs a database path.');
   const db = openDatabase(dbPath);
   const seenNonces = new Map(); // nonce → expiry, replay guard
@@ -202,21 +231,46 @@ export function createChatRelay({ dbPath, now = () => Date.now() } = {}) {
         if (!B58_FREE.test(String(envelope.to || '').toUpperCase())) {
           return json(400, { error: 'envelope recipient invalid' });
         }
+        const recipient = String(envelope.to).toUpperCase();
         const serialized = JSON.stringify(envelope);
         const bytes = Buffer.byteLength(serialized);
         if (bytes > MAX_ENVELOPE_BYTES) return json(413, { error: 'envelope too large' });
 
+        // A block is held by the side that set it, in either direction: if either
+        // address blocked the other, the message is not stored. The answer is the
+        // same as a delivered one on purpose — the relay must not become the
+        // place where a person learns that they were blocked — and a dropped
+        // message costs the sender no quota, because nothing was delivered.
+        const blocked = db.prepare(
+          `SELECT 1 AS hit FROM chat_blocks
+           WHERE (owner = ? AND blocked = ?) OR (owner = ? AND blocked = ?)`,
+        ).get(recipient, address, address, recipient);
+        if (blocked) return json(200, { ok: true, stored: false });
+
+        const day = Math.floor(at / 86_400_000);
+        const usedToday = db.prepare(
+          'SELECT count FROM chat_quota WHERE address = ? AND day = ?',
+        ).get(address, day)?.count || 0;
+        if (usedToday >= maxPerSenderPerDay) {
+          return json(429, { error: 'daily message limit reached' });
+        }
+
         const pending = db.prepare(
           'SELECT COUNT(*) c FROM chat_messages WHERE recipient = ?',
-        ).get(String(envelope.to).toUpperCase()).c;
+        ).get(recipient).c;
         if (pending >= MAX_MESSAGES_PER_RECIPIENT) {
           return json(429, { error: 'recipient mailbox is full' });
         }
         db.prepare(
           'INSERT INTO chat_messages (sender, recipient, envelope, bytes, received_at) VALUES (?, ?, ?, ?, ?)',
-        ).run(address, String(envelope.to).toUpperCase(), serialized, bytes, at);
+        ).run(address, recipient, serialized, bytes, at);
+        db.prepare(
+          `INSERT INTO chat_quota (address, day, count) VALUES (?, ?, 1)
+           ON CONFLICT (address, day) DO UPDATE SET count = count + 1`,
+        ).run(address, day);
         db.prepare('DELETE FROM chat_messages WHERE received_at < ?')
           .run(at - RETENTION_DAYS * 86_400_000);
+        db.prepare('DELETE FROM chat_quota WHERE day < ?').run(day - 1);
         return json(200, { ok: true });
       }
 
@@ -239,6 +293,47 @@ export function createChatRelay({ dbPath, now = () => Date.now() } = {}) {
         db.prepare(`DELETE FROM chat_messages WHERE recipient = ? AND id IN (${placeholders})`)
           .run(address, ...ids);
         return json(200, { ok: true, deleted: ids.length });
+      }
+
+      // ---------------- block list ----------------
+      // Only the owner can read or change their own list, and the entries are
+      // plain wallet addresses: no reason, no name, no message. A block also
+      // clears what that sender already queued for this wallet, so a block takes
+      // effect on mail that is already sitting on the relay.
+      if (method === 'GET' && path === '/api/v1/chat/blocks') {
+        const rows = db.prepare(
+          'SELECT blocked FROM chat_blocks WHERE owner = ? ORDER BY blocked LIMIT ?',
+        ).all(address, maxBlocksPerOwner);
+        return json(200, { blocked: rows.map((row) => row.blocked) });
+      }
+
+      if (method === 'POST' && path === '/api/v1/chat/blocks') {
+        const blocked = String(body?.blocked || '').toUpperCase();
+        const action = String(body?.action || 'add');
+        if (!B58_FREE.test(blocked)) return json(400, { error: 'blocked address invalid' });
+        if (blocked === address) return json(400, { error: 'cannot block your own address' });
+        if (action === 'remove') {
+          db.prepare('DELETE FROM chat_blocks WHERE owner = ? AND blocked = ?').run(address, blocked);
+          return json(200, { ok: true, blocked: false });
+        }
+        if (action !== 'add') return json(400, { error: 'action must be add or remove' });
+        // Blocking somebody who is already blocked is a no-op, not a new entry:
+        // it must not fail because the list happens to be at its ceiling.
+        const alreadyBlocked = db.prepare(
+          'SELECT 1 AS hit FROM chat_blocks WHERE owner = ? AND blocked = ?',
+        ).get(address, blocked);
+        if (!alreadyBlocked) {
+          const held = db.prepare('SELECT COUNT(*) c FROM chat_blocks WHERE owner = ?').get(address).c;
+          if (held >= maxBlocksPerOwner) return json(429, { error: 'block list is full' });
+        }
+        db.prepare(
+          `INSERT INTO chat_blocks (owner, blocked, at) VALUES (?, ?, ?)
+           ON CONFLICT (owner, blocked) DO UPDATE SET at = excluded.at`,
+        ).run(address, blocked, at);
+        const cleared = db.prepare(
+          'DELETE FROM chat_messages WHERE recipient = ? AND sender = ?',
+        ).run(address, blocked);
+        return json(200, { ok: true, blocked: true, cleared: Number(cleared?.changes || 0) });
       }
 
       return json(404, { error: 'not found' });

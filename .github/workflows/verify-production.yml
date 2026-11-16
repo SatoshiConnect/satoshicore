@@ -29,7 +29,8 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # Keep this aligned with the build workflow; node:sqlite is not in Node 20.
+          node-version: '24'
 
       # No npm ci: the verifier uses global fetch only, so it runs even when the
       # dependency tree is the thing under suspicion.

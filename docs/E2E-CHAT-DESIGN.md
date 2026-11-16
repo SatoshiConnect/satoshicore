@@ -73,6 +73,8 @@ do not exist (verified on production: 404, and no database file is created).
 | `POST /api/v1/chat/messages` | signed | hand one envelope to the recipient |
 | `GET /api/v1/chat/messages?since=` | signed | read this wallet's mailbox |
 | `POST /api/v1/chat/ack` | signed | delete messages that were actually read |
+| `GET /api/v1/chat/blocks` | signed | this wallet's own block list |
+| `POST /api/v1/chat/blocks` | signed | block or unblock one address (`{ blocked, action }`) |
 
 Rules the relay enforces on its own, because a client check is not a control:
 
@@ -82,15 +84,28 @@ Rules the relay enforces on its own, because a client check is not a control:
 - envelope ≤ 8 KiB, mailbox ≤ 500 pending per recipient, retention 30 days;
 - key publishing keeps only the 3 most recent bundles per address;
 - reading returns only rows addressed to the signer — the sender never keeps a
-  server-side copy.
+  server-side copy;
+- **per-sender quota**: 200 *stored* messages per wallet per UTC day (a
+  constructor option, so tests can lower it). A message that is dropped by a
+  block costs nothing, so blocking cannot be used to burn a stranger's quota;
+- **blocks**: one wallet's block list holds up to 500 addresses, is readable and
+  writable only by its owner, and applies in both directions. Adding a block
+  also deletes that sender's queued mail for the owner.
+
+A blocked message is **not refused**: the relay answers `200 {ok:true,
+stored:false}`, exactly like a delivery, so a sender cannot tell a block from a
+successful send. That is a deliberate privacy choice, and it means the honest
+claim is "blocked mail is not stored", not "the sender is told to stop".
 
 Storage is SQLite (`node:sqlite`), path from `NSAT_CHAT_DB`, default
 `services/api-gateway/data/chat.sqlite`.
 
 ### What the relay learns, and what it does not
 
-Learns: who talks to whom, when, how many bytes. Does not learn: the text, the
-amount, the wallet password, the seed. The ciphertext in the database contains
+Learns: who talks to whom, when, how many bytes, **how much one wallet sends per
+day**, and **which address blocked which** (as an opaque pair — the relay never
+sees a reason or a name). Does not learn: the text, the amount, the wallet
+password, the seed. The ciphertext in the database contains
 no plaintext — checked with `strings` on a live dev database after a real message
 was sent (`0` matches for the message text).
 
