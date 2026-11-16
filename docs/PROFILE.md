@@ -19,6 +19,13 @@ label, the profile field and the claim document id are the same string. A bare
 name without `@` is rejected rather than silently rewritten, so what is stored
 is exactly what is shown and claimed.
 
+A handle is shareable, so the rules allow a signed-in account to **get one**
+profile document (`allow get: if request.auth != null`) while `list` stays
+closed. That single-document read is what lets `lib/profile.js`
+`resolveProfileHandle('@id')` answer with the profile's primary address — the
+chat's “Add friend” uses it. Nobody can enumerate profiles or learn a handle
+they were not given, and a profile still cannot sign or move anything.
+
 - Both fields always exist on the profile, so the rules can check the shape
   without looping, and there is nowhere to add a name, balance, history, seed,
   password or email.

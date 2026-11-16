@@ -34,6 +34,7 @@ Nothing here should be read as "accepted" — each item carries its owner/next s
 | R18 | Profile ID lookup is exact-ID only: a signed-in account can check whether one ID is free, and cannot list claims | LOW | By design (`allow get`, `allow list: if false`) | `PROFILE.md` |
 | R19 | A profile cannot prove wallet ownership or sign anything; a primary wallet is a display preference over an already-linked public address | INFO | Stated in the card and the docs; no signing path is reachable from `lib/profile.js` | `PROFILE.md` |
 | R20 | Profile writes were not exercised against a live database | INFO | Closed 2026-11-16 — `firestore.rules` released to `nsat-wallet-login` and a real account created, reloaded and edited its profile on satoshicore.org | `PROFILE.md` "What is verified" |
+| R21 | Anyone signed in who knows a profile ID can read that profile's handle + primary wallet address (one document, no listing) | LOW | By design — a handle exists to be shared and the primary address is public on chain; `list` stays closed so IDs cannot be enumerated, and nothing else is in the document | `PROFILE.md` "A handle is shareable" |
 
 ## Explicit non-claims
 - No control above claims protection against host-root compromise.

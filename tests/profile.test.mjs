@@ -290,6 +290,11 @@ test('the rules require a verified email, a claim of your own and a linked walle
   assert.match(RULES, /documents\/profileIds\/\$\(request\.resource\.data\.profileId\)/);
   assert.match(RULES, /documents\/walletLinks\/\$\(owner\)\/addresses\/\$\(address\)/);
   assert.match(RULES, /isLinkedAddress\(uid, request\.resource\.data\.primaryAddress\)/);
+  // A handle is meant to be shared: one profile document may be read by any
+  // signed-in account (that is what turns @id → wallet address), while the
+  // collection itself still cannot be listed.
+  assert.match(RULES, /match \/profiles\/\{uid\}[\s\S]*?allow get: if request\.auth != null;/);
+  assert.match(RULES, /match \/profiles\/\{uid\}[\s\S]*?allow list: if false/);
   // Claims are create-only, exact-get only, and deletable only by the holder.
   assert.match(RULES, /allow list: if false/);
   assert.match(RULES, /allow update: if false/);

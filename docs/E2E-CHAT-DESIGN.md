@@ -125,11 +125,24 @@ and verifies the recipient's, seals on send, opens and acknowledges on read:
   relay and is reported, so a message for another wallet is not lost;
 - undecryptable entries surface as a count in the UI, never as silence.
 
-`components/ChatPanel.js` is the screen: contacts come from the wallet's own
-indexed transfers, so nobody can start a conversation with a wallet that never
-transacted with this one. The transcript lives in the session only: reading a
-message deletes it from the relay, and nothing is written to `localStorage`,
-because a plaintext chat left on a shared device is worse than a lost one.
+`components/ChatPanel.js` is the screen. Contacts come from two places: the
+wallet's own indexed transfers, and a friend list the person adds by hand with
+an `@profile` ID or a `G…` address. Without the second, the only way to say
+hello was to send someone money first.
+
+- An `@id` is resolved through `profiles`: `profileIds/@id` gives the owner's
+  uid and `profiles/{uid}` gives the chosen primary address. Both are reads the
+  rules allow one document at a time for a signed-in account (`allow get`, never
+  `list`), so a handle can be looked up but the directory cannot be scraped. A
+  profile with no primary wallet yet is reported as such instead of guessing an
+  address.
+- The friend list stores **public wallet addresses only**, per wallet, under
+  `scw-chat-friends-<wallet address>` (`lib/chatFriends.js`, capped at 50). No
+  name, email or message text is ever written there — the transcript still lives
+  in the session only, and reading a message deletes it from the relay, because
+  a plaintext chat left on a shared device is worse than a lost one.
+- A friend who is also a past counterparty appears once, with the “friend”
+  badge; “Remove” only forgets the name, never anything on the relay.
 
 ## Enabling it
 

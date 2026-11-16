@@ -102,7 +102,14 @@ service cloud.firestore {
     }
 
     match /profiles/{uid} {
-      allow read, delete: if request.auth != null && request.auth.uid == uid;
+      // A profile is a public handle: a signed-in account may read ONE profile by
+      // uid, which is what turns @handle → wallet address (the claim document
+      // gives the uid). `list` stays closed, so the collection cannot be
+      // enumerated; you must already know the handle.
+      allow get: if request.auth != null;
+      allow list: if false;
+
+      allow delete: if request.auth != null && request.auth.uid == uid;
 
       // Two fields, both required, both checked. The ID must be a claim held by
       // this same account, so a profile cannot point at somebody else's ID, and
