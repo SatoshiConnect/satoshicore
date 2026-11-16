@@ -21,7 +21,7 @@ import { resolveProfileHandle } from '../lib/profile';
 
 const shortAddr = (value) => (value ? `${value.slice(0, 6)}…${value.slice(-4)}` : '');
 
-export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSendTo, onBack }) {
+export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSendTo, onSendCoins, onBack }) {
   const client = useRef(null);
   const [peer, setPeer] = useState('');
   const [thread, setThread] = useState([]);          // { id, from, text, ts|at, own }
@@ -34,9 +34,12 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSe
   // Which @id resolved to which address, for the lifetime of this screen.
   const [peerIds, setPeerIds] = useState({});
   const [copyState, setCopyState] = useState('');
+  const [coin, setCoin] = useState({ amount: '', phase: 'idle', note: '', error: '' });
 
   const relayConfigured = Boolean(relayOrigin);
   const readOnly = !seed32;
+  const coinDigits = coin.amount.replace(/[,_ ]/g, '');
+  const coinAmountOk = /^\d+$/.test(coinDigits) && BigInt(coinDigits || '0') > 0n;
 
   // Friends are public addresses the person named themselves; the transcript
   // stays in this session. Loading is deferred to an effect so the first render
@@ -141,6 +144,49 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSe
       });
     } catch (error) {
       setAddState({ busy: false, note: '', error: String(error?.message || error) });
+    }
+  }
+
+  /** A coin "sticker": send NSAT to the person in this conversation. */
+  async function sendCoinSticker() {
+    const amount = coin.amount.replace(/[,_ ]/g, '');
+    if (!onSendCoins || !peer) return;
+    setCoin((current) => ({ ...current, phase: 'sending', error: '', note: '' }));
+    try {
+      const result = await onSendCoins(peer, amount);
+      const status = String(result?.status || '');
+      if (!result?.ok || !result.hash || status === 'rejected') {
+        setCoin((current) => ({
+          ...current, phase: 'idle',
+          error: status === 'rejected'
+            ? 'The node rejected this payment, so nothing moved. See the message the wallet showed.'
+            : 'The wallet did not submit this payment — nothing moved. See the message the wallet showed.',
+        }));
+        return;
+      }
+      const shortHash = `${result.hash.slice(0, 10)}…${result.hash.slice(-8)}`;
+      // Say exactly what the ledger said: a submitted payment that has not been
+      // confirmed (or that failed on chain) must not read as "sent and done".
+      const label = status === 'confirmed'
+        ? `🪙 Sent ${amount} NSAT · tx ${shortHash}`
+        : status === 'failed'
+          ? `🪙 ${amount} NSAT failed on-chain · tx ${shortHash}`
+          : `🪙 ${amount} NSAT submitted (${status || 'pending'}) · tx ${shortHash}`;
+      setThread((current) => [...current, {
+        id: `c${Date.now()}`, peer, from: address, text: label, at: Date.now(), own: true,
+      }]);
+      setCoin({ amount: '', phase: 'idle', note: `${label}`, error: '' });
+      // Best effort: tell the other side in the conversation too. The payment
+      // itself is already on the chain, so a failed message loses no money.
+      if (client.current && seed32) {
+        try {
+          await client.current.send({
+            seed32, from: address, to: peer, text: `🪙 ${amount} NSAT — tx ${result.hash}`,
+          });
+        } catch { /* the transfer is what matters; the note can wait */ }
+      }
+    } catch (error) {
+      setCoin((current) => ({ ...current, phase: 'idle', error: String(error?.message || error) }));
     }
   }
 
@@ -321,6 +367,56 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSe
           To send coins you only need this address. An email is never stored here — the profile keeps
           an @id and a public address and nothing else — so ask for an email directly if you need one.
         </p>
+
+        {/* Sending from the conversation: the same wallet pipeline the Send
+         * page uses, with an explicit confirm in between. Nothing moves from a
+         * stray tap, and the payment itself is the signature — not a message. */}
+        {onSendCoins ? (
+          <div style={{ marginTop: 12 }}>
+            {coin.phase === 'confirm' ? (
+              <>
+                <p className="nw-small" style={{ margin: 0 }}>
+                  {`Send ${coinDigits} NSAT to ${shortAddr(peer)}? The network fee is charged on top, and this is signed with the key already unlocked in this tab.`}
+                </p>
+                <div className="nw-btn-row" style={{ marginTop: 8 }}>
+                  <button type="button" className="nw-send-btn" onClick={sendCoinSticker}
+                    disabled={readOnly || coin.phase === 'sending'}>
+                    {coin.phase === 'sending' ? 'Signing & sending…' : 'Confirm payment'}
+                  </button>
+                  <button type="button" className="nw-chip-btn"
+                    onClick={() => setCoin({ amount: '', phase: 'idle', note: '', error: '' })}
+                    disabled={coin.phase === 'sending'}>
+                    Cancel
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <input className="nw-chat-input" value={coin.amount} inputMode="numeric"
+                  placeholder="Amount in NSAT" aria-label="Amount of NSAT to send"
+                  style={{ maxWidth: 160 }}
+                  onChange={(event) => setCoin({
+                    amount: event.target.value.replace(/[^\d,_ ]/g, ''),
+                    phase: 'idle', note: '', error: '',
+                  })}
+                  disabled={readOnly || coin.phase === 'sending'} />
+                <button type="button" className="nw-chip-btn"
+                  onClick={() => setCoin((current) => ({ ...current, phase: 'confirm', note: '', error: '' }))}
+                  disabled={readOnly || coin.phase === 'sending' || !coinAmountOk}>
+                  {coin.phase === 'sending' ? 'Sending…' : '🪙 Send coins'}
+                </button>
+              </div>
+            )}
+            {coin.error ? (
+              <p className="nw-small" style={{ margin: '6px 0 0', color: 'var(--warn)' }} role="alert">
+                {coin.error}
+              </p>
+            ) : null}
+            {coin.note ? (
+              <p className="nw-small nw-dim" style={{ margin: '6px 0 0' }} role="status">{coin.note}</p>
+            ) : null}
+          </div>
+        ) : null}
 
         {inboxState.phase === 'loading' && (
           <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>Checking for messages…</p>

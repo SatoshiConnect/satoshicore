@@ -148,6 +148,16 @@ hello was to send someone money first.
   you added, and **Send NSAT to this address**, which fills the wallet's send
   form with it. The address is enough to send — nothing else is needed, and no
   address is ever taken from the relay or from the message contents.
+- **Sending coins from the conversation** works like sending a sticker, with
+  one deliberate difference: the amount goes through a confirmation step before
+  anything is signed. The chat calls the wallet's own pipeline
+  (`submitSend({ toOverride, amountOverride })`), so the network-identity check,
+  fee estimate, reserve check, seed zeroing and ledger confirmation are exactly
+  the ones the Send page uses — no signing logic lives in the chat. A payment is
+  a chain operation, not a message: the bubble reports what the ledger said
+  (`Sent`, `failed on-chain`, or `submitted (status)`), and a one-line encrypted
+  note with the transaction hash is sent to the conversation afterwards (best
+  effort; a failed note loses no money).
 - **Email is deliberately not part of this.** The site stores no email anywhere
   (the profile keeps an `@id` and a public address; verification is the
   provider's claim), so a friend's email can only come from the friend. The

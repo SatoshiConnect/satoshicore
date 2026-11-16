@@ -210,6 +210,8 @@ export default function WalletPanel() {
   const [createDest, setCreateDest] = useState(false);
   const [amount, setAmount] = useState('');
   const [review, setReview] = useState(null);    // { amount, fee, total }
+  // The hash of the last signed envelope, so the chat can show what it paid.
+  const lastSendRef = useRef(null);
   const [history, setHistory] = useState([]);
   // Indexed chain history for the address on screen, newest first, paged with a
   // `(ledger, tx, op)` cursor so "load older" never repeats a row. `coverage`
@@ -1241,7 +1243,14 @@ export default function WalletPanel() {
   // The real send pipeline (unchanged from the audited build). Returns true
   // when the caller may close the review modal; on failure leaves the modal
   // open with the exact reason surfaced as a toast.
-  async function submitSend() {
+  //
+  // `toOverride` / `amountOverride` exist so the chat can pay the person in the
+  // conversation without duplicating any of this: it calls the same function,
+  // with its own explicit confirmation in front of it.
+  async function submitSend({ toOverride = null, amountOverride = null } = {}) {
+    const target = String(toOverride ?? dest).trim();
+    const value = String(amountOverride ?? amount);
+    lastSendRef.current = null;
     if (!active?.seed32) { notify('Unlock the wallet first.', 'err'); return false; }
     if (!net?.ok) { notify('Network identity not verified — refusing to sign.', 'err'); return false; }
     if (net.network !== EXPECTED_NETWORK_ID) {
@@ -1284,7 +1293,7 @@ export default function WalletPanel() {
       const info = await getChainInfo();
       requireActiveSession();
       const reserve = Number(info?.info?.ledger?.baseReserve || 0);
-      const amtClean = amount.replace(/[,_ ]/g, '');
+      const amtClean = value.replace(/[,_ ]/g, '');
       if (createDest && reserve > 0 && /^\d+$/.test(amtClean)
         && BigInt(amtClean) < BigInt(2 * reserve)) {
         notify(`CREATE starting balance must be ≥ ${BigInt(2 * reserve).toLocaleString()} NSAT (2× base reserve) — the chain would charge the fee and fail the operation.`, 'err');
@@ -1295,8 +1304,8 @@ export default function WalletPanel() {
         seed32,
         netPassphrase: EXPECTED_NETWORK_ID,   // the VERIFIED identity, exact
         seqFetch: async () => getAccount(active.pubkey),
-        destG: dest.trim(),
-        amount: amount.trim(),
+        destG: target,
+        amount: value.trim(),
         fee: baseFee,
         create: createDest,
         shouldCancel: () => !canContinue(),
@@ -1304,14 +1313,16 @@ export default function WalletPanel() {
       requireActiveSession();
       requireActiveSession();
       const r = await submitSignedTransaction(signed.envelopeBase64);
+      lastSendRef.current = { hash: signed.txHashHex, status: r.status };
       // Locking after submission cannot revoke a signed envelope already sent.
       // Core /tx statuses (verified in nsat-core TransactionQueue.cpp):
       //   PENDING | DUPLICATE | ERROR | TRY_AGAIN_LATER | FILTERED
       if (r.status === 'ERROR') {
+        lastSendRef.current = { hash: signed.txHashHex, status: 'rejected' };
         notify('Node REJECTED the transaction before inclusion (invalid or insufficient). Nothing was signed again — see Activity.', 'err');
         historyPush(active.name, {
-          time: new Date().toLocaleString(), dir: 'sent', to: dest.trim(),
-          amount: amount.trim(), fee: 0, txhash: signed.txHashHex,
+          time: new Date().toLocaleString(), dir: 'sent', to: target,
+          amount: value.trim(), fee: 0, txhash: signed.txHashHex,
           ledger: null, ledger_hash: null, status: 'rejected',
         });
         setHistory(historyLoad(active.name));
@@ -1338,9 +1349,10 @@ export default function WalletPanel() {
         timeoutMs: 90_000,
       });
       const base = {
-        time: new Date().toLocaleString(), dir: 'sent', to: dest.trim(),
-        amount: amount.trim(), fee: signed.fee, txhash: signed.txHashHex,
+        time: new Date().toLocaleString(), dir: 'sent', to: target,
+        amount: value.trim(), fee: signed.fee, txhash: signed.txHashHex,
       };
+      lastSendRef.current = { hash: signed.txHashHex, status: verdict.status };
       if (verdict.status === 'confirmed' || verdict.status === 'failed') {
         historyPush(active.name, {
           ...base,
@@ -1349,7 +1361,9 @@ export default function WalletPanel() {
           evidence: verdict.evidence, confirmed_at: verdict.confirmation_time,
         });
         setHistory(historyLoad(active.name));
-        setAmount(''); setDest(''); setReview(null);
+        if (toOverride == null && amountOverride == null) {
+          setAmount(''); setDest(''); setReview(null);
+        }
         notify(
           verdict.status === 'confirmed'
             ? `Confirmed on ledger ${verdict.ledger} (${verdict.result_code}).`
@@ -1375,6 +1389,18 @@ export default function WalletPanel() {
       pendingSeedsRef.current.delete(seed32);
       setBusy(false);
     }
+  }
+
+  // Chat-side payment: the same pipeline, the same guards, with the person in
+  // the conversation as the destination. The chat shows its own confirmation
+  // step before this is called, so a stray tap cannot move anything.
+  async function sendCoinsFromChat(to, coinAmount) {
+    const ok = await submitSend({ toOverride: to, amountOverride: coinAmount });
+    return {
+      ok,
+      hash: lastSendRef.current?.hash || '',
+      status: lastSendRef.current?.status || '',
+    };
   }
 
   function openReview() {
@@ -1572,6 +1598,7 @@ export default function WalletPanel() {
               contacts={chatContacts}
               relayOrigin={CHAT_RELAY_ORIGIN}
               onSendTo={(address) => { setDest(address); setPage('send'); }}
+              onSendCoins={sendCoinsFromChat}
               onBack={() => setPage('activity')} />
           )}
 
