@@ -1,10 +1,14 @@
 # P3 — payment requests and verified transaction cards
 
-Status: **deployed to production 2026-11-16** from commit `694dcf0`
-(`satoshicore-webroot-messenger-p3-694dcf0`). The hashing/verification path has
-been checked against real Mainnet reads, the deployed gateway and synthetic
-wallets. No transaction was broadcast, no real funds were used, and no ledger
-state changed. Deployment evidence and rollback are in `RELEASE-READINESS.md`.
+Status: **deployed to production 2026-11-16** from commit `7d6ad99`
+(`satoshicore-webroot-messenger-p3fix-7d6ad99`). The hashing/verification path
+has been checked against real Mainnet reads, the deployed gateway and synthetic
+wallets. The two-wallet browser acceptance also passed on production: the
+recipient saw the exact `9007199254740993` NSAT request, **Review payment**
+prefilled the exact destination and amount, and the confirmation button stayed
+disabled because neither disposable wallet had funds. No transaction was
+broadcast, no real funds were used, and no ledger state changed. Deployment
+evidence and rollback are in `RELEASE-READINESS.md`.
 
 ## Payment request
 
@@ -140,6 +144,9 @@ script is read-only and never imports a funded key.
   Mainnet payment.
 * The deployed gateway now serves the P2 block route; the public checker passes
   4/4. See `RELEASE-READINESS.md` for the deployed hashes and rollback.
-* The screen has not been visually exercised with two real signed-in accounts in
-  this environment; the read-only production path, headless signed-out render
-  and synthetic relay path are the evidence that exists.
+* The browser acceptance used two independent, unfunded, standalone wallets
+  (no Google sign-in). It did not exercise a Google-linked account flow.
+* The live UI still logs a pre-existing 404 for `/wallet/sw.js`: the service
+  worker is served at the site root, while registration resolves it relative to
+  `document.baseURI`. This does not affect chat or payments and is tracked
+  separately.

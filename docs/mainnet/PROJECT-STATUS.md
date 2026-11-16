@@ -1,7 +1,7 @@
 # NSAT Universal Wallet — Project Status
 
 อัปเดต: 2026-11-16 · Repo: `SatoshiConnect/satoshicore` (โฟลเดอร์ `satoshicore-web`) · Branch: `feat/messenger-payments-p3`
-Commit ล่าสุดของรอบนี้: `694dcf0` (Messenger P3) · ดู §0 สำหรับ deployment log
+Commit ล่าสุดของรอบนี้: `7d6ad99` (Messenger P3 + same-origin chat fix) · ดู §0 สำหรับ deployment log
 
 สถานะที่ใช้: **IMPLEMENTED → VERIFIED → REVIEWED → MERGED → RELEASE-READY → DEPLOYED**
 สถานะการตรวจ: IMPLEMENTED / VERIFIED / BROKEN / MISSING / BLOCKED / NOT INSPECTED
@@ -33,18 +33,21 @@ Commit ล่าสุดของรอบนี้: `694dcf0` (Messenger P3) �
 | ไม่ได้แตะ | Mainnet/genesis/ledger/validator/คีย์จริง, DNS, Caddy config, ไม่มีธุรกรรมใด ๆ |
 | ยังไม่ deploy | `6f2e7cd` (session idle limit 30 วัน) — รออนุมัติแยก |
 
-### Deploy 2026-11-16 (Messenger P3) — payment requests + verified cards (commit `694dcf0`)
+### Deploy 2026-11-16 (Messenger P3) — payment requests + verified cards (commit `7d6ad99`)
 
 | รายการ | ค่า |
 |---|---|
-| Commit ที่ build | `694dcf0` บน `feat/messenger-payments-p3` (รวม P1 contacts, P2 relay gates และ P3 payments/cards) |
+| Commit ที่ build | `7d6ad99` บน `feat/messenger-payments-p3` (`694dcf0` + same-origin chat relay fix) |
 | สิ่งที่เปลี่ยน | คำขอจ่ายแบบ exact integer ในแชท; การ์ดธุรกรรมที่ตรวจ exact hash กับ indexer; P2 block gate บน relay; Firestore rules สำหรับ contact graph |
+| แก้ระหว่าง acceptance | build แรก (`694dcf0`) ตั้ง `relayOrigin=''` ใน same-origin mode ทำให้ Messages ขึ้นว่าไม่มี relay; `7d6ad99` resolve เป็น `window.location.origin` เมื่อเปิดหน้าแชท |
 | Firestore | ruleset `e4bac944-e3f3-4765-83fd-a4583dccb127`; sha256 `5ce23c7b4e38e9b389eb7dc6f17d167a4415e5f0d93477c2051f2c5263415f81` |
 | Gateway | `server.js` ไม่เปลี่ยน; `chat-relay.mjs` sha256 `a0218edb7939cb6ceaf6794f2e4c3c006652c2d149a53ef5651f00d5f637c02c`; launchd running |
-| Caddy root | `satoshicore-webroot-messenger-p3-694dcf0` |
+| Caddy root | `satoshicore-webroot-messenger-p3fix-7d6ad99` |
 | Rollback | webroot `satoshicore-webroot-menu-02f5644`; gateway backups `~/nsat-ops/backups/p3-20261116/`; ruleset เดิม `1f1bbce6-cf44-49f2-b2da-59b46b55a2e9` |
-| หลักฐาน | live index sha256 `1f5b615981bfa7a88a1500e4d48a91db3b24b8a1f1c4023a10784c86b5b81c20`; P3 checker 4/4 (confirmed ledger 301705, mismatched amount → unknown, P2 block gate); `verify:deployed` 8 passed / 0 failed / 2 advisory; live bundle มี marker P3 + `chatEnabled:!0`; security scan 63 ไฟล์สะอาด; headless gate แสดง `Open your wallet` |
-| ยังไม่ได้ทดสอบ | payment request ระหว่างสองบัญชีที่ลงชื่อเข้าใช้จริง; การ์ดจากธุรกรรมที่ส่งใหม่ผ่าน UI (ห้ามส่งธุรกรรม) |
+| หลักฐาน | live index sha256 `ddb1ac85a4489f5d030b112f0f3e6c6d67a0a3b7144aa47b2e300dcc92d4c456`; P3 checker 4/4; `verify:deployed` 8 passed / 0 failed / 2 advisory; focused payment tests 21/21; live bundle มี `window.location.origin`, marker P3 และ `chatEnabled:!0`; artifact 66 ไฟล์ ไม่มี source map/private key |
+| Live acceptance | กระเป๋า unfunded สองใบแยก browser profile: ส่งคำขอ `9007199254740993` NSAT สำเร็จ; ผู้รับเห็นจำนวน/address ตรง, กด Review แล้ว `#nw-amt`/`#nw-dest` ตรงเป๊ะ, ปุ่ม `Review Transaction` ถูกปิดเพราะยังไม่มีเงิน, ไม่เปิด modal และไม่มีธุรกรรม; relay 200 ทุกเส้นทาง, ack สำเร็จ, ลบ key/quota ทดสอบแล้วเหลือ 0, account ทั้งคู่ 404 |
+| หมายเหตุ | headless console มี 404 จาก service-worker registration ที่ `/wallet/sw.js` (pre-existing; ไม่กระทบ payment/chat) |
+| ยังไม่ได้ทดสอบ | การ์ดจากธุรกรรมที่ส่งใหม่ผ่าน UI (ห้ามส่งธุรกรรม); acceptance ใช้ standalone wallets ไม่ได้ลงชื่อด้วย Google |
 | ไม่ได้แตะ | Mainnet/genesis/ledger/validator/คีย์จริง/DNS/Caddy config; ไม่มีธุรกรรมหรือการใช้เงิน |
 
 ### Deploy 2026-11-16 (รอบสี่) — แจ้งเตือนการโอน (commit `94ab5ed`)

@@ -1,11 +1,11 @@
 # Messenger P3 — release readiness
 
-Status: **deployed to production on 2026-11-16 after owner approval.**
-The web, Firestore rules and gateway P2 are live. No transaction was submitted
-and no funds were moved.
+Status: **deployed to production on 2026-11-16 after owner approval; the
+two-wallet payment-request acceptance passed.** The web, Firestore rules and
+gateway P2 are live. No transaction was submitted and no funds were moved.
 
-Branch: `feat/messenger-payments-p3` · deployed commit `694dcf0` (on top of
-`0c38578`).
+Branch: `feat/messenger-payments-p3` · deployed commit `7d6ad99` (on top of
+`0c38578`; the fix resolves the same-origin relay origin for Messages).
 
 ## Deployment record
 
@@ -13,14 +13,18 @@ Branch: `feat/messenger-payments-p3` · deployed commit `694dcf0` (on top of
 |---|---|
 | Firestore rules | ruleset `e4bac944-e3f3-4765-83fd-a4583dccb127`, sha256 `5ce23c7b…` |
 | Gateway relay | `chat-relay.mjs` sha256 `a0218edb…`, launchd `org.satoshicore.gateway` running |
-| Webroot | `~/nsat-ops/satoshicore-webroot-messenger-p3-694dcf0` |
-| Live index | sha256 `1f5b615981bfa7a88a1500e4d48a91db3b24b8a1f1c4023a10784c86b5b81c20` |
-| Production checks | P3 checker 4/4; `verify:deployed` 8 passed / 0 failed / 2 advisory |
-| Artifact checks | markers for `NSAT-PAY-REQUEST/1`, `NSAT-TX/1`, `Finalized`, `Unverified`, `nw-chat-tx-card`, `chatEnabled:!0`; security scan 63 files clean; no source maps |
+| Webroot | `~/nsat-ops/satoshicore-webroot-messenger-p3fix-7d6ad99` |
+| Live index | sha256 `ddb1ac85a4489f5d030b112f0f3e6c6d67a0a3b7144aa47b2e300dcc92d4c456` |
+| Production checks | P3 checker 4/4; `verify:deployed` 8 passed / 0 failed / 2 advisory; focused payment tests 21/21 |
+| Artifact checks | markers for `NSAT-PAY-REQUEST/1`, `NSAT-TX/1`, `Finalized`, `Unverified`, `nw-chat-tx-card`, `chatEnabled:!0`; same-origin relay origin present; 66 files, no source maps or private keys |
+| Live acceptance | two unfunded wallets, exact `9007199254740993` NSAT request, recipient amount/address exact, Review prefilled the Send page, confirmation disabled, no modal or transaction; relay writes 200 and test rows removed |
 | Rollback | webroot `satoshicore-webroot-menu-02f5644`; gateway backups in `~/nsat-ops/backups/p3-20261116/`; previous ruleset `1f1bbce6-cf44-49f2-b2da-59b46b55a2e9` |
 
-Headless Chromium rendered the signed-out gate (`Open your wallet`) with no page
-application errors. Two-account browser acceptance was **not** performed.
+Headless Chromium rendered the signed-out gate (`Open your wallet`) and the
+acceptance ran in two clean browser profiles. Both profiles logged one
+pre-existing, non-payment console 404: the service worker is at `/sw.js`, but
+registration resolves `/wallet/sw.js` from `document.baseURI`. This does not
+affect chat or the payment flow; it is a separate PWA fix.
 
 ## What is ready
 
@@ -107,13 +111,16 @@ build containing P3 would still send messages, but every thread would show
    the middle dot in `Verified · Finalized` to the JS escape `\xb7`, so grep for
    the stable words rather than the full label.)
 
-5. **Browser acceptance with disposable wallets (not performed in this pass).**
-   Two newly created, unfunded wallets on the live site: add each other by
-   address, send one payment request, verify the recipient sees the exact amount
-   and the **Review payment** button. Do not approve a send. A transaction card
-   cannot be exercised end-to-end without a real on-chain payment, so that path
-   is covered by the read-only Mainnet check and the synthetic relay round-trip
-   instead.
+5. **Browser acceptance with disposable wallets (passed 2026-11-16).**
+   Two newly created, unfunded wallets in independent browser profiles added each
+   other by address and sent one `9007199254740993` NSAT request. The recipient
+   saw the exact amount and requesting address; **Review payment** prefilled
+   `#nw-dest` and `#nw-amt` exactly; `Review Transaction` was disabled and no
+   modal opened. No send was approved. The two test keys and quota row were
+   deleted afterwards, and both addresses had no on-chain account (`404`). A
+   transaction card still cannot be exercised end-to-end without a real on-chain
+   payment, so that path is covered by the read-only Mainnet check and the
+   synthetic relay round-trip instead.
 
 ## Rollback
 
@@ -133,9 +140,10 @@ build containing P3 would still send messages, but every thread would show
 
 - Production deploy and Firebase rules release happened in this pass; no Mainnet
   transaction or funded-key use did.
-- The screen has not been visually exercised with two real signed-in accounts in
-  this environment. The 12-tab browser session was full and was not replaced.
-- The two-account acceptance in step 5 remains the next manual verification.
+- The two-wallet acceptance used standalone wallets, not two Google-linked
+  accounts; that account-specific path remains untested.
+- The accepted build has one non-blocking console 404 from service-worker
+  registration at `/wallet/sw.js`; it does not affect chat, balances or payments.
 - The first P1/P2/P3 release order matters; see above. P1 account contacts and
   relay blocks are not retroactive to clients that stay on the old build.
 - The production gateway's `/v1/confirmations/{hash}` and `/v1/tx/{hash}` routes
