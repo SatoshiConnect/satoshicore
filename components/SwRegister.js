@@ -9,6 +9,8 @@
 // and a registration error is not a wallet error.
 import { useEffect } from 'react';
 
+import { serviceWorkerRegistration } from '../lib/serviceWorkerRegistration';
+
 export default function SwRegister() {
   useEffect(() => {
     if (process.env.NODE_ENV !== 'production') return;
@@ -19,9 +21,10 @@ export default function SwRegister() {
     if (!secure) return;
 
     const register = () => {
-      // document.baseURI already includes the deployment base path.
-      const url = new URL('sw.js', document.baseURI).toString();
-      navigator.serviceWorker.register(url, { scope: './' }).catch(() => {});
+      // The service worker lives at the deployment root. A page at /wallet/
+      // must not register /wallet/sw.js, which does not exist.
+      const { url, scope } = serviceWorkerRegistration(process.env.NEXT_PUBLIC_BASE_PATH);
+      navigator.serviceWorker.register(url, { scope }).catch(() => {});
     };
 
     if (document.readyState === 'complete') register();

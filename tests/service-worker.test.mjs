@@ -12,6 +12,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 
+import { serviceWorkerRegistration } from '../lib/serviceWorkerRegistration.js';
+
 const SW_PATH = join(process.cwd(), 'out', 'sw.js');
 const ORIGIN = 'https://satoshicore.org';
 // Read the cache name from the worker itself, so bumping VERSION never makes
@@ -86,6 +88,21 @@ const get = (path, mode = 'cors') => ({
   url: `${ORIGIN}${path}`,
   method: 'GET',
   mode,
+});
+
+test('registration resolves from the deployment root, not /wallet/', () => {
+  assert.deepEqual(serviceWorkerRegistration(''), {
+    url: '/sw.js',
+    scope: '/',
+  });
+  assert.deepEqual(serviceWorkerRegistration('/satoshicore'), {
+    url: '/satoshicore/sw.js',
+    scope: '/satoshicore/',
+  });
+  assert.deepEqual(serviceWorkerRegistration('/satoshicore/'), {
+    url: '/satoshicore/sw.js',
+    scope: '/satoshicore/',
+  });
 });
 
 test('chain/account API paths bypass the worker entirely', () => {
