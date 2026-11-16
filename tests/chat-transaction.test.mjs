@@ -108,6 +108,30 @@ test('a pending exact hash stays pending until its closed-ledger verdict arrives
   assert.deepEqual(pending, { status: 'pending', hash: HASH });
 });
 
+test('the message time reaches the indexer only as an exact-hash freshness hint', async () => {
+  let seen = null;
+  const result = await verifyCard({
+    submittedAt: 1_800_000_000,
+    readConfirmation: async (...args) => {
+      seen = args;
+      return { hash: HASH, status: 'confirmed', ledger: 420, result_code: 'txSUCCESS' };
+    },
+  });
+  assert.deepEqual(seen, [HASH, 1_800_000_000]);
+  assert.equal(result.status, 'finalized');
+
+  let invalidHint = 'unset';
+  await verifyCard({
+    submittedAt: Number.NaN,
+    readConfirmation: async (hash, hint) => {
+      invalidHint = hint;
+      return { hash, status: 'pending' };
+    },
+    readDetail: async () => transaction(),
+  });
+  assert.equal(invalidHint, null, 'a malformed clock value is never sent');
+});
+
 test('wrong network, hash, party, amount, operation kind, or asset all fail closed', async () => {
   const wrongNetwork = await verifyCard({
     verifyNetwork: async () => ({ ok: true, network: 'some other network' }),

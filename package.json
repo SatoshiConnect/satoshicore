@@ -13,6 +13,7 @@
     "test:contacts": "node --test tests/contacts.test.mjs",
     "test:relay-gates": "node --test tests/chat-relay-gates.test.mjs",
     "test:chat-payments": "node --test tests/chat-payment-request.test.mjs tests/chat-transaction.test.mjs tests/chat-client.test.mjs",
+    "verify:messenger-p3": "node scripts/verify-messenger-p3.mjs",
     "test:biometric": "node --test tests/biometric-unlock.test.mjs",
     "test:drive": "node --test tests/drive-backup.test.mjs",
     "test:binding": "node --test tests/wallet-binding.test.mjs",

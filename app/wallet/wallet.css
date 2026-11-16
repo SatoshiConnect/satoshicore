@@ -1227,6 +1227,15 @@ body:has(.nw-root) .site-footer {
   align-self: flex-end; background: var(--accent-tint); border-color: rgba(76, 111, 255, 0.28);
 }
 .nw-chat-text { color: var(--text); white-space: pre-wrap; word-break: break-word; }
+/* A transaction card is a claim with a verdict attached, so it gets its own
+ * edge and a compact action row instead of reading as ordinary message text. */
+.nw-chat-tx-card {
+  display: flex; flex-direction: column; gap: 2px; min-width: 0;
+  border-left: 3px solid var(--accent); padding-left: 9px;
+}
+.nw-chat-tx-card > strong { font-size: 13px; }
+.nw-chat-tx-card .nw-btn-row { margin-top: 6px; }
+.nw-chat-tx-card .nw-chip-btn { padding: 5px 9px; font-size: 12px; }
 .nw-chat-input {
   width: 100%; resize: vertical; min-height: 52px;
   background: var(--surface-2, rgba(255, 255, 255, 0.04));

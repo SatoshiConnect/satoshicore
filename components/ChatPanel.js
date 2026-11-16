@@ -532,7 +532,7 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSe
                   && transactionCard.from === message.from
                   && ((transactionCard.from === address && transactionCard.to === peer)
                     || (transactionCard.from === peer && transactionCard.to === address)) ? (
-                  <ChatTransactionCard card={transactionCard} />
+                  <ChatTransactionCard card={transactionCard} sentAt={message.at} />
                 ) : transactionCard ? (
                   <div className="nw-chat-text">
                     <strong>Unverified transaction message</strong>

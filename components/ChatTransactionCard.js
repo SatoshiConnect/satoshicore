@@ -17,20 +17,22 @@ function cardLabel(status) {
   return 'Unverified · status unknown';
 }
 
-export default function ChatTransactionCard({ card }) {
+export default function ChatTransactionCard({ card, sentAt }) {
   const [state, setState] = useState({ status: 'checking' });
   const [attempt, setAttempt] = useState(0);
+  const submittedAt = Number.isSafeInteger(sentAt) && sentAt > 0
+    ? Math.floor(sentAt / 1000) : null;
 
   useEffect(() => {
     let alive = true;
     setState({ status: 'checking' });
-    verifyTransactionCard(card).then((result) => {
+    verifyTransactionCard(card, { submittedAt }).then((result) => {
       if (alive) setState(result);
     }).catch(() => {
       if (alive) setState({ status: 'unknown', reason: 'verification_failed' });
     });
     return () => { alive = false; };
-  }, [card.hash, card.amount, card.from, card.to, attempt]);
+  }, [card.hash, card.amount, card.from, card.to, submittedAt, attempt]);
 
   const verified = state.status === 'finalized' || state.status === 'failed';
   const href = explorerHrefFor(card.hash);

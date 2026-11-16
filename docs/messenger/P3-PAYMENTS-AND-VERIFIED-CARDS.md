@@ -1,7 +1,10 @@
 # P3 — payment requests and verified transaction cards
 
-Status: **implemented and locally verified, not deployed.** No transaction was
-broadcast, no real funds were used, and nothing changed on Mainnet.
+Status: **release candidate verified; not deployed.** The hashing/verification
+path has been checked against real Mainnet reads, a shadow gateway and synthetic
+wallets. No transaction was broadcast, no real funds were used, and nothing
+changed on Mainnet. Deployment order and the remaining operational gates are in
+`RELEASE-READINESS.md`.
 
 ## Payment request
 
@@ -41,9 +44,12 @@ the two wallets in the current thread.
 
 `components/ChatTransactionCard.js` begins with **Checking exact transaction…**
 then calls `verifyTransactionCard()`; there is no polling loop. It first calls
-`getConfirmation(hash)` and respects that exact-hash result: `pending` is shown
-as pending; `unknown`/`not_found` remain unknown. Only a `confirmed`/`failed`
-verdict proceeds to `GET /v1/tx/{hash}`, where the detail has to agree. It shows
+`getConfirmation(hash, submittedAt)` and respects that exact-hash result:
+`pending` is shown as pending; `unknown`/`not_found` remain unknown. The message
+time is passed only as `submitted_at`, which the indexer may use to downgrade an
+unobserved hash to `not_found` after its window; it can never create a
+confirmation. Only a `confirmed`/`failed` verdict proceeds to
+`GET /v1/tx/{hash}`, where the detail has to agree. It shows
 **Verified · Finalized** only when all these conditions hold:
 
 1. `verifyNetworkIdentity()` returned `ok` and the exact configured network ID;
@@ -83,7 +89,7 @@ signing logic was added to chat or the relay.
 ```
 node --test tests/chat-payment-request.test.mjs \
   tests/chat-transaction.test.mjs tests/chat-client.test.mjs
-  tests 20  pass 20  fail 0  (exit 0)
+  tests 21  pass 21  fail 0  (exit 0)
 ```
 
 * payment-request exact integer / sender binding / malformed marker / range
@@ -93,11 +99,32 @@ node --test tests/chat-payment-request.test.mjs \
 * pending exact-hash verdict → pending without fetching transaction details
 * wrong network/hash/party/amount/operation/asset or inconsistent result → unknown
 * indexer outage → unknown
+* message time reaches the indexer only as a freshness hint; malformed clocks are
+  not sent
 * two synthetic wallets publish keys, exchange encrypted request and card through
   a local HTTP relay, decrypt at recipient, and compare the authenticated sender
 
-No live gateway, Google account, Firestore, Mainnet, signing key or transaction
-was used for these tests.
+No live gateway, Google account, Firestore, Mainnet signing key or transaction
+was used by the unit/integration tests. A separate read-only check does use real
+Mainnet data:
+
+```
+node scripts/verify-messenger-p3.mjs
+  PASS exact network identity
+  PASS known Mainnet transfer finalizes from its exact hash
+  PASS same hash with a different amount stays unknown
+
+NSAT_GATEWAY_URL=http://127.0.0.1:8798 node scripts/verify-messenger-p3.mjs --require-relay-gates
+  PASS network identity
+  PASS exact historical transfer → finalized (ledger 301705)
+  PASS mismatched amount → unknown (transaction_mismatch)
+  PASS P2 block gate served by the shadow gateway
+  4/4 passed; no key published, no message stored, no transaction submitted
+```
+
+The known transaction is `6de0ea9e…fe4d` (10,000 NSAT, ledger 301705), read from
+the production confirmation/detail endpoints through the shadow gateway. The
+script is read-only and never imports a funded key.
 
 ## Limits
 
@@ -110,5 +137,11 @@ was used for these tests.
   still session-only. No scheduler or per-conversation polling was introduced.
 * Neither the request code nor the card is deployed to production.
 * `node --test` validates these units and the local relay path; it is not a
-  live-indexer account-isolation test and it does not demonstrate a Mainnet
-  payment.
+  live-indexer account-isolation test and it does not demonstrate a newly sent
+  Mainnet payment.
+* The production gateway currently predates P2. A signed read of its block route
+  answered `not found`, so the P2 gateway must ship before this web build; see
+  `RELEASE-READINESS.md`.
+* The screen has not been visually exercised with two real signed-in accounts in
+  this environment; the read-only production path and synthetic relay path are
+  the evidence that exists.
