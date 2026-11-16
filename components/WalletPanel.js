@@ -1571,6 +1571,7 @@ export default function WalletPanel() {
               address={active?.pubkey || watchAddress || ''}
               contacts={chatContacts}
               relayOrigin={CHAT_RELAY_ORIGIN}
+              onSendTo={(address) => { setDest(address); setPage('send'); }}
               onBack={() => setPage('activity')} />
           )}
 

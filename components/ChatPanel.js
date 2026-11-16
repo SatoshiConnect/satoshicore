@@ -21,7 +21,7 @@ import { resolveProfileHandle } from '../lib/profile';
 
 const shortAddr = (value) => (value ? `${value.slice(0, 6)}…${value.slice(-4)}` : '');
 
-export default function ChatPanel({ seed32, address, contacts, relayOrigin, onBack }) {
+export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSendTo, onBack }) {
   const client = useRef(null);
   const [peer, setPeer] = useState('');
   const [thread, setThread] = useState([]);          // { id, from, text, ts|at, own }
@@ -31,6 +31,9 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onBa
   const [friends, setFriends] = useState([]);
   const [addTarget, setAddTarget] = useState('');
   const [addState, setAddState] = useState({ busy: false, note: '', error: '' });
+  // Which @id resolved to which address, for the lifetime of this screen.
+  const [peerIds, setPeerIds] = useState({});
+  const [copyState, setCopyState] = useState('');
 
   const relayConfigured = Boolean(relayOrigin);
   const readOnly = !seed32;
@@ -128,6 +131,7 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onBa
       const walletAddress = await resolveTarget(parsed);
       const stored = addFriend(typeof window === 'undefined' ? null : window.localStorage, address, walletAddress);
       setFriends(stored.friends);
+      if (parsed.kind === 'id') setPeerIds((current) => ({ ...current, [walletAddress]: parsed.value }));
       setAddTarget('');
       const label = parsed.kind === 'id' ? `${parsed.value} · ${shortAddr(walletAddress)}` : shortAddr(walletAddress);
       setAddState({
@@ -138,6 +142,16 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onBa
     } catch (error) {
       setAddState({ busy: false, note: '', error: String(error?.message || error) });
     }
+  }
+
+  async function copyPeerAddress() {
+    try {
+      await navigator.clipboard.writeText(peer);
+      setCopyState('done');
+    } catch {
+      setCopyState('failed');
+    }
+    setTimeout(() => setCopyState(''), 2500);
   }
 
   function forgetFriend(target) {
@@ -278,6 +292,34 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onBa
         </h2>
         <p className="nw-small nw-dim" style={{ margin: '6px 0 0' }}>
           Ciphertext only on the relay. Keys come from this wallet — nobody else can read these.
+        </p>
+
+        {/* Everything needed to pay this person, in one place: the public
+         * address is the only thing the chat can hand over — the site never
+         * stores an email, and a profile is an @id plus this same address. */}
+        <div className="nw-kv" style={{ marginTop: 10 }}>
+          <span className="nw-k">Wallet address</span>
+          <span className="nw-v nw-small nw-mono" style={{ wordBreak: 'break-all' }}>{peer}</span>
+        </div>
+        {peerIds[peer] ? (
+          <div className="nw-kv">
+            <span className="nw-k">Profile</span>
+            <span className="nw-v nw-small nw-mono">{peerIds[peer]}</span>
+          </div>
+        ) : null}
+        <div className="nw-btn-row" style={{ marginTop: 8 }}>
+          <button type="button" className="nw-chip-btn" onClick={copyPeerAddress}>
+            {copyState === 'done' ? 'Address copied ✓' : copyState === 'failed' ? 'Copy failed — select it above' : 'Copy address'}
+          </button>
+          {onSendTo ? (
+            <button type="button" className="nw-send-btn" onClick={() => onSendTo(peer)}>
+              Send NSAT to this address
+            </button>
+          ) : null}
+        </div>
+        <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
+          To send coins you only need this address. An email is never stored here — the profile keeps
+          an @id and a public address and nothing else — so ask for an email directly if you need one.
         </p>
 
         {inboxState.phase === 'loading' && (
