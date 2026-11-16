@@ -143,6 +143,15 @@ hello was to send someone money first.
   a plaintext chat left on a shared device is worse than a lost one.
 - A friend who is also a past counterparty appears once, with the “friend”
   badge; “Remove” only forgets the name, never anything on the relay.
+- The thread itself is the hand-off point for paying someone: it shows the full
+  wallet address (selectable, with a copy button), the `@id` when that is what
+  you added, and **Send NSAT to this address**, which fills the wallet's send
+  form with it. The address is enough to send — nothing else is needed, and no
+  address is ever taken from the relay or from the message contents.
+- **Email is deliberately not part of this.** The site stores no email anywhere
+  (the profile keeps an `@id` and a public address; verification is the
+  provider's claim), so a friend's email can only come from the friend. The
+  screen says so instead of showing a field that would always be empty.
 
 ## Enabling it
 

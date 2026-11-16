@@ -298,6 +298,16 @@ browser 430×932 (/  local)                    gate มีสองปุ่ม,
 | เปลี่ยน ID / แสดง `@id` บนหน้ากระเป๋า | **DEPLOYED** (`ccd24cd`) | ID เก็บ `@` เป็นส่วนของค่า (`@somchai`) ไม่ใช่เติมตอนแสดง — label, ฟิลด์ `profileId` และเอกสาร claim `profileIds/@id` เป็นสตริงเดียวกัน; ชื่อที่ไม่มี `@` ถูกปฏิเสธ (ไม่แปลงเงียบ ๆ) การ์ดเป็นโหมดดู/แก้: `Edit profile` → แก้ ID + primary wallet → `Save changes` / `Cancel` โดยเขียนทั้งคู่ในครั้งเดียว (`saveProfileIn()`) จอง ID ใหม่ → เขียน → คืน ID เก่า; ล้มเหลว = คืน ID ใหม่และคงของเดิม; ปุ่ม `@id` ข้าง address คัดลอกค่าจริง; เทสต์ `tests/profile.test.mjs` 13/13 |
 
 ```
+รอบคู่สนทนา → ส่งเหรียญ (2026-11-16, `e4af3d7`)
+npm run build + npm test                                                   ✓ exit 0, 0 failing
+6 routes 200 · verify-deployed 8 passed / 0 failed (advisory เดิม)
+live index.html sha256 = da572b81…13 · webroot → satoshicore-webroot-pay-e4af3d7
+chunk ที่ live (`378-cf872affd7c50d5f.js`) มี "Send NSAT to this address"          ✓
+rollback: ln -sfn satoshicore-webroot-friends-0396435 ~/nsat-ops/satoshicore-webroot
+ข้อจำกัด: ต้องปลดล็อกกระเป๋าจึงจะเข้าหน้า Messages ได้ จึงยังไม่ได้คลิกส่งจริง
+```
+
+```
 รอบเพิ่มเพื่อนใน Messages (2026-11-16, `0396435`)
 npm test (รวม tests/chat-friends.test.mjs 7 เคส)                            ✓ exit 0, 0 failing
 firebase deploy --only firestore:rules (get 1 profile ให้ signed-in)         ✓ compiled + released
