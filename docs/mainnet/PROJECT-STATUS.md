@@ -298,6 +298,16 @@ browser 430×932 (/  local)                    gate มีสองปุ่ม,
 | เปลี่ยน ID / แสดง `@id` บนหน้ากระเป๋า | **DEPLOYED** (`ccd24cd`) | ID เก็บ `@` เป็นส่วนของค่า (`@somchai`) ไม่ใช่เติมตอนแสดง — label, ฟิลด์ `profileId` และเอกสาร claim `profileIds/@id` เป็นสตริงเดียวกัน; ชื่อที่ไม่มี `@` ถูกปฏิเสธ (ไม่แปลงเงียบ ๆ) การ์ดเป็นโหมดดู/แก้: `Edit profile` → แก้ ID + primary wallet → `Save changes` / `Cancel` โดยเขียนทั้งคู่ในครั้งเดียว (`saveProfileIn()`) จอง ID ใหม่ → เขียน → คืน ID เก่า; ล้มเหลว = คืน ID ใหม่และคงของเดิม; ปุ่ม `@id` ข้าง address คัดลอกค่าจริง; เทสต์ `tests/profile.test.mjs` 13/13 |
 
 ```
+รอบส่งเหรียญจากในแชท (2026-11-16, `02f5644`)
+npm run build + npm test                                                   ✓ exit 0, 0 failing
+6 routes 200 · verify-deployed 8 passed / 0 failed (advisory เดิม)
+live index.html sha256 = c89a9a84…d5 · webroot → satoshicore-webroot-coin-02f5644
+chunk ที่ live (`378-e14a81d98c77c74b.js`) มี "Confirm payment"                    ✓
+ใช้ `submitSend({toOverride, amountOverride})` เดิม (network identity, fee, reserve, confirm) ไม่มี logic เซ็นใหม่
+ไม่มีการยิงธุรกรรมจริงเพื่อทดสอบ (ห้ามใช้เงิน owner) · rollback: ln -sfn satoshicore-webroot-pay-e4af3d7 ~/nsat-ops/satoshicore-webroot
+```
+
+```
 รอบคู่สนทนา → ส่งเหรียญ (2026-11-16, `e4af3d7`)
 npm run build + npm test                                                   ✓ exit 0, 0 failing
 6 routes 200 · verify-deployed 8 passed / 0 failed (advisory เดิม)
