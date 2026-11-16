@@ -15,7 +15,7 @@ import {
 import { decodeSeed } from '../lib/nsatCodec';
 // Shared send gate (mirror of the desktop/prototype reason contract — one
 // source of truth for WHY a send is blocked; see NSAT-WALLET-BUTTON-STATES).
-import { sendPreflight, maxSendable, fmtGroup } from '../lib/nsatSendPreflight';
+import { sendPreflight, maxSendable, fmtGroup, cleanAmount } from '../lib/nsatSendPreflight';
 import { prepareChatCoinApproval } from '../lib/chatCoinApproval';
 import { startBalanceRefresh } from '../lib/walletBalanceRefresh.mjs';
 import {
@@ -964,11 +964,13 @@ export default function WalletPanel() {
     } catch { /* no session, no Drive grant, or offline: manual backup remains */ }
   }
 
+  // A single wallet needs no picker: locking clears the selection, so the one
+  // visible wallet is the target instead of leaving Unlock disabled.
+  const unlockTarget = unlockName || (wallets.length === 1 ? wallets[0].name : '');
+
   async function doUnlock(e) {
     e.preventDefault();
-    // A single wallet needs no picker: locking clears the selection, so the
-    // one visible wallet is the target instead of leaving Unlock disabled.
-    const name = unlockName || (wallets.length === 1 ? wallets[0].name : '');
+    const name = unlockTarget;
     if (!name) return;
     const password = unlockPass;
     setUnlockPass('');
@@ -1345,9 +1347,11 @@ export default function WalletPanel() {
         notify('The live network fee changed after review. Review the payment again; nothing was signed.', 'err');
         return false;
       }
-      const currentBalance = requireSufficientBalance ? readAccountBalance(source) : null;
       if (requireSufficientBalance) {
-        const amountText = value.replace(/[,_ ]/g, '');
+        // The review showed a balance; re-read it now so a stale figure cannot
+        // buy a transfer the account no longer covers.
+        const currentBalance = readAccountBalance(source);
+        const amountText = cleanAmount(value);
         if (currentBalance?.kind !== 'exact' || !/^\d+$/.test(amountText)
           || BigInt(currentBalance.value) < BigInt(amountText) + BigInt(baseFee)) {
           notify('Current confirmed balance is below amount plus network fee; nothing was signed.', 'err');
@@ -1475,7 +1479,6 @@ export default function WalletPanel() {
     const session = activeRef.current;
     const operationEpoch = lockEpoch.current;
     let approvalSeed;
-    let approvalPassword = approvalPasswordInput;
     try {
       if (approvalMethod === 'passkey' && biometricWallets.includes(session.name)) {
         // A new user-verified platform assertion is required for every chat send.
@@ -1484,30 +1487,27 @@ export default function WalletPanel() {
         if (approvalMethod === 'passkey') {
           return { ok: false, error: 'Device passkey approval is not enrolled for this wallet.' };
         }
-        if (!approvalPassword) {
+        if (!approvalPasswordInput) {
           return { ok: false, error: 'Enter this wallet’s password to approve the payment.' };
         }
-        approvalSeed = await keystoreUnlock(session.name, approvalPassword);
-        approvalPassword = '';
+        approvalSeed = await keystoreUnlock(session.name, approvalPasswordInput);
       }
       if (operationEpoch !== lockEpoch.current || activeRef.current !== session) {
         return { ok: false, error: 'Wallet locked during approval; nothing was signed.' };
       }
       const signingSeed = approvalSeed;
       approvalSeed = null;
-      let pendingSend;
-      try {
-        pendingSend = submitSend({
-          toOverride: to,
-          amountOverride: coinAmount,
-          createOverride: false,
-          approvalSeed: signingSeed,
-          requireSufficientBalance: true,
-          approvedFee: Number(approval.fee),
-        });
-      } finally {
-        zeroSeed(signingSeed);
-      }
+      // submitSend copies the seed synchronously before its first await, so this
+      // copy is dropped as soon as it hands the transaction to the pipeline.
+      const pendingSend = submitSend({
+        toOverride: to,
+        amountOverride: coinAmount,
+        createOverride: false,
+        approvalSeed: signingSeed,
+        requireSufficientBalance: true,
+        approvedFee: Number(approval.fee),
+      });
+      zeroSeed(signingSeed);
       const ok = await pendingSend;
       return {
         ok,
@@ -1517,7 +1517,6 @@ export default function WalletPanel() {
     } catch (error) {
       return { ok: false, error: String(error?.message || 'Payment approval failed.') };
     } finally {
-      approvalPassword = '';
       if (approvalSeed) zeroSeed(approvalSeed);
     }
   }
@@ -1540,8 +1539,6 @@ export default function WalletPanel() {
   // not signed in here: they are not listed, and the unlock form says so instead
   // of looking empty.
   const hiddenWallets = Math.max(0, keystoreList().length - wallets.length);
-  // The chosen unlock target, defaulting to the only wallet on the device.
-  const unlockTarget = unlockName || (wallets.length === 1 ? wallets[0].name : '');
 
   const ledger = net?.ledger ?? null;
 

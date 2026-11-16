@@ -22,6 +22,7 @@ import {
   FRIEND_LIMIT, addFriend, mergeContacts, parseFriendTarget, readFriends, removeFriend,
 } from '../lib/chatFriends';
 import { MAX_TEXT_LENGTH } from '../lib/e2eChat';
+import { cleanAmount, validateAmount } from '../lib/nsatSendPreflight';
 import { createPaymentRequestText, parsePaymentRequestText } from '../lib/chatPaymentRequest';
 import { createTransactionCardText, parseTransactionCardText } from '../lib/chatTransaction';
 import ChatTransactionCard from './ChatTransactionCard';
@@ -41,6 +42,12 @@ const clock = (at) => (at
   ? new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   : '');
 
+// A transfer bubble is only this chat's when the authenticated sender wrote it
+// and its two parties are the two wallets in the room.
+const cardInThisChat = (card, message, me, them) => card?.kind === 'transaction-card'
+  && card.from === message.from
+  && ((card.from === me && card.to === them) || (card.from === them && card.to === me));
+
 export default function ChatPanel({
   seed32, address, addresses = [], contacts, relayOrigin, onSendTo, onSendCoins,
   fee, balance, netVerified = false, networkIdentity = '',
@@ -51,7 +58,7 @@ export default function ChatPanel({
   const [thread, setThread] = useState([]);          // { id, from, text, ts|at, own }
   const [draft, setDraft] = useState('');
   const [state, setState] = useState({ busy: false, note: '', published: false });
-  const [inboxState, setInboxState] = useState({ phase: 'idle', error: '' });
+  const [inboxError, setInboxError] = useState('');
   // Saved chats per wallet address. The list is readable while the wallet is
   // locked: these are public addresses this device already stored, not keys.
   const [friendsByOwner, setFriendsByOwner] = useState({});
@@ -62,7 +69,7 @@ export default function ChatPanel({
   // Which @id resolved to which address, for the lifetime of this screen.
   const [peerIds, setPeerIds] = useState({});
   const [copyState, setCopyState] = useState('');
-  const [coin, setCoin] = useState({ amount: '', phase: 'idle', note: '', error: '' });
+  const [coin, setCoin] = useState({ amount: '', phase: 'idle', error: '' });
   const [approvalPassword, setApprovalPassword] = useState('');
   const [approvalMethod, setApprovalMethod] = useState(canApproveWithPasskey ? 'passkey' : 'password');
   // Presentation: the add form, the room's details panel, and which composer
@@ -70,7 +77,7 @@ export default function ChatPanel({
   const [showAdd, setShowAdd] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [sheet, setSheet] = useState('none');        // none | menu | pay | request
-  const threadEndRef = useRef(null);
+  const threadRef = useRef(null);
   // Blocking is a relay-side control: the list lives with the wallet address,
   // not with this screen, so it is read back rather than remembered here.
   const [gate, setGate] = useState({ busy: false, blocked: false, note: '', error: '' });
@@ -83,11 +90,15 @@ export default function ChatPanel({
 
   const relayConfigured = Boolean(relayOrigin);
   const readOnly = !seed32;
-  const coinDigits = coin.amount.replace(/[,_ ]/g, '');
-  const coinAmountOk = /^\d+$/.test(coinDigits) && BigInt(coinDigits || '0') > 0n;
-  const requestDigits = request.amount.replace(/[,_ ]/g, '');
-  const requestAmountOk = /^\d+$/.test(requestDigits) && BigInt(requestDigits || '0') > 0n;
-  const peerName = peer ? (peerIds[peer] || shortAddr(peer)) : '';
+  const coinDigits = cleanAmount(coin.amount);
+  const coinAmountOk = validateAmount(coin.amount).ok;
+  const requestDigits = cleanAmount(request.amount);
+  const requestAmountOk = validateAmount(request.amount).ok;
+  const peerName = peerIds[peer] || shortAddr(peer);
+  // The only thing that may be disabled by a missing secret: approval. The
+  // message box and the chat list never depend on it.
+  const approvalReady = !readOnly && netVerified && fee != null && balance != null
+    && (approvalMethod === 'passkey' ? canApproveWithPasskey : Boolean(approvalPassword));
 
   // Friends are public addresses the person named themselves; the transcript
   // stays in this session. Every wallet this session may see contributes its
@@ -104,14 +115,9 @@ export default function ChatPanel({
     setFriendsByOwner(next);
   }, [ownerKey]);
 
-  const ownAddresses = new Set([address, ...addresses].filter(Boolean).map((value) => value.toUpperCase()));
-  const savedFriends = new Set();
-  for (const list of Object.values(friendsByOwner)) {
-    for (const contact of list) {
-      if (!ownAddresses.has(String(contact).toUpperCase())) savedFriends.add(contact);
-    }
-  }
-  const friendList = [...savedFriends];
+  const ownAddresses = new Set(ownerKey.split(',').map((value) => value.toUpperCase()));
+  const friendList = [...new Set(Object.values(friendsByOwner).flat())]
+    .filter((contact) => !ownAddresses.has(String(contact).toUpperCase()));
   const known = mergeContacts(contacts, friendList);
 
   useEffect(() => {
@@ -140,10 +146,8 @@ export default function ChatPanel({
   // A new message should be visible without hunting for it: keep the end of the
   // transcript in view, the way a chat app opens on the latest line.
   useEffect(() => {
-    const end = threadEndRef.current;
-    if (end && typeof end.scrollIntoView === 'function') {
-      end.scrollIntoView({ block: 'nearest' });
-    }
+    const list = threadRef.current;
+    if (list) list.scrollTop = list.scrollHeight;
   }, [thread.length, peer]);
 
   const openThread = useCallback(async (target) => {
@@ -152,7 +156,7 @@ export default function ChatPanel({
     setGate({ busy: false, blocked: false, note: '', error: '' });
     setSheet('none');
     if (!client.current || !seed32) return;
-    setInboxState({ phase: 'loading', error: '' });
+    setInboxError('');
     try {
       const blockedList = await client.current.blocks({ seed32, address });
       setGate({ busy: false, blocked: blockedList.includes(String(target).toUpperCase()), note: '', error: '' });
@@ -173,14 +177,11 @@ export default function ChatPanel({
           }));
         return [...current, ...incoming].sort((a, b) => (a.at || 0) - (b.at || 0));
       });
-      setInboxState({
-        phase: undecryptable.length ? 'partial' : 'ready',
-        error: undecryptable.length
-          ? `${undecryptable.length} message(s) stayed on the relay: this wallet cannot open them.`
-          : '',
-      });
+      setInboxError(undecryptable.length
+        ? `${undecryptable.length} message(s) stayed on the relay: this wallet cannot open them.`
+        : '');
     } catch (error) {
-      setInboxState({ phase: 'unavailable', error: String(error?.message || error) });
+      setInboxError(String(error?.message || error));
     }
   }, [address, seed32]);
 
@@ -278,11 +279,11 @@ export default function ChatPanel({
     }
   }
 
-  /** A coin "sticker": send NSAT to the person in this conversation. */
-  async function sendCoinSticker() {
-    const amount = coin.amount.replace(/[,_ ]/g, '');
+  /** Send NSAT to the person in this conversation; only this signs. */
+  async function sendMoney() {
+    const amount = cleanAmount(coin.amount);
     if (!onSendCoins || !peer) return;
-    setCoin((current) => ({ ...current, phase: 'sending', error: '', note: '' }));
+    setCoin((current) => ({ ...current, phase: 'sending', error: '' }));
     try {
       const pendingApproval = onSendCoins(peer, amount, approvalPassword, approvalMethod);
       setApprovalPassword('');
@@ -307,8 +308,7 @@ export default function ChatPanel({
       setThread((current) => [...current, {
         id: `c${Date.now()}`, peer, from: address, text: cardText, at: Date.now(), own: true,
       }]);
-      setCoin({ amount: '', phase: 'idle', note: '', error: '' });
-      setApprovalPassword('');
+      setCoin({ amount: '', phase: 'idle', error: '' });
       setApprovalMethod(canApproveWithPasskey ? 'passkey' : 'password');
       // The transfer bubble in the thread is the record; the sheet has done its
       // job and the conversation comes back.
@@ -323,6 +323,12 @@ export default function ChatPanel({
     } finally {
       setApprovalPassword('');
     }
+  }
+
+  /** Opening a conversation needs the wallet key; the list itself never does. */
+  function requestUnlock(contact = '') {
+    if (contact) setPendingPeer(contact);
+    onRequestUnlock?.(contact);
   }
 
   async function copyPeerAddress() {
@@ -389,7 +395,7 @@ export default function ChatPanel({
             onClick={() => {
               // A new chat is saved against the wallet that owns it, so it needs
               // an unlocked wallet to know whose list to write to.
-              if (readOnly) { onRequestUnlock?.(); return; }
+              if (readOnly) { requestUnlock(); return; }
               setShowAdd((value) => !value);
               setAddState({ busy: false, note: '', error: '' });
             }}>
@@ -452,11 +458,7 @@ export default function ChatPanel({
                       // Opening a conversation needs the wallet key (the messages
                       // are encrypted with it), so that — and only that — asks
                       // for the unlock. The list itself never does.
-                      if (readOnly) {
-                        setPendingPeer(contact);
-                        onRequestUnlock?.(contact);
-                        return;
-                      }
+                      if (readOnly) { requestUnlock(contact); return; }
                       void publishOwnKey();
                       void openThread(contact);
                     }}>
@@ -495,7 +497,7 @@ export default function ChatPanel({
   return (
     <section className="nw-chat-room" aria-label={`Chat with ${peerName}`}>
       <header className="nw-chat-roomhead">
-        <button type="button" className="nw-chat-back" aria-label="Back to chats"
+        <button type="button" className="nw-chat-iconbtn nw-chat-back" aria-label="Back to chats"
           onClick={() => {
             setPeer('');
             setThread([]);
@@ -561,13 +563,13 @@ export default function ChatPanel({
         </div>
       )}
 
-      {inboxState.error ? (
+      {inboxError ? (
         <p className="nw-small" style={{ margin: 0, color: 'var(--warn)' }} role="alert">
-          {inboxState.error}
+          {inboxError}
         </p>
       ) : null}
 
-      <ul className="nw-chat-thread" aria-live="polite">
+      <ul ref={threadRef} className="nw-chat-thread" aria-live="polite">
         {thread.length === 0 && (
           <li className="nw-chat-empty">
             <strong>No messages yet</strong>
@@ -579,10 +581,7 @@ export default function ChatPanel({
           const transactionCard = parseTransactionCardText(message.text, message.from);
           return (
             <li key={message.id} className={'nw-chat-bubble' + (message.own ? ' is-own' : '')}>
-              {transactionCard?.kind === 'transaction-card'
-                && transactionCard.from === message.from
-                && ((transactionCard.from === address && transactionCard.to === peer)
-                  || (transactionCard.from === peer && transactionCard.to === address)) ? (
+              {cardInThisChat(transactionCard, message, address, peer) ? (
                 <ChatTransactionCard card={transactionCard} sentAt={message.at} />
               ) : transactionCard ? (
                 <div className="nw-chat-text">
@@ -619,7 +618,6 @@ export default function ChatPanel({
             </li>
           );
         })}
-        <li ref={threadEndRef} className="nw-chat-end" aria-hidden />
       </ul>
 
       {/* Attachments sit beside the conversation, the way a photo or a sticker
@@ -649,7 +647,7 @@ export default function ChatPanel({
             <button type="button" className="nw-chat-iconbtn" aria-label="Close send money"
               onClick={() => {
                 setSheet('none');
-                setCoin({ amount: '', phase: 'idle', note: '', error: '' });
+                setCoin({ amount: '', phase: 'idle', error: '' });
                 setApprovalPassword('');
               }}>×</button>
           </div>
@@ -690,13 +688,13 @@ export default function ChatPanel({
                 </label>
               ) : <p className="nw-small nw-dim">Confirm with Face ID / device passkey to sign.</p>}
               <div className="nw-btn-row" style={{ marginTop: 8 }}>
-                <button type="button" className="nw-send-btn" onClick={sendCoinSticker}
-                  disabled={readOnly || coin.phase === 'sending' || !netVerified || fee == null || balance == null || (approvalMethod === 'password' && !approvalPassword) || (approvalMethod === 'passkey' && !canApproveWithPasskey)}>
+                <button type="button" className="nw-send-btn" onClick={sendMoney}
+                  disabled={coin.phase === 'sending' || !approvalReady}>
                   {coin.phase === 'sending' ? 'Waiting for approval…' : approvalMethod === 'passkey' ? 'Approve with Face ID' : 'Approve and send'}
                 </button>
                 <button type="button" className="nw-chip-btn"
                   onClick={() => {
-                    setCoin((current) => ({ ...current, phase: 'idle', error: '', note: '' }));
+                    setCoin((current) => ({ ...current, phase: 'idle', error: '' }));
                     setApprovalPassword('');
                   }}
                   disabled={coin.phase === 'sending'}>Cancel</button>
@@ -709,7 +707,7 @@ export default function ChatPanel({
                   placeholder="0" aria-label="Amount of NSAT to send"
                   onChange={(event) => setCoin({
                     amount: event.target.value.replace(/[^\d,_ ]/g, ''),
-                    phase: 'idle', note: '', error: '',
+                    phase: 'idle', error: '',
                   })}
                   disabled={readOnly || coin.phase === 'sending'} />
                 <span className="nw-small nw-dim">NSAT</span>
@@ -718,7 +716,7 @@ export default function ChatPanel({
                 {balance == null ? 'Balance unavailable' : `Available ${String(balance)} NSAT`}
               </p>
               <button type="button" className="nw-send-btn"
-                onClick={() => setCoin((current) => ({ ...current, phase: 'confirm', note: '', error: '' }))}
+                onClick={() => setCoin((current) => ({ ...current, phase: 'confirm', error: '' }))}
                 disabled={readOnly || coin.phase === 'sending' || !coinAmountOk}>
                 Next
               </button>
@@ -726,9 +724,6 @@ export default function ChatPanel({
           )}
           {coin.error ? (
             <p className="nw-small" style={{ margin: 0, color: 'var(--warn)' }} role="alert">{coin.error}</p>
-          ) : null}
-          {coin.note ? (
-            <p className="nw-small nw-dim" style={{ margin: 0 }} role="status">{coin.note}</p>
           ) : null}
         </div>
       ) : null}

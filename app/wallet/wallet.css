@@ -1236,11 +1236,10 @@ body:has(.nw-root) .site-footer {
   font-size: 18px; line-height: 1;
   background: var(--card); border: 1px solid var(--border-soft); color: var(--text);
 }
+/* Back is the same round control, one step smaller and without a card edge. */
 .nw-chat-back {
-  width: 34px; height: 34px; min-width: 34px; padding: 0;
-  border-radius: 999px; display: grid; place-items: center;
-  font-size: 22px; line-height: 1;
-  background: none; color: var(--text);
+  width: 34px; height: 34px; min-width: 34px;
+  font-size: 22px; background: none; border: 0;
 }
 .nw-chat-avatar {
   width: 42px; height: 42px; min-width: 42px; border-radius: 50%;
@@ -1256,11 +1255,12 @@ body:has(.nw-root) .site-footer {
 }
 .nw-chat-rowmain:hover { background: var(--hover); }
 .nw-chat-rowtext { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.nw-chat-rowname {
+/* A row's name and a room's name truncate the same way. */
+.nw-chat-rowname, .nw-chat-whoname {
   color: var(--text); font-weight: 600;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.nw-chat-rowsub {
+.nw-chat-rowsub, .nw-chat-whosub {
   color: var(--text-dim); font-size: 12px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
@@ -1273,11 +1273,6 @@ body:has(.nw-root) .site-footer {
   padding-bottom: 10px; border-bottom: 1px solid var(--row-border);
 }
 .nw-chat-who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.nw-chat-whoname {
-  color: var(--text); font-weight: 600;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.nw-chat-whosub { color: var(--text-dim); font-size: 12px; }
 .nw-chat-details, .nw-chat-sheet {
   display: flex; flex-direction: column; gap: 8px;
   padding: 10px 12px;
@@ -1301,7 +1296,6 @@ body:has(.nw-root) .site-footer {
 }
 .nw-chat-text { color: var(--text); white-space: pre-wrap; word-break: break-word; }
 .nw-chat-meta { margin-top: 3px; font-size: 11px; color: var(--text-dim); text-align: right; }
-.nw-chat-end { height: 1px; list-style: none; }
 /* Attachments above the composer, like a messenger's "+" tray: round icons
  * with a label, so money reads as one more thing you can send. */
 .nw-chat-attach {

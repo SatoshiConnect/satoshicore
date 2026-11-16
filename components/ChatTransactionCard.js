@@ -3,11 +3,12 @@
 import { useEffect, useState } from 'react';
 
 import { verifyTransactionCard } from '../lib/chatTransaction';
+import { fmtGroup } from '../lib/nsatSendPreflight';
+
 const explorerHrefFor = (hash) => /^[0-9a-f]{64}$/.test(String(hash || '').toLowerCase())
   ? `/explorer/?q=${String(hash).toLowerCase()}` : '';
 
 const shortAddress = (value) => (value ? `${value.slice(0, 6)}…${value.slice(-6)}` : 'unknown');
-const groupDigits = (value) => String(value || '').replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 
 function cardLabel(status) {
   if (status === 'finalized') return 'Verified · Finalized';
@@ -50,7 +51,7 @@ export default function ChatTransactionCard({ card, sentAt }) {
     <div className="nw-chat-text nw-chat-tx-card">
       <div className="nw-chat-tx-top">
         <span className="nw-chat-tx-mark" aria-hidden>◎</span>
-        <span className="nw-chat-tx-amount">{groupDigits(amount)} NSAT</span>
+        <span className="nw-chat-tx-amount">{fmtGroup(amount)} NSAT</span>
       </div>
       <div className="nw-chat-tx-status">{cardLabel(state.status)}</div>
       {state.status === 'failed' ? (
