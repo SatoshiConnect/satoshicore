@@ -1,11 +1,26 @@
 # Messenger P3 — release readiness
 
-Status: **release candidate ready for owner-approved deployment; nothing was deployed
-in this pass.** The web and gateway code are verified locally against the live
-Mainnet read path. Production runtime, data and funds were not changed.
+Status: **deployed to production on 2026-11-16 after owner approval.**
+The web, Firestore rules and gateway P2 are live. No transaction was submitted
+and no funds were moved.
 
-Branch: `feat/messenger-payments-p3` · baseline commit `0c38578` · this document
-and the verification polish are committed on top of it.
+Branch: `feat/messenger-payments-p3` · deployed commit `694dcf0` (on top of
+`0c38578`).
+
+## Deployment record
+
+| Item | Value |
+|---|---|
+| Firestore rules | ruleset `e4bac944-e3f3-4765-83fd-a4583dccb127`, sha256 `5ce23c7b…` |
+| Gateway relay | `chat-relay.mjs` sha256 `a0218edb…`, launchd `org.satoshicore.gateway` running |
+| Webroot | `~/nsat-ops/satoshicore-webroot-messenger-p3-694dcf0` |
+| Live index | sha256 `1f5b615981bfa7a88a1500e4d48a91db3b24b8a1f1c4023a10784c86b5b81c20` |
+| Production checks | P3 checker 4/4; `verify:deployed` 8 passed / 0 failed / 2 advisory |
+| Artifact checks | markers for `NSAT-PAY-REQUEST/1`, `NSAT-TX/1`, `Finalized`, `Unverified`, `nw-chat-tx-card`, `chatEnabled:!0`; security scan 63 files clean; no source maps |
+| Rollback | webroot `satoshicore-webroot-menu-02f5644`; gateway backups in `~/nsat-ops/backups/p3-20261116/`; previous ruleset `1f1bbce6-cf44-49f2-b2da-59b46b55a2e9` |
+
+Headless Chromium rendered the signed-out gate (`Open your wallet`) with no page
+application errors. Two-account browser acceptance was **not** performed.
 
 ## What is ready
 
@@ -34,7 +49,7 @@ The script never publishes a chat key, stores a message or submits a transaction
 It computes one throwaway Ed25519 key in memory only for a signed GET of the
 wallet's own block list.
 
-## Deployment order (owner approval required)
+## Deployment order (procedure used after owner approval)
 
 **Do not publish the web build before the gateway.** The current production
 gateway predates P2: a signed `GET /api/v1/chat/blocks` answers `not found`. A web
@@ -92,29 +107,35 @@ build containing P3 would still send messages, but every thread would show
    the middle dot in `Verified · Finalized` to the JS escape `\xb7`, so grep for
    the stable words rather than the full label.)
 
-5. **Browser acceptance with disposable wallets.** Two newly created, unfunded
-   wallets on the live site: add each other by address, send one payment request,
-   verify the recipient sees the exact amount and the **Review payment** button.
-   Do not approve a send. A transaction card cannot be exercised end-to-end
-   without a real on-chain payment, so that path is covered by the read-only
-   Mainnet check and the synthetic relay round-trip instead.
+5. **Browser acceptance with disposable wallets (not performed in this pass).**
+   Two newly created, unfunded wallets on the live site: add each other by
+   address, send one payment request, verify the recipient sees the exact amount
+   and the **Review payment** button. Do not approve a send. A transaction card
+   cannot be exercised end-to-end without a real on-chain payment, so that path
+   is covered by the read-only Mainnet check and the synthetic relay round-trip
+   instead.
 
 ## Rollback
 
-1. **Web first:** switch `~/nsat-ops/satoshicore-webroot` back to the previous
-   versioned webroot. This removes the new UI before the old gateway can make its
-   block/request controls look broken.
-2. **Gateway:** restore the backed-up `chat-relay.mjs` and restart the launchd
-   job. The additive chat tables do not need a schema rollback.
-3. **Rules:** restore the previous Firestore ruleset from Console version history.
+1. **Web first:** switch `~/nsat-ops/satoshicore-webroot` back to
+   `satoshicore-webroot-menu-02f5644`. This removes the new UI before the old
+   gateway can make its block/request controls look broken.
+2. **Gateway:** restore `~/nsat-ops/backups/p3-20261116/chat-relay.mjs.pre-p3`
+   and restart the launchd job. The additive chat tables do not need a schema
+   rollback.
+3. **Rules:** re-release ruleset
+   `1f1bbce6-cf44-49f2-b2da-59b46b55a2e9` (also saved as
+   `~/nsat-ops/backups/p3-20261116/firestore.rules.live`) or restore it from
+   Console version history.
 4. Undelivered ciphertext in `chat.sqlite` is not deleted by rollback.
 
 ## Remaining limits and gates
 
-- No production deploy, Firebase rules release, Mainnet transaction or funded-key
-  use happened in this pass. Each of those is a separate owner decision.
+- Production deploy and Firebase rules release happened in this pass; no Mainnet
+  transaction or funded-key use did.
 - The screen has not been visually exercised with two real signed-in accounts in
   this environment. The 12-tab browser session was full and was not replaced.
+- The two-account acceptance in step 5 remains the next manual verification.
 - The first P1/P2/P3 release order matters; see above. P1 account contacts and
   relay blocks are not retroactive to clients that stay on the old build.
 - The production gateway's `/v1/confirmations/{hash}` and `/v1/tx/{hash}` routes

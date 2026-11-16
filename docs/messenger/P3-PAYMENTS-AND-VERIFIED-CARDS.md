@@ -1,10 +1,10 @@
 # P3 — payment requests and verified transaction cards
 
-Status: **release candidate verified; not deployed.** The hashing/verification
-path has been checked against real Mainnet reads, a shadow gateway and synthetic
-wallets. No transaction was broadcast, no real funds were used, and nothing
-changed on Mainnet. Deployment order and the remaining operational gates are in
-`RELEASE-READINESS.md`.
+Status: **deployed to production 2026-11-16** from commit `694dcf0`
+(`satoshicore-webroot-messenger-p3-694dcf0`). The hashing/verification path has
+been checked against real Mainnet reads, the deployed gateway and synthetic
+wallets. No transaction was broadcast, no real funds were used, and no ledger
+state changed. Deployment evidence and rollback are in `RELEASE-READINESS.md`.
 
 ## Payment request
 
@@ -135,13 +135,11 @@ script is read-only and never imports a funded key.
   labeled **Unverified** if there is no exact matching ledger transaction.
 * No persistence or status reconciliation after closing the chat. The thread is
   still session-only. No scheduler or per-conversation polling was introduced.
-* Neither the request code nor the card is deployed to production.
 * `node --test` validates these units and the local relay path; it is not a
   live-indexer account-isolation test and it does not demonstrate a newly sent
   Mainnet payment.
-* The production gateway currently predates P2. A signed read of its block route
-  answered `not found`, so the P2 gateway must ship before this web build; see
-  `RELEASE-READINESS.md`.
+* The deployed gateway now serves the P2 block route; the public checker passes
+  4/4. See `RELEASE-READINESS.md` for the deployed hashes and rollback.
 * The screen has not been visually exercised with two real signed-in accounts in
-  this environment; the read-only production path and synthetic relay path are
-  the evidence that exists.
+  this environment; the read-only production path, headless signed-out render
+  and synthetic relay path are the evidence that exists.
