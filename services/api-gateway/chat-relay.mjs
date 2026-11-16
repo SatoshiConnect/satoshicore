@@ -28,11 +28,19 @@ const MAX_ENVELOPE_BYTES = 8 * 1024;
 // long enough for another device to fetch it. Seven days is the window: after
 // that the relay forgets it, and a device that opted into saved chat history
 // asks for it to be forgotten as soon as its own copy is stored.
-const MAX_MESSAGES_PER_RECIPIENT = 2_000;
+//
+// The ceiling is a safety valve, not the normal limit: at 8 KiB per envelope,
+// 5,000 rows is a bounded ~40 MB per mailbox, and seven days of one sender at
+// the full 200/day quota is at most 1,400. An unopened room therefore stops
+// filling the shared mailbox long before this number, and a mailbox answers
+// `429` only when several senders have maxed out at once. Housekeeping removes
+// expired rows, so the ceiling comes back down on its own.
+const MAX_MESSAGES_PER_RECIPIENT = 5_000;
 const RETENTION_DAYS = 7;
-// Housekeeping runs on request at most this often, so a quiet relay still
-// forgets expired mail instead of waiting for the next delivery.
-const GC_INTERVAL_MS = 60_000;
+// Housekeeping runs on request at most this often. The delete is indexed on
+// `received_at`, so this is cheap; a short interval keeps a busy relay from
+// counting expired mail toward the ceiling.
+const GC_INTERVAL_MS = 15_000;
 const MAX_KEYS_PER_ADDRESS = 3;
 const FRESHNESS_MS = 120_000;
 // One wallet cannot fill somebody else's mailbox: this is the per-day ceiling
@@ -133,6 +141,7 @@ function openDatabase(dbPath) {
       received_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS chat_messages_inbox ON chat_messages (recipient, id);
+    CREATE INDEX IF NOT EXISTS chat_messages_peer ON chat_messages (recipient, sender, id);
     CREATE INDEX IF NOT EXISTS chat_messages_gc ON chat_messages (received_at);
     -- A recipient's block list. The relay never publishes it and never tells a
     -- sender that a block exists; it only stops storing their mail.
@@ -303,10 +312,20 @@ export function createChatRelay({
       if (method === 'GET' && path === '/api/v1/chat/messages') {
         const since = Number(query.since);
         const limit = Math.min(Math.max(Number(query.limit) || 100, 1), 200);
-        const rows = db.prepare(
-          `SELECT id, envelope, received_at FROM chat_messages
-           WHERE recipient = ? AND id > ? ORDER BY id ASC LIMIT ?`,
-        ).all(address, Number.isFinite(since) ? since : 0, limit);
+        // `peer` narrows a read to one conversation. Opening a room asks for
+        // that sender's pending mail instead of paging the whole mailbox, while
+        // the list poll stays on `since` (its own cursor).
+        const peer = typeof query.peer === 'string' ? query.peer.toUpperCase() : '';
+        if (peer && !B58_FREE.test(peer)) return json(400, { error: 'invalid peer' });
+        const rows = peer
+          ? db.prepare(
+            `SELECT id, envelope, received_at FROM chat_messages
+             WHERE recipient = ? AND sender = ? AND id > ? ORDER BY id ASC LIMIT ?`,
+          ).all(address, peer, Number.isFinite(since) ? since : 0, limit)
+          : db.prepare(
+            `SELECT id, envelope, received_at FROM chat_messages
+             WHERE recipient = ? AND id > ? ORDER BY id ASC LIMIT ?`,
+          ).all(address, Number.isFinite(since) ? since : 0, limit);
         return json(200, {
           messages: rows.map((row) => ({ id: row.id, receivedAt: row.received_at, envelope: JSON.parse(row.envelope) })),
         });

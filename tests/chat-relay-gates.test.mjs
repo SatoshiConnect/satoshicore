@@ -289,3 +289,40 @@ test('expired mail is collected before the mailbox ceiling is applied', () => {
     h.done();
   }
 });
+
+test('a mailbox read can be narrowed to one conversation', () => {
+  const h = harness();
+  try {
+    assert.equal(h.sendAToB('from a').status, 200);
+    const fromC = h.relay.handle(h.signed({
+      keyPair: KEY_C, address: ADDRESS_C, method: 'POST', path: '/api/v1/chat/messages',
+      body: {
+        envelope: sealMessage({
+          seed32: SEED_C, from: ADDRESS_C, to: ADDRESS_B, recipientX25519Pub: PUB_B, text: 'from c',
+        }),
+      },
+    }));
+    assert.equal(fromC.status, 200);
+
+    const page = (query) => h.relay.handle({
+      ...h.signed({ keyPair: KEY_B, address: ADDRESS_B, method: 'GET', path: '/api/v1/chat/messages' }),
+      query,
+    });
+    assert.equal(page({}).body.messages.length, 2);
+
+    const onlyA = page({ peer: ADDRESS_A });
+    assert.equal(onlyA.status, 200);
+    assert.equal(onlyA.body.messages.length, 1);
+    assert.equal(onlyA.body.messages[0].envelope.from, ADDRESS_A);
+
+    const onlyC = page({ peer: ADDRESS_C });
+    assert.equal(onlyC.body.messages.length, 1);
+    assert.equal(onlyC.body.messages[0].envelope.from, ADDRESS_C);
+
+    assert.equal(page({ peer: 'Gshort' }).status, 400);
+    // `peer` composes with `since`, so one room can be paged on its own.
+    assert.equal(page({ peer: ADDRESS_A, since: onlyA.body.messages[0].id }).body.messages.length, 0);
+  } finally {
+    h.done();
+  }
+});

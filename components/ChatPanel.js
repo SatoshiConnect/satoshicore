@@ -25,7 +25,10 @@ import {
 import { MAX_TEXT_LENGTH } from '../lib/e2eChat';
 import { archiveMessages, readArchivedThread, readArchivePrefs } from '../lib/chatArchive';
 import {
-  countUnread, formatUnreadAge, markPeerSeen, mergeUnreadSnapshots, newestArrivalByPeer,
+  ackIds, archiveAndClearRelay, relayIdOf,
+} from '../lib/chatRelayArchive';
+import {
+  countNewMessages, formatUnreadAge, markPeerSeen, mergeUnreadSnapshots,
   readCursor, readReadMarks, readUnreadSnapshot, writeCursor, writeUnreadSnapshot,
 } from '../lib/chatUnread';
 import { cleanAmount, validateAmount } from '../lib/nsatSendPreflight';
@@ -58,6 +61,12 @@ const previewText = (text, from) => {
   return text;
 };
 
+// A relay row and a saved line are different shapes; the thread uses one.
+const toThreadMessage = (message) => ({
+  id: `m${message.id}`, peer: message.from, from: message.from,
+  text: message.text, at: message.ts, receivedAt: message.receivedAt, own: false,
+});
+
 // One line per id, oldest first: the session transcript, the saved history and
 // a fresh relay read can all describe the same message.
 const mergeById = (...lists) => {
@@ -73,46 +82,6 @@ const mergeById = (...lists) => {
 function rememberIfEnabled({ seed32, address, peer, messages }) {
   if (!seed32 || !peer || !messages?.length || !readArchivePrefs().enabled) return;
   void archiveMessages({ seed32, address, peer, messages }).catch(() => {});
-}
-
-const relayIdOf = (message) => Number(
-  typeof message?.id === 'string' ? message.id.replace(/^[mr]/, '') : message?.id,
-);
-
-// Saved history is what lets the relay forget early: store the message
-// encrypted-at-rest first, then acknowledge exactly the ids this device really
-// stored. If saving fails the copy stays on the relay until its 7-day
-// retention — an archive error must never be the reason a message is lost.
-// Without saved history this is a no-op and the relay keeps the message.
-async function archiveAndClearRelay({ seed32, address, messages, ack }) {
-  if (!seed32 || !address || !readArchivePrefs().enabled || !messages?.length) return 0;
-  if (typeof ack !== 'function') return 0;
-  const byPeer = new Map();
-  for (const message of messages) {
-    const peer = String(message?.peer || message?.from || '').toUpperCase();
-    if (!peer || typeof message.text !== 'string' || !message.text) continue;
-    const relayId = relayIdOf(message);
-    if (!Number.isSafeInteger(relayId)) continue;
-    const group = byPeer.get(peer) || [];
-    // One id shape for the archive whichever screen saved the line first.
-    group.push({ ...message, id: `m${relayId}` });
-    byPeer.set(peer, group);
-  }
-  const storedIds = [];
-  for (const [peer, group] of byPeer) {
-    try {
-      const stored = await archiveMessages({ seed32, address, peer, messages: group });
-      if (stored > 0) storedIds.push(...group.map(relayIdOf));
-    } catch {
-      // Keep the relay copy.
-    }
-  }
-  if (storedIds.length === 0) return 0;
-  try {
-    return await ack({ seed32, address, ids: storedIds });
-  } catch {
-    return 0;
-  }
 }
 
 // A transfer bubble is only this chat's when the authenticated sender wrote it
@@ -151,6 +120,12 @@ export default function ChatPanel({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [sheet, setSheet] = useState('none');        // none | menu | pay | request
   const threadRef = useRef(null);
+  // Guards for the async poll: a snapshot computed while the room changed, a
+  // room was read, or a newer poll started must not overwrite the newer view.
+  const pollSeq = useRef(0);
+  const readEpoch = useRef(0);
+  const peerRef = useRef('');
+  useEffect(() => { peerRef.current = peer; }, [peer]);
   // Blocking is a relay-side control: the list lives with the wallet address,
   // not with this screen, so it is read back rather than remembered here.
   const [gate, setGate] = useState({ busy: false, blocked: false, note: '', error: '' });
@@ -160,7 +135,6 @@ export default function ChatPanel({
   // is what the locked list shows.
   const [unreadByPeer, setUnreadByPeer] = useState({});
   const [unreadPreview, setUnreadPreview] = useState({});
-  const [unreadAt, setUnreadAt] = useState(0);
   const [lockedUnread, setLockedUnread] = useState({ at: 0, counts: {} });
 
   useEffect(() => {
@@ -201,7 +175,6 @@ export default function ChatPanel({
   const known = mergeContacts(contacts, friendList);
   // The unlocked list uses live counts; a locked one uses the last snapshot.
   const unreadCounts = readOnly ? lockedUnread.counts : unreadByPeer;
-  const unreadCheckedAt = readOnly ? lockedUnread.at : unreadAt;
 
   useEffect(() => {
     if (!relayConfigured) return undefined;
@@ -238,9 +211,7 @@ export default function ChatPanel({
   // addresses and integers only.
   useEffect(() => {
     if (!address) return;
-    const snapshot = readUnreadSnapshot(address);
-    setUnreadByPeer(snapshot.counts);
-    setUnreadAt(snapshot.at);
+    setUnreadByPeer(readUnreadSnapshot(address).counts);
     setUnreadPreview({});
   }, [address]);
 
@@ -249,17 +220,27 @@ export default function ChatPanel({
   // or when the relay's 7-day retention expires.
   const pollInbox = useCallback(async () => {
     if (!client.current || !seed32) return;
+    const room = peer;
+    const seq = pollSeq.current + 1;
+    pollSeq.current = seq;
+    const epoch = readEpoch.current;
     try {
-      // Only what arrived after this device's cursor: the mailbox is never
-      // emptied by reading, so a full re-fetch every 15 s would be waste.
+      // Only what arrived after this device's cursor: re-reading the whole
+      // mailbox every 15 s would be waste.
       const since = readCursor(address);
       const { messages } = await client.current.peek({ seed32, address, since });
+      if (seq !== pollSeq.current || peerRef.current !== room || epoch !== readEpoch.current) return;
       const marks = readReadMarks(address);
       // A fresh device (cursor 0) sees the whole mailbox, so counts are rebuilt
-      // from scratch; after that they are incremental.
-      const counts = since === 0
-        ? countUnread(messages, marks)
-        : { ...readUnreadSnapshot(address).counts };
+      // from it; after that they are incremental. The open room is excluded on
+      // purpose: its lines are on screen, so they have been read here.
+      const { counts, newest } = countNewMessages({
+        messages,
+        marks,
+        openPeer: peer,
+        previous: readUnreadSnapshot(address).counts,
+        reset: since === 0,
+      });
       const previews = {};
       const fresh = [];
       let maxId = since;
@@ -269,14 +250,8 @@ export default function ChatPanel({
         // The open conversation is on screen, so it is being read now: it never
         // carries a badge, and its lines go straight into the thread.
         if (peer && from === peer) {
-          fresh.push({
-            id: `m${message.id}`, peer: message.from, from: message.from,
-            text: message.text, at: message.ts, receivedAt: message.receivedAt, own: false,
-          });
+          fresh.push(toThreadMessage(message));
           continue;
-        }
-        if (since !== 0 && Number(message.receivedAt || 0) > (marks[from] || 0)) {
-          counts[from] = (counts[from] || 0) + 1;
         }
         const previous = previews[from];
         if (!previous || (message.ts || 0) > previous.at) {
@@ -287,24 +262,32 @@ export default function ChatPanel({
       // the helper keeps it when saving failed.
       if (messages.length) {
         await archiveAndClearRelay({
-          seed32,
-          address,
-          messages: messages.map((message) => ({
-            id: message.id, peer: message.from, from: message.from, text: message.text, at: message.ts,
-          })),
-          ack: client.current.ack.bind(client.current),
+          seed32, address, messages, ack: client.current.ack.bind(client.current),
         });
       }
+      // A newer poll, a room switch, or a room read while this was in flight
+      // makes these counts stale. Dropping them is safer than writing an older
+      // view over a newer one; the next poll reads from the same cursor.
+      if (seq !== pollSeq.current || peerRef.current !== room || epoch !== readEpoch.current) return;
+      // The open room is on screen, so advance its read mark before the cursor:
+      // a crash between the two must not leave mail counted yet never re-read.
+      if (fresh.length) markPeerSeen(address, peer, newest[peer] || 0);
       const at = Date.now();
       setUnreadByPeer(counts);
       setUnreadPreview((current) => ({ ...current, ...previews }));
-      setUnreadAt(at);
       writeUnreadSnapshot(address, { counts, at });
       if (maxId > since) writeCursor(address, maxId);
       if (fresh.length) {
-        markPeerSeen(address, peer, newestArrivalByPeer(fresh)[peer] || 0);
+        // The room is on screen, so these lines have been read here. With saved
+        // history the archive step above already acknowledged what it stored;
+        // without it they are acknowledged now, otherwise the relay keeps a copy
+        // nobody needs and a later list poll could count it again.
         setThread((current) => mergeById(current, fresh));
-        rememberIfEnabled({ seed32, address, peer, messages: fresh });
+        if (!readArchivePrefs().enabled) {
+          await ackIds({
+            seed32, address, ids: fresh.map(relayIdOf), ack: client.current.ack.bind(client.current),
+          });
+        }
       }
     } catch {
       // A failed poll keeps the last known counts: a stale badge is better than a
@@ -327,6 +310,9 @@ export default function ChatPanel({
   }, [thread.length, peer]);
 
   const openThread = useCallback(async (target) => {
+    // A poll that was counting this room as unread before the tap must not write
+    // its counts after the room has been read.
+    readEpoch.current += 1;
     setPeer(target);
     setThread((current) => current.filter((message) => message.peer === target));
     setGate({ busy: false, blocked: false, note: '', error: '' });
@@ -351,29 +337,35 @@ export default function ChatPanel({
       setGate({ busy: false, blocked: false, note: '', error: 'Could not read the block list for this wallet.' });
     }
     try {
-      // Read the whole pending mailbox for this wallet. Nothing is deleted: the
-      // relay copy is how another device — or this one after a reload — still
-      // gets the conversation.
-      const { messages, undecryptable } = await client.current.peek({ seed32, address });
-      const incoming = messages
-        .filter((message) => String(message.from).toUpperCase() === String(target).toUpperCase())
-        .map((message) => ({
-          id: `m${message.id}`, peer: message.from, from: message.from,
-          text: message.text, at: message.ts, receivedAt: message.receivedAt, own: false,
-        }));
+      // Read this conversation's pending mail only, not the whole mailbox:
+      // opening a room must not page through every other room's backlog.
+      const { messages, undecryptable } = await client.current.peek({ seed32, address, peer: target });
+      // The room may have changed while the read was in flight; its lines must
+      // not be merged into (or acknowledged from) another conversation.
+      if (peerRef.current !== target) return;
+      const incoming = messages.map(toThreadMessage);
       setThread((current) => mergeById(current, incoming));
-      rememberIfEnabled({ seed32, address, peer: target, messages: incoming });
       setInboxError(undecryptable.length
         ? `${undecryptable.length} message(s) stayed on the relay: this wallet cannot open them.`
         : '');
       // This device has now read the room. Opening it only moves the local read
       // mark; the ciphertext stays on the relay until somebody clears it.
-      markPeerSeen(address, target, newestArrivalByPeer(incoming)[target] || Date.now());
+      const { newest } = countNewMessages({ messages: incoming, reset: true });
+      if (newest[target]) markPeerSeen(address, target, newest[target]);
       // Saved history means the relay copy can go now; without it the copy stays
       // for the retention window so another device can still fetch it.
       await archiveAndClearRelay({
         seed32, address, messages: incoming, ack: client.current.ack.bind(client.current),
       });
+      // Opening a room is reading it: without saved history this is where the
+      // relay copy for these lines is dropped (with history, it was dropped as
+      // soon as the archive write succeeded).
+      if (!readArchivePrefs().enabled && incoming.length) {
+        await ackIds({
+          seed32, address, ids: incoming.map(relayIdOf), ack: client.current.ack.bind(client.current),
+        });
+      }
+      if (peerRef.current !== target) return;
       // Opening a room clears its own badge. Other badges keep what this device
       // last counted: their mail may already be stored here and gone from the
       // relay, so a relay-only recount would wrongly zero them.
@@ -381,7 +373,6 @@ export default function ChatPanel({
       delete counts[target];
       const at = Date.now();
       setUnreadByPeer(counts);
-      setUnreadAt(at);
       setUnreadPreview((current) => {
         const next = { ...current };
         delete next[target];
@@ -671,7 +662,7 @@ export default function ChatPanel({
               const added = friendList.includes(contact);
               const count = unreadCounts[contact] || 0;
               const preview = readOnly ? null : unreadPreview[contact];
-              const checked = formatUnreadAge(unreadCheckedAt);
+              const checked = readOnly ? formatUnreadAge(lockedUnread.at) : '';
               const subtitle = readOnly
                 ? (count > 0
                   ? `${count} new${checked ? ` · checked ${checked}` : ''}`
@@ -727,7 +718,8 @@ export default function ChatPanel({
           </p>
           <p className="nw-small nw-dim" style={{ margin: 0 }}>
             Messages stay on the relay for up to 7 days so your other devices can fetch them.
-            With chat history on, this device removes its relay copy as soon as the message is saved here.
+            Opening a chat removes the messages it shows; with chat history on, saving a copy removes
+            the relay copy too.
           </p>
         </div>
       </section>
@@ -749,7 +741,7 @@ export default function ChatPanel({
         <span className="nw-chat-avatar" aria-hidden>{initials(peer, peerIds[peer])}</span>
         <div className="nw-chat-who">
           <span className="nw-chat-whoname">{peerName}</span>
-          <span className="nw-chat-whosub">Encrypted · relay keeps 7 days</span>
+          <span className="nw-chat-whosub">Encrypted chat</span>
         </div>
         <button type="button" className="nw-chat-iconbtn" aria-label="Refresh messages"
           disabled={state.busy || readOnly} onClick={() => void openThread(peer)}>↻</button>
@@ -798,8 +790,9 @@ export default function ChatPanel({
             <p className="nw-small" style={{ margin: 0, color: 'var(--warn)' }} role="alert">{gate.error}</p>
           ) : null}
           <p className="nw-small nw-dim" style={{ margin: 0 }}>
-            Messages stay on the relay up to 7 days. With chat history on, a saved copy here lets the
-            relay drop its own sooner; a device that has not fetched the message in that window loses it.
+            Opening this chat removes the messages you have seen from the relay. Anything left expires
+            after 7 days, and with chat history on a saved copy clears the relay sooner — a device that
+            has not fetched a message in that window loses it.
           </p>
           <p className="nw-small nw-dim" style={{ margin: 0 }}>
             An email is never stored here. The profile keeps an @id and this public address only.

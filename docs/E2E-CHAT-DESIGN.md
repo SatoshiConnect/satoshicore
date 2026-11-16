@@ -81,7 +81,8 @@ Rules the relay enforces on its own, because a client check is not a control:
 - signature over `nsc-chat|1|METHOD|path|address|ts|nonce`, timestamp within
   ±120 s, nonce single-use (replay → 409);
 - envelope sender must equal the signer (a wallet cannot post as another);
-- envelope ≤ 8 KiB, mailbox ≤ 2,000 pending per recipient, retention 7 days;
+- envelope ≤ 8 KiB, mailbox ≤ 5,000 pending per recipient (configurable with
+  `NSAT_CHAT_MAX_PENDING`), retention 7 days;
 - housekeeping (delete past retention, stale quota rows) runs at most once a
   minute on an incoming request, and `gc()` is exposed on the relay so an
   operator or a test can collect without waiting for traffic;
@@ -196,22 +197,33 @@ Several devices can sign in with the same wallet, so a copy has to survive on
 the relay long enough for another device to fetch it — but not forever:
 
 - `client.peek()` fetches the mailbox (`GET /chat/messages`, `since=` plus
-  `limit=`, paged up to 10 × 200) and decrypts locally. It never deletes.
-- A copy leaves the relay in exactly two ways:
+  `limit=`, paged up to 10 × 200) and decrypts locally. It never deletes. The
+  list passes its own `since` cursor; opening a room also passes `peer=` so the
+  relay returns only that conversation's pending mail instead of the mailbox.
+- A copy leaves the relay in exactly three ways:
   1. **This device stored it in saved chat history.** The screen archives the
      decrypted message locally, then calls `client.ack({ ids })` for the ids that
      were actually written. Archiving is opt-in and idempotent; if the write
      fails, nothing is acknowledged and the relay copy stays.
-  2. **The 7-day retention passes.** The relay deletes expired rows on requests
-     (at most once a minute) and again on the send path before it applies the
-     mailbox ceiling, so a quiet mailbox still empties itself and expired mail
-     never causes a false “full”.
-- Reading alone never deletes. Opening a conversation moves only this device's
-  read mark; the transcript is not the relay's copy, and other rooms keep their
-  badges.
+  2. **The message was read in the open room.** A line merged into the room on
+     screen is read here, so it is acknowledged (after the archive step above
+     when history is on). This is what keeps the relay from accumulating mail
+     nobody needs and keeps a later list poll from counting seen mail again.
+  3. **The 7-day retention passes.** The relay deletes expired rows on requests
+     (at most every 15 s, `NSAT_CHAT_GC_MS`) and again on the send path before it
+     applies the mailbox ceiling, so a quiet mailbox still empties itself and
+     expired mail never causes a false “full”.
+- A message that arrived while another room was open keeps its badge; opening
+  its room clears that badge and the relay copy.
+- The bottom **Chats** tab shows the same total: it subscribes to snapshot writes
+  from `lib/chatUnread.js` (an in-memory listener, no new storage) and reads the
+  open wallet's counts, or the merged per-wallet snapshot while locked — the
+  same rule the list uses, so the two cannot disagree. No message text is
+  involved, and the listener is dropped when the screen unmounts.
 - The list polls every 15 s while a wallet is unlocked, asking only for ids after
-  this device's cursor. Counts and the newest preview line live in memory for the
-  session; no preview text is ever written to storage.
+  this device's `scw-chat-cursor-v1` (a `since=` read, never a full mailbox
+  walk). Counts and the newest preview line live in memory for the session; no
+  preview text is ever written to storage.
 - Per-device state (`lib/chatUnread.js`) is address → number only:
   - `scw-chat-read-v1` — per peer, the newest relay arrival time this device has
     seen;
@@ -225,20 +237,25 @@ the relay long enough for another device to fetch it — but not forever:
 
 Consequences worth stating plainly:
 
-- With saved history **on**, the relay copy is short-lived: this device archives
-  and acknowledges every message it fetches. Another device that has not fetched
-  that message yet will not find it on the relay, and history does not sync
-  between devices (the Drive backup is a manual restore). A2 therefore favours
-  quick cleanup on devices that have history over a long shared backlog.
-- With saved history **off**, a message stays on the relay up to 7 days and is
-  then gone, read or not. A device that stays offline longer than that misses it.
-- The cap is 2,000 pending messages per recipient. With 7 days of retention, one
-  sender at the full 200/day ceiling holds at most 1,400 rows, so the ceiling is
-  a backstop for many senders rather than the normal limit. A full mailbox
-  answers `429` and the screen says the mailbox is full instead of dropping a
-  message.
-- Paging is `since`/`limit` (max 200 per page), so the poll walks only what came
-  after this device's cursor instead of re-reading the mailbox.
+- Reading in an open room removes the relay copy for every device. A device that
+  has not fetched that message yet will not find it, and history does not sync
+  between devices (the Drive backup is a manual restore). The 7-day window is
+  therefore the most a device can be away before unread mail disappears.
+- With saved history **on**, mail is also acknowledged as soon as the copy is
+  stored, so the relay copy can be even shorter than the retention window.
+- With saved history **off**, unread mail stays on the relay up to 7 days and is
+  then gone, read or not.
+- The cap is 5,000 pending messages per recipient — about 40 MB at the 8 KiB
+  envelope ceiling — and can be raised per operator with
+  `NSAT_CHAT_MAX_PENDING`. With 7 days of retention, one sender at the full
+  200/day ceiling holds at most 1,400 rows, so an unopened room cannot fill the
+  shared mailbox on its own. A full mailbox answers `429` and the screen says the
+  mailbox is full instead of dropping a message; expired rows are collected
+  before the ceiling is applied, so the count comes back down without a manual
+  step.
+- Paging is `since`/`limit` (max 200 per page). The list poll reads only what
+  came after its cursor, and opening a room narrows the read with `peer=` — no
+  screen pages the whole mailbox on a timer.
 
 ## Enabling it
 
@@ -306,14 +323,17 @@ a seed or a wallet file on the server.
 - `tests/chat-relay.test.mjs` (5) — strkey checksum, signature/staleness/replay
   rejection, key publish ownership, delivery only to the recipient, explicit ack,
   impersonation, oversize envelope.
-- `tests/chat-relay-gates.test.mjs` (8) — daily quota and its reset, blocks,
+- `tests/chat-relay-gates.test.mjs` (9) — daily quota and its reset, blocks,
   mailbox cap, 7-day retention with request-driven `gc()`, retention applied
-  before the cap on send, `since`/`limit` paging, and `deleted` reporting only
-  rows that existed.
-- `tests/chat-client.test.mjs` (7) — over a real HTTP server: canonical string
+  before the cap on send, `since`/`limit` paging, `peer=` narrowing a read to one
+  conversation, and `deleted` reporting only rows that existed.
+- `tests/chat-client.test.mjs` (9) — over a real HTTP server: canonical string
   agreement with the relay, two wallets exchanging a message, peek not deleting,
-  a second device reading what the first already read, clearing for both, no-key
-  recipient reported.
-- `tests/chat-unread.test.mjs` (11) — no-text snapshots, merge for a locked list,
-  per-device read marks that only move forward, the fetch cursor, and unread
-  counting by arrival time.
+  a second device reading what the first already read, clearing for both,
+  a message read in the open room leaving no badge or queued copy, a room read
+  fetching only its own conversation, no-key recipient reported.
+- `tests/chat-unread.test.mjs` (16) — no-text snapshots, merge for a locked list,
+  per-device read marks that only move forward, the fetch cursor, unread counting
+  by arrival time, the open-room rule (no badge for the room on screen, even
+  after going back to the list or rebuilding from the mailbox), and the
+  subscribe/notify signal behind the bottom-nav badge.

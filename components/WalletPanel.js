@@ -18,6 +18,7 @@ import { decodeSeed } from '../lib/nsatCodec';
 import { sendPreflight, maxSendable, fmtGroup, cleanAmount } from '../lib/nsatSendPreflight';
 import { prepareChatCoinApproval } from '../lib/chatCoinApproval';
 import { clearArchivedWallet, forgetArchiveKeys, readArchivePrefs } from '../lib/chatArchive';
+import { mergeUnreadSnapshots, readUnreadSnapshot, subscribeUnreadSnapshots } from '../lib/chatUnread';
 import { startBalanceRefresh } from '../lib/walletBalanceRefresh.mjs';
 import {
   ACCOUNT_SIGNED_OUT_EVENT, isFirebaseWebConfigured, loadGoogleAuth, signOutGoogleSession,
@@ -180,6 +181,10 @@ export default function WalletPanel() {
   const [profileId, setProfileId] = useState('');
   // ui
   const [page, setPage] = useState(CHAT_RELAY_ENABLED ? 'chat' : 'overview');
+  // Total "new" messages shown on the Chats tab. It is derived from the same
+  // local snapshot as the Chats list (addresses and integer counts only) and is
+  // refreshed whenever a poll writes a new snapshot.
+  const [navUnread, setNavUnread] = useState(0);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);      // { text, kind }
   // forms
@@ -523,6 +528,31 @@ export default function WalletPanel() {
     () => wallets.map((wallet) => wallet.pubkey).filter(Boolean),
     [wallets],
   );
+  // The bottom-nav badge reads the same snapshot as the Chats list — addresses
+  // and integer counts, never message text — and refreshes when a poll writes
+  // new counts. Duplicates are removed: an unlocked wallet can also be in the
+  // saved list, and its counts must not be added twice.
+  const navChatOwners = useMemo(() => {
+    const owners = [active?.pubkey || watchAddress || '', ...chatAddresses]
+      .map((value) => String(value || '').toUpperCase())
+      .filter(Boolean);
+    return Array.from(new Set(owners));
+  }, [active?.pubkey, watchAddress, chatAddresses]);
+  const navChatAddress = String(active?.pubkey || '').toUpperCase();
+  const navChatUnlocked = Boolean(active?.seed32 && navChatAddress);
+  useEffect(() => {
+    if (typeof window === 'undefined' || navChatOwners.length === 0) { setNavUnread(0); return undefined; }
+    const refresh = () => {
+      // Mirror the list exactly: the open wallet's own counts while unlocked, and
+      // the merged per-wallet snapshots while locked (same rule ChatPanel uses).
+      const counts = navChatUnlocked
+        ? readUnreadSnapshot(navChatAddress).counts
+        : mergeUnreadSnapshots(navChatOwners).counts;
+      setNavUnread(Object.values(counts).reduce((sum, value) => sum + value, 0));
+    };
+    refresh();
+    return subscribeUnreadSnapshots(refresh);
+  }, [navChatUnlocked, navChatAddress, navChatOwners]);
 
   // Chat contacts are the other side of transfers this address already has, so
   // nobody can start a conversation with a wallet that never touched this one.
@@ -1799,19 +1829,27 @@ export default function WalletPanel() {
        * even before a wallet exists (Activity is empty, Settings still holds
        * the link out to the rest of the site). */}
       <nav className="nw-bottomnav" aria-label="Wallet sections">
-          {NAV_PAGES.map((p) => (
-            <button key={p} type="button"
-              className={'nw-navitem' + (page === p ? ' is-active' : '')}
-              onClick={() => setPage(p)}
-              aria-current={page === p ? 'page' : undefined}>
-              <span className="nw-navicon" aria-hidden>
-                {p === 'overview'
-                  ? <NsatCoinMark className="nw-nav-coin" />
-                  : PAGE_GLYPH[p]}
-              </span>
-              <span className="nw-navlabel">{NAV_LABEL[p]}</span>
-            </button>
-          ))}
+          {NAV_PAGES.map((p) => {
+            const newChats = p === 'chat' ? navUnread : 0;
+            const unreadText = `${newChats} new message${newChats === 1 ? '' : 's'}`;
+            return (
+              <button key={p} type="button"
+                className={'nw-navitem' + (page === p ? ' is-active' : '')}
+                onClick={() => setPage(p)}
+                aria-current={page === p ? 'page' : undefined}
+                aria-label={newChats > 0 ? `${NAV_LABEL[p]}, ${unreadText}` : undefined}>
+                <span className="nw-navicon" aria-hidden>
+                  {p === 'overview'
+                    ? <NsatCoinMark className="nw-nav-coin" />
+                    : PAGE_GLYPH[p]}
+                </span>
+                <span className="nw-navlabel">{NAV_LABEL[p]}</span>
+                {newChats > 0 ? (
+                  <span className="nw-navbadge" aria-hidden>{newChats > 99 ? '99+' : newChats}</span>
+                ) : null}
+              </button>
+            );
+          })}
       </nav>
       </div>
 

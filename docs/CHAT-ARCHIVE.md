@@ -74,8 +74,9 @@ row        { key, owner, peer, id, at, iv, ct }        ← owner/peer/at are cle
    to the mailbox cap — the archive does not backfill from another device.
 8. **Saving here shortens the relay's copy.** Once a message is in this archive,
    the relay is asked to delete its copy, which is what keeps the mailbox small.
-   A device that has not fetched that message yet will not find it; with history
-   off, the relay copy instead lasts the full 7 days.
+   Reading a message in its room does the same even without history, so a device
+   that has not fetched a message before it is read elsewhere will not find it;
+   unread mail otherwise lasts the full 7 days.
 
 ## Implementation
 

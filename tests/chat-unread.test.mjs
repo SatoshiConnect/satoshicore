@@ -149,16 +149,107 @@ test('the fetch cursor remembers the highest relay id for this device', async ()
 });
 
 test('unread counts only what arrived after this device last read the room', async () => {
-  const { countUnread, newestArrivalByPeer } = await import('../lib/chatUnread.js');
+  const { countNewMessages } = await import('../lib/chatUnread.js');
   const messages = [
     { from: PEER, receivedAt: 100 },
     { from: PEER, receivedAt: 200 },
     { from: PEER2, receivedAt: 150 },
     { from: 'nope', receivedAt: 300 },
   ];
-  assert.deepEqual(countUnread(messages, {}), { [PEER]: 2, [PEER2]: 1 });
-  assert.deepEqual(countUnread(messages, { [PEER]: 100 }), { [PEER]: 1, [PEER2]: 1 });
-  assert.deepEqual(countUnread(messages, { [PEER]: 200, [PEER2]: 150 }), {});
-  assert.deepEqual(countUnread([], {}), {});
-  assert.deepEqual(newestArrivalByPeer(messages), { [PEER]: 200, [PEER2]: 150 });
+  const rebuild = (marks = {}) => countNewMessages({ messages, marks, reset: true });
+
+  assert.deepEqual(rebuild().counts, { [PEER]: 2, [PEER2]: 1 });
+  assert.deepEqual(rebuild({ [PEER]: 100 }).counts, { [PEER]: 1, [PEER2]: 1 });
+  assert.deepEqual(rebuild({ [PEER]: 200, [PEER2]: 150 }).counts, {});
+  assert.deepEqual(countNewMessages({ messages: [], marks: {} }).counts, {});
+  assert.deepEqual(rebuild().newest, { [PEER]: 200, [PEER2]: 150 });
+
+  // Opening a room returns its newest arrival for the read mark, and its own
+  // messages do not become a badge.
+  const opened = countNewMessages({ messages, openPeer: PEER, reset: true });
+  assert.deepEqual(opened.counts, { [PEER2]: 1 });
+  assert.equal(opened.newest[PEER], 200);
+});
+
+test('a message that arrives while its room is open never becomes a list badge', async () => {
+  const {
+    countNewMessages, markPeerSeen, readReadMarks,
+  } = await import('../lib/chatUnread.js');
+  const storage = memoryStorage();
+  const arrival = { from: PEER, receivedAt: 1_000 };
+
+  // Poll while the room is open: the line is on screen, so it is not counted,
+  // and the batch reports how far the room has been seen.
+  const open = countNewMessages({ messages: [arrival], marks: {}, openPeer: PEER, reset: true });
+  assert.deepEqual(open.counts, {});
+  assert.equal(open.newest[PEER], 1_000);
+  markPeerSeen(OWNER, PEER, open.newest[PEER], storage);
+
+  // Back on the list: the next poll asks only after the cursor, fetches nothing,
+  // and the badge stays empty.
+  const back = countNewMessages({
+    messages: [], marks: readReadMarks(OWNER, storage), previous: open.counts,
+  });
+  assert.deepEqual(back.counts, {});
+
+  // Even rebuilding from the whole mailbox agrees, because the read mark moved.
+  const rebuild = countNewMessages({
+    messages: [arrival], marks: readReadMarks(OWNER, storage), reset: true,
+  });
+  assert.deepEqual(rebuild.counts, {});
+});
+
+test('a message for another room is counted while one room is open', async () => {
+  const { countNewMessages } = await import('../lib/chatUnread.js');
+  const { counts, newest } = countNewMessages({
+    messages: [{ from: PEER, receivedAt: 100 }, { from: PEER2, receivedAt: 200 }],
+    marks: {},
+    openPeer: PEER,
+    reset: true,
+  });
+  assert.deepEqual(counts, { [PEER2]: 1 });
+  assert.equal(newest[PEER], 100);
+});
+
+test('a rebuild never resurrects the badge of the open room', async () => {
+  const { countNewMessages } = await import('../lib/chatUnread.js');
+  const { counts } = countNewMessages({
+    messages: [{ from: PEER, receivedAt: 100 }],
+    marks: {},
+    openPeer: PEER,
+    previous: { [PEER]: 3, [PEER2]: 1 },
+    reset: true,
+  });
+  assert.deepEqual(counts, {});
+});
+
+test('a snapshot write notifies local listeners, and the signal carries no text', async () => {
+  const {
+    subscribeUnreadSnapshots, writeUnreadSnapshot, clearUnreadSnapshot,
+  } = await import('../lib/chatUnread.js');
+  const storage = memoryStorage();
+  let calls = 0;
+  const off = subscribeUnreadSnapshots(() => { calls += 1; });
+
+  const saved = writeUnreadSnapshot(OWNER, {
+    at: 10, counts: { [PEER]: 2 }, text: 'must not travel', preview: 'hello',
+  }, storage);
+  assert.deepEqual(saved, { at: 10, counts: { [PEER]: 2 } });
+  assert.equal(calls, 1, 'the bottom-nav badge hears about a new count');
+
+  clearUnreadSnapshot(OWNER, storage);
+  assert.equal(calls, 2);
+
+  off();
+  writeUnreadSnapshot(OWNER, { at: 11, counts: { [PEER]: 1 } }, storage);
+  assert.equal(calls, 2, 'an unsubscribed listener is not called');
+});
+
+test('a throwing listener cannot break the snapshot write', async () => {
+  const { subscribeUnreadSnapshots, writeUnreadSnapshot } = await import('../lib/chatUnread.js');
+  const storage = memoryStorage();
+  const off = subscribeUnreadSnapshots(() => { throw new Error('boom'); });
+  assert.doesNotThrow(() => writeUnreadSnapshot(OWNER, { at: 5, counts: { [PEER]: 1 } }, storage));
+  off();
+  assert.deepEqual(readUnreadSnapshot(OWNER, storage), { at: 5, counts: { [PEER]: 1 } });
 });

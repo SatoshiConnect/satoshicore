@@ -585,6 +585,7 @@ body:has(.nw-root) .site-footer {
 
 .nw-navitem {
   appearance: none;
+  position: relative;
   min-height: 44px;
   border: none;
   background: none;
@@ -623,6 +624,22 @@ body:has(.nw-root) .site-footer {
 .nw-navlabel {
   font-size: 10px;
   letter-spacing: 0.01em;
+}
+
+/* New-message count on the Chats tab: same snapshot as the list, not a second
+   signal, so the two can never disagree. */
+.nw-navbadge {
+  position: absolute;
+  top: 3px;
+  left: 50%;
+  margin-left: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: none;
 }
 
 /* First-run switch: Create or Import, one choice at a time. */
@@ -1266,11 +1283,19 @@ body:has(.nw-root) .site-footer {
 }
 .nw-chat-rowchev { color: var(--text-dim); font-size: 18px; }
 /* Unread count: a pill, not text, so the row's second line stays one line. */
+/* Count pill, shared by the chat rows and the Chats tab. */
+.nw-chat-badge,
+.nw-navbadge {
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-variant-numeric: tabular-nums;
+}
 .nw-chat-badge {
-  min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px;
-  display: grid; place-items: center;
-  background: var(--accent); color: var(--on-accent);
-  font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums;
+  min-width: 20px; height: 20px; padding: 0 6px;
+  font-size: 11px; font-weight: 600;
 }
 .nw-chat-remove { font-size: 12px; padding: 6px 10px; }
 .nw-chat-empty { padding: 26px 8px; text-align: center; color: var(--text-dim); }

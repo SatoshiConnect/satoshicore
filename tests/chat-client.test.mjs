@@ -14,12 +14,15 @@ import { createChatRelay, requestString } from '../services/api-gateway/chat-rel
 import { encodeG } from '../lib/nsatCodec.js';
 import { createPaymentRequestText, parsePaymentRequestText } from '../lib/chatPaymentRequest.js';
 import { createTransactionCardText, parseTransactionCardText } from '../lib/chatTransaction.js';
+import { countNewMessages } from '../lib/chatUnread.js';
 
 const unhex = (text) => new Uint8Array(Buffer.from(text, 'hex'));
 const SEED_A = unhex('000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f');
 const SEED_B = unhex('1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100');
+const SEED_C = new Uint8Array(32).fill(7);
 const ADDRESS_A = encodeG(nacl.sign.keyPair.fromSeed(SEED_A).publicKey);
 const ADDRESS_B = encodeG(nacl.sign.keyPair.fromSeed(SEED_B).publicKey);
+const ADDRESS_C = encodeG(nacl.sign.keyPair.fromSeed(SEED_C).publicKey);
 
 // The relay keeps mail until it is cleared, and these tests share one database:
 // start each mailbox test from an empty one explicitly.
@@ -198,4 +201,57 @@ test('peeking counts new mail without deleting it, and ack removes only what was
   // Clearing the rest removes it for this mailbox.
   assert.equal(await b.ack({ seed32: SEED_B, address: ADDRESS_B, ids: [peek3.messages[0].id] }), 1);
   assert.equal((await b.peek({ seed32: SEED_B, address: ADDRESS_B })).messages.length, 0);
+});
+
+test('a message read in the open room leaves no badge and nothing queued', async () => {
+  const a = createChatClient({ origin });
+  const b = createChatClient({ origin });
+  await b.publishKey({ seed32: SEED_B, address: ADDRESS_B });
+  await clearMailbox(b, SEED_B, ADDRESS_B);
+
+  // The room is open when the message lands: it is fetched and shown.
+  await a.send({ seed32: SEED_A, from: ADDRESS_A, to: ADDRESS_B, text: 'while open' });
+  const first = await b.peek({ seed32: SEED_B, address: ADDRESS_B, since: 0 });
+  assert.equal(first.messages.length, 1);
+
+  // On screen means read here: no badge, and the read mark moves to its arrival.
+  const open = countNewMessages({
+    messages: first.messages, marks: {}, openPeer: ADDRESS_A, reset: true,
+  });
+  assert.deepEqual(open.counts, {}, 'the open room is never a badge');
+  const marks = { [ADDRESS_A]: open.newest[ADDRESS_A] };
+  await b.ack({ seed32: SEED_B, address: ADDRESS_B, ids: first.messages.map((m) => m.id) });
+
+  // Back on the list: the poll asks only after the cursor, as the panel does.
+  const cursor = first.messages[first.messages.length - 1].id;
+  const later = await b.peek({ seed32: SEED_B, address: ADDRESS_B, since: cursor });
+  assert.equal(later.messages.length, 0);
+  assert.deepEqual(countNewMessages({ messages: later.messages, marks, previous: open.counts }).counts, {});
+
+  // Nothing was left on the relay for the mailbox to accumulate.
+  assert.equal((await b.peek({ seed32: SEED_B, address: ADDRESS_B })).messages.length, 0);
+});
+
+test('opening a room reads only that conversation, not the whole mailbox', async () => {
+  const a = createChatClient({ origin });
+  const b = createChatClient({ origin });
+  const c = createChatClient({ origin });
+  await b.publishKey({ seed32: SEED_B, address: ADDRESS_B });
+  await clearMailbox(b, SEED_B, ADDRESS_B);
+  await c.publishKey({ seed32: SEED_C, address: ADDRESS_C });
+
+  await a.send({ seed32: SEED_A, from: ADDRESS_A, to: ADDRESS_B, text: 'from a' });
+  await c.send({ seed32: SEED_C, from: ADDRESS_C, to: ADDRESS_B, text: 'from c' });
+
+  const roomA = await b.peek({ seed32: SEED_B, address: ADDRESS_B, peer: ADDRESS_A });
+  assert.deepEqual(roomA.messages.map((m) => m.text), ['from a']);
+  const roomC = await b.peek({ seed32: SEED_B, address: ADDRESS_B, peer: ADDRESS_C });
+  assert.deepEqual(roomC.messages.map((m) => m.text), ['from c']);
+
+  // The room filter composes with a cursor, so a refresh only asks for newer mail.
+  const cursor = roomA.messages[roomA.messages.length - 1].id;
+  const again = await b.peek({
+    seed32: SEED_B, address: ADDRESS_B, peer: ADDRESS_A, since: cursor,
+  });
+  assert.equal(again.messages.length, 0);
 });

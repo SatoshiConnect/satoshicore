@@ -946,8 +946,13 @@ function chatRelay() {
     const dbPath = process.env.NSAT_CHAT_DB
       || require('node:path').join(__dirname, 'data', 'chat.sqlite');
     require('node:fs').mkdirSync(require('node:path').dirname(dbPath), { recursive: true });
+    // Operator-tunable safety valves: a mailbox ceiling that can be raised for a
+    // busy relay, and how often expired mail is collected. Both have documented
+    // defaults in chat-relay.mjs.
+    const maxPerRecipient = Number(process.env.NSAT_CHAT_MAX_PENDING) || undefined;
+    const gcIntervalMs = Number(process.env.NSAT_CHAT_GC_MS) || undefined;
     chatRelayPromise = import('./chat-relay.mjs')
-      .then(({ createChatRelay }) => createChatRelay({ dbPath }))
+      .then(({ createChatRelay }) => createChatRelay({ dbPath, maxPerRecipient, gcIntervalMs }))
       .catch((error) => {
         chatRelayPromise = null;
         throw error;
