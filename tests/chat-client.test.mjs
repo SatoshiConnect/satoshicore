@@ -12,6 +12,8 @@ import nacl from 'tweetnacl';
 import { createChatClient, chatRequestString } from '../lib/chatClient.js';
 import { createChatRelay, requestString } from '../services/api-gateway/chat-relay.mjs';
 import { encodeG } from '../lib/nsatCodec.js';
+import { createPaymentRequestText, parsePaymentRequestText } from '../lib/chatPaymentRequest.js';
+import { createTransactionCardText, parseTransactionCardText } from '../lib/chatTransaction.js';
 
 const unhex = (text) => new Uint8Array(Buffer.from(text, 'hex'));
 const SEED_A = unhex('000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f');
@@ -89,6 +91,33 @@ test('two wallets exchange encrypted messages over HTTP', async () => {
   // A's own inbox never contains what A sent.
   const inboxA = await a.inbox({ seed32: SEED_A, address: ADDRESS_A });
   assert.equal(inboxA.messages.length, 0);
+});
+
+test('payment requests and transaction cards travel encrypted and bind to the envelope sender', async () => {
+  const a = createChatClient({ origin });
+  const b = createChatClient({ origin });
+  await b.publishKey({ seed32: SEED_B, address: ADDRESS_B });
+
+  const request = createPaymentRequestText({ amount: '9007199254740993', address: ADDRESS_A });
+  await a.send({ seed32: SEED_A, from: ADDRESS_A, to: ADDRESS_B, text: request });
+  const requestInbox = await b.inbox({ seed32: SEED_B, address: ADDRESS_B });
+  assert.equal(requestInbox.messages.length, 1);
+  assert.deepEqual(parsePaymentRequestText(requestInbox.messages[0].text, requestInbox.messages[0].from), {
+    kind: 'payment-request', amount: '9007199254740993', address: ADDRESS_A,
+  });
+
+  const card = createTransactionCardText({
+    hash: 'c'.repeat(64), amount: '9007199254740993', from: ADDRESS_A, to: ADDRESS_B,
+  });
+  await a.send({ seed32: SEED_A, from: ADDRESS_A, to: ADDRESS_B, text: card });
+  const cardInbox = await b.inbox({ seed32: SEED_B, address: ADDRESS_B });
+  assert.equal(cardInbox.messages.length, 1);
+  assert.deepEqual(parseTransactionCardText(cardInbox.messages[0].text, cardInbox.messages[0].from), {
+    kind: 'transaction-card', hash: 'c'.repeat(64), amount: '9007199254740993',
+    from: ADDRESS_A, to: ADDRESS_B,
+  });
+  assert.equal(cardInbox.messages[0].from, ADDRESS_A);
+  assert.equal(cardInbox.undecryptable.length, 0);
 });
 
 test('a wallet that has published no key cannot be messaged, and says so', async () => {

@@ -17,6 +17,9 @@ import {
   FRIEND_LIMIT, addFriend, mergeContacts, parseFriendTarget, readFriends, removeFriend,
 } from '../lib/chatFriends';
 import { MAX_TEXT_LENGTH } from '../lib/e2eChat';
+import { createPaymentRequestText, parsePaymentRequestText } from '../lib/chatPaymentRequest';
+import { createTransactionCardText, parseTransactionCardText } from '../lib/chatTransaction';
+import ChatTransactionCard from './ChatTransactionCard';
 import { resolveProfileHandle } from '../lib/profile';
 
 const shortAddr = (value) => (value ? `${value.slice(0, 6)}…${value.slice(-4)}` : '');
@@ -35,6 +38,7 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSe
   const [peerIds, setPeerIds] = useState({});
   const [copyState, setCopyState] = useState('');
   const [coin, setCoin] = useState({ amount: '', phase: 'idle', note: '', error: '' });
+  const [request, setRequest] = useState({ amount: '', busy: false, note: '', error: '' });
   // Blocking is a relay-side control: the list lives with the wallet address,
   // not with this screen, so it is read back rather than remembered here.
   const [gate, setGate] = useState({ busy: false, blocked: false, note: '', error: '' });
@@ -43,6 +47,8 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSe
   const readOnly = !seed32;
   const coinDigits = coin.amount.replace(/[,_ ]/g, '');
   const coinAmountOk = /^\d+$/.test(coinDigits) && BigInt(coinDigits || '0') > 0n;
+  const requestDigits = request.amount.replace(/[,_ ]/g, '');
+  const requestAmountOk = /^\d+$/.test(requestDigits) && BigInt(requestDigits || '0') > 0n;
 
   // Friends are public addresses the person named themselves; the transcript
   // stays in this session. Loading is deferred to an effect so the first render
@@ -180,6 +186,23 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSe
     }
   }
 
+  /** Ask the other wallet for an exact integer amount; this never signs. */
+  async function sendPaymentRequest(event) {
+    event.preventDefault();
+    if (!client.current || !seed32 || !peer || !requestAmountOk) return;
+    setRequest((current) => ({ ...current, busy: true, note: '', error: '' }));
+    try {
+      const text = createPaymentRequestText({ amount: requestDigits, address });
+      await client.current.send({ seed32, from: address, to: peer, text });
+      setThread((current) => [...current, {
+        id: `r${Date.now()}`, peer, from: address, text, at: Date.now(), own: true,
+      }]);
+      setRequest({ amount: '', busy: false, note: 'Payment request sent. It does not debit the other wallet.', error: '' });
+    } catch (error) {
+      setRequest((current) => ({ ...current, busy: false, error: String(error?.message || error) }));
+    }
+  }
+
   /** A coin "sticker": send NSAT to the person in this conversation. */
   async function sendCoinSticker() {
     const amount = coin.amount.replace(/[,_ ]/g, '');
@@ -197,26 +220,21 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSe
         }));
         return;
       }
-      const shortHash = `${result.hash.slice(0, 10)}…${result.hash.slice(-8)}`;
-      // Say exactly what the ledger said: a submitted payment that has not been
-      // confirmed (or that failed on chain) must not read as "sent and done".
-      const label = status === 'confirmed'
-        ? `🪙 Sent ${amount} NSAT · tx ${shortHash}`
-        : status === 'failed'
-          ? `🪙 ${amount} NSAT failed on-chain · tx ${shortHash}`
-          : `🪙 ${amount} NSAT submitted (${status || 'pending'}) · tx ${shortHash}`;
+      // The transaction hash is a pointer, not a verdict. Both sides get the
+      // exact same structured claim; the card will query the indexer on each
+      // device and show Finalized/Failed only after the matching hash, amount,
+      // sender and destination all verify against the closed ledger.
+      const cardText = createTransactionCardText({
+        hash: result.hash, amount, from: address, to: peer,
+      });
       setThread((current) => [...current, {
-        id: `c${Date.now()}`, peer, from: address, text: label, at: Date.now(), own: true,
+        id: `c${Date.now()}`, peer, from: address, text: cardText, at: Date.now(), own: true,
       }]);
-      setCoin({ amount: '', phase: 'idle', note: `${label}`, error: '' });
-      // Best effort: tell the other side in the conversation too. The payment
-      // itself is already on the chain, so a failed message loses no money.
+      setCoin({ amount: '', phase: 'idle', note: 'Transaction card added. The indexer is checking the exact hash.', error: '' });
       if (client.current && seed32) {
         try {
-          await client.current.send({
-            seed32, from: address, to: peer, text: `🪙 ${amount} NSAT — tx ${result.hash}`,
-          });
-        } catch { /* the transfer is what matters; the note can wait */ }
+          await client.current.send({ seed32, from: address, to: peer, text: cardText });
+        } catch { /* the ledger transaction is already independent of chat delivery */ }
       }
     } catch (error) {
       setCoin((current) => ({ ...current, phase: 'idle', error: String(error?.message || error) }));
@@ -418,6 +436,30 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSe
           an @id and a public address and nothing else — so ask for an email directly if you need one.
         </p>
 
+        {onSendTo ? (
+          <form className="nw-txf" onSubmit={sendPaymentRequest} style={{ marginTop: 12 }}>
+            <label className="nw-small nw-dim" htmlFor="nw-chat-payment-request">
+              Request an amount from {shortAddr(peer)}
+            </label>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input id="nw-chat-payment-request" className="nw-chat-input"
+                value={request.amount} inputMode="numeric" placeholder="Amount in NSAT"
+                aria-label="NSAT amount to request" style={{ maxWidth: 160 }}
+                onChange={(event) => setRequest({
+                  amount: event.target.value.replace(/[^\d,_ ]/g, ''),
+                  busy: false, note: '', error: '',
+                })}
+                disabled={readOnly || request.busy || gate.blocked} />
+              <button type="submit" className="nw-chip-btn"
+                disabled={readOnly || request.busy || gate.blocked || !requestAmountOk}>
+                {request.busy ? 'Sending request…' : 'Request payment'}
+              </button>
+            </div>
+            {request.error ? <p className="nw-small" role="alert" style={{ margin: 0, color: 'var(--warn)' }}>{request.error}</p> : null}
+            {request.note ? <p className="nw-small nw-dim" role="status" style={{ margin: 0 }}>{request.note}</p> : null}
+          </form>
+        ) : null}
+
         {/* Sending from the conversation: the same wallet pipeline the Send
          * page uses, with an explicit confirm in between. Nothing moves from a
          * stray tap, and the payment itself is the signature — not a message. */}
@@ -481,15 +523,54 @@ export default function ChatPanel({ seed32, address, contacts, relayOrigin, onSe
               No messages in this session yet.
             </li>
           )}
-          {thread.map((message) => (
-            <li key={message.id} className={'nw-chat-bubble' + (message.own ? ' is-own' : '')}>
-              <div className="nw-chat-text">{message.text}</div>
-              <div className="nw-small nw-dim">
-                {message.own ? 'sent' : shortAddr(message.from)}
-                {message.at ? ` · ${new Date(message.at).toLocaleTimeString()}` : ''}
-              </div>
-            </li>
-          ))}
+          {thread.map((message) => {
+            const paymentRequest = parsePaymentRequestText(message.text, message.from);
+            const transactionCard = parseTransactionCardText(message.text, message.from);
+            return (
+              <li key={message.id} className={'nw-chat-bubble' + (message.own ? ' is-own' : '')}>
+                {transactionCard?.kind === 'transaction-card'
+                  && transactionCard.from === message.from
+                  && ((transactionCard.from === address && transactionCard.to === peer)
+                    || (transactionCard.from === peer && transactionCard.to === address)) ? (
+                  <ChatTransactionCard card={transactionCard} />
+                ) : transactionCard ? (
+                  <div className="nw-chat-text">
+                    <strong>Unverified transaction message</strong>
+                    <div className="nw-small nw-dim">{transactionCard.reason}</div>
+                  </div>
+                ) : paymentRequest?.kind === 'payment-request' ? (
+                  <div className="nw-chat-text">
+                    <strong>Payment request · {paymentRequest.amount} NSAT</strong>
+                    <div className="nw-small nw-dim nw-mono" style={{ wordBreak: 'break-all', marginTop: 4 }}>
+                      Requested receiving address: {paymentRequest.address}
+                    </div>
+                    {!message.own && onSendTo ? (
+                      <button type="button" className="nw-send-btn" style={{ marginTop: 8 }}
+                        disabled={readOnly || gate.blocked}
+                        onClick={() => onSendTo(paymentRequest.address, paymentRequest.amount)}>
+                        Review payment · {paymentRequest.amount} NSAT
+                      </button>
+                    ) : (
+                      <div className="nw-small nw-dim" style={{ marginTop: 6 }}>
+                        Request sent. Waiting for the recipient to review it; no funds have moved.
+                      </div>
+                    )}
+                  </div>
+                ) : paymentRequest?.kind === 'invalid' ? (
+                  <div className="nw-chat-text">
+                    <strong>Invalid payment request</strong>
+                    <div className="nw-small nw-dim">{paymentRequest.reason}</div>
+                  </div>
+                ) : (
+                  <div className="nw-chat-text">{message.text}</div>
+                )}
+                <div className="nw-small nw-dim">
+                  {message.own ? 'sent' : shortAddr(message.from)}
+                  {message.at ? ` · ${new Date(message.at).toLocaleTimeString()}` : ''}
+                </div>
+              </li>
+            );
+          })}
         </ul>
 
         <form className="nw-txf" onSubmit={send} style={{ marginTop: 12 }}>

@@ -1249,11 +1249,24 @@ export default function WalletPanel() {
   //
   // `toOverride` / `amountOverride` exist so the chat can pay the person in the
   // conversation without duplicating any of this: it calls the same function,
-  // with its own explicit confirmation in front of it.
-  async function submitSend({ toOverride = null, amountOverride = null } = {}) {
+  // with its own explicit confirmation in front of it. `createOverride` keeps a
+  // stale CREATE-account checkbox from changing a chat payment operation.
+  async function submitSend({ toOverride = null, amountOverride = null, createOverride = null } = {}) {
     const target = String(toOverride ?? dest).trim();
     const value = String(amountOverride ?? amount);
+    const create = createOverride ?? createDest;
     lastSendRef.current = null;
+    if (toOverride != null) {
+      const clean = value.replace(/[,_ ]/g, '');
+      if (!/^\d+$/.test(clean) || BigInt(clean) <= 0n) {
+        notify('Enter a whole-number amount greater than zero.', 'err');
+        return false;
+      }
+      if (target === active?.pubkey) {
+        notify('This wallet cannot pay itself from a chat request.', 'err');
+        return false;
+      }
+    }
     if (!active?.seed32) { notify('Unlock the wallet first.', 'err'); return false; }
     if (!net?.ok) { notify('Network identity not verified — refusing to sign.', 'err'); return false; }
     if (net.network !== EXPECTED_NETWORK_ID) {
@@ -1297,7 +1310,7 @@ export default function WalletPanel() {
       requireActiveSession();
       const reserve = Number(info?.info?.ledger?.baseReserve || 0);
       const amtClean = value.replace(/[,_ ]/g, '');
-      if (createDest && reserve > 0 && /^\d+$/.test(amtClean)
+      if (create && reserve > 0 && /^\d+$/.test(amtClean)
         && BigInt(amtClean) < BigInt(2 * reserve)) {
         notify(`CREATE starting balance must be ≥ ${BigInt(2 * reserve).toLocaleString()} NSAT (2× base reserve) — the chain would charge the fee and fail the operation.`, 'err');
         setBusy(false);
@@ -1310,7 +1323,7 @@ export default function WalletPanel() {
         destG: target,
         amount: value.trim(),
         fee: baseFee,
-        create: createDest,
+        create,
         shouldCancel: () => !canContinue(),
       });
       requireActiveSession();
@@ -1398,7 +1411,9 @@ export default function WalletPanel() {
   // the conversation as the destination. The chat shows its own confirmation
   // step before this is called, so a stray tap cannot move anything.
   async function sendCoinsFromChat(to, coinAmount) {
-    const ok = await submitSend({ toOverride: to, amountOverride: coinAmount });
+    const ok = await submitSend({
+      toOverride: to, amountOverride: coinAmount, createOverride: false,
+    });
     return {
       ok,
       hash: lastSendRef.current?.hash || '',
@@ -1600,14 +1615,24 @@ export default function WalletPanel() {
               address={active?.pubkey || watchAddress || ''}
               contacts={chatContacts}
               relayOrigin={CHAT_RELAY_ORIGIN}
-              onSendTo={(address) => { setDest(address); setPage('send'); }}
+              onSendTo={(address, requestedAmount = '') => {
+                setDest(address);
+                setCreateDest(false);
+                if (requestedAmount) setAmount(requestedAmount);
+                setPage('send');
+              }}
               onSendCoins={sendCoinsFromChat}
               onBack={() => setPage('activity')} />
           )}
 
           {page === 'contacts' && (
             <ContactsCard
-              onSendTo={(address) => { setDest(address); setPage('send'); }}
+              onSendTo={(address, requestedAmount = '') => {
+                setDest(address);
+                setCreateDest(false);
+                if (requestedAmount) setAmount(requestedAmount);
+                setPage('send');
+              }}
               onOpenSettings={() => setPage('settings')} />
           )}
 
