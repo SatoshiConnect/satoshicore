@@ -24,7 +24,9 @@ function startMockCore() {
         info: {
           network: NETWORK,
           protocol_version: 30,
-          ledger: { baseReserve: 100000000, baseFee: 10 },
+          // The tool must gate on the ledger version, not on the version the
+          // node software supports.
+          ledger: { baseReserve: 100000000, baseFee: 10, version: 30 },
         },
       }));
       return;
