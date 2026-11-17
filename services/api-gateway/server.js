@@ -51,7 +51,14 @@ const CONFIG = {
   // (services/sponsor/sponsor-open.js).
   sponsorship: {
     enabled: process.env.NSAT_SPONSORSHIP_ENABLED === '1',
+    // The ledger version whose core accepts the sponsorship operations.
     requiredProtocol: 14,
+    // The ledger version whose accounts carry no reserve at all (V_15): from
+    // here sponsorship is still permitted but nothing has to be locked.
+    zeroReserveProtocol: 15,
+    // The ledger version that accepts a fee-free self-open: one CREATE_ACCOUNT
+    // at a zero balance, sourced by the key being created, fee 0.
+    selfOpenProtocol: 16,
     reserveUnits: 3
   },
 
@@ -884,15 +891,31 @@ const ROUTES = {
       const baseReserve = Number(info && info.ledger && info.ledger.baseReserve);
       const hasProtocol = Number.isSafeInteger(protocolVersion) && protocolVersion > 0;
       const hasReserve = Number.isSafeInteger(baseReserve) && baseReserve > 0;
+      // From zeroReserveProtocol the ledger charges nothing for an account
+      // entry, so a new account needs no reserve and no sponsor for one.
+      const zeroReserve = hasProtocol
+        && protocolVersion >= CONFIG.sponsorship.zeroReserveProtocol;
+      // From selfOpenProtocol a new key opens its own account with no fee at
+      // all, so neither a sponsor nor a deposit is involved.
+      const selfOpenAvailable = hasProtocol
+        && protocolVersion >= CONFIG.sponsorship.selfOpenProtocol;
       sendJson(res, 200, {
         enabled: CONFIG.sponsorship.enabled,
         requiredProtocol: CONFIG.sponsorship.requiredProtocol,
+        zeroReserveProtocol: CONFIG.sponsorship.zeroReserveProtocol,
+        selfOpenProtocol: CONFIG.sponsorship.selfOpenProtocol,
+        selfOpenAvailable,
         protocolVersion: hasProtocol ? protocolVersion : null,
         baseReserve: hasReserve ? baseReserve : null,
         // Exact integer as a decimal string: reserves are treasury-scale.
-        reservePerAccount: hasReserve
-          ? String(BigInt(baseReserve) * BigInt(CONFIG.sponsorship.reserveUnits))
-          : null,
+        reservePerAccount: !hasReserve
+          ? null
+          : zeroReserve
+            ? '0'
+            : String(BigInt(baseReserve) * BigInt(CONFIG.sponsorship.reserveUnits)),
+        // Whether opening an account still has to lock a reserve. False from
+        // V_15 on: creates the account, not a funded balance, is free.
+        sponsorshipRequired: !zeroReserve,
         // The flow is only offerable when the deployment opted in AND the
         // ledger itself has reached the protocol that supports it.
         available: Boolean(

@@ -13,6 +13,7 @@ import {
   buildSignedTx, historyLoad, historyClear, historyPush, historyPatch,
 } from '../lib/nsatWallet';
 import { decodeSeed } from '../lib/nsatCodec';
+import { buildSelfOpenTx, selfOpenGate } from '../lib/nsatSelfOpen';
 import { walletStatus } from '../lib/walletStatus';
 import { readWalletNote } from '../lib/walletNotes';
 // Shared send gate (mirror of the desktop/prototype reason contract — one
@@ -161,6 +162,7 @@ export default function WalletPanel() {
   const [liveLedger, setLiveLedger] = useState(null); // public ledger height, polled
   const [fee, setFee] = useState(null);          // live base fee (NSAT integer unit)
   const [reserve, setReserve] = useState(null);  // live base reserve (NSAT integer unit)
+  const [chainVersion, setChainVersion] = useState(null); // live ledger protocol version
   // wallet session
   const [wallets, setWallets] = useState([]);
   const [biometricWallets, setBiometricWallets] = useState([]);
@@ -419,8 +421,13 @@ export default function WalletPanel() {
     setNet(r);
     if (r.ok) {
       try { setFee(await estimateFee()); } catch { setFee(null); }
-      try { setReserve(Number((await getChainInfo())?.info?.ledger?.baseReserve || 0)); }
-      catch { setReserve(null); }
+      try {
+        const info = await getChainInfo();
+        setReserve(Number(info?.info?.ledger?.baseReserve || 0));
+        // The ledger version decides whether an account still needs a reserve
+        // (below V_15) or opens at a zero balance (V_15 and later).
+        setChainVersion(Number(info?.info?.ledger?.version || 0) || null);
+      } catch { setReserve(null); setChainVersion(null); }
     }
     return r;
   }, [configured]);
@@ -1252,6 +1259,70 @@ export default function WalletPanel() {
     } catch (err) { notify(`restore failed: ${err.message}`, 'err'); }
   }
 
+  // Open the active wallet's own account on chain. From Core V_16 a key with
+  // no account creates it itself: one CREATE_ACCOUNT at a zero balance, no fee
+  // and no sponsor. This is the only transaction that can be signed for an
+  // address the ledger does not know yet.
+  async function openActiveAccount() {
+    if (!active?.seed32) { notify('Unlock this wallet to create its account.', 'err'); return; }
+    if (!net?.ok) { notify('Network identity not verified — refusing to sign.', 'err'); return; }
+    if (net.network !== EXPECTED_NETWORK_ID) {
+      notify('Network identity changed since verification — refusing to sign.', 'err');
+      return;
+    }
+    const gate = selfOpenGate({ protocolVersion: chainVersion });
+    if (!gate.available) { notify(gate.reason, 'err'); return; }
+    const session = activeRef.current;
+    if (!session?.seed32 || session.name !== active.name) {
+      notify('Wallet locked. Unlock again before signing.', 'err');
+      return;
+    }
+    setBusy(true);
+    const operationEpoch = lockEpoch.current;
+    const canContinue = () => operationEpoch === lockEpoch.current
+      && activeRef.current === session;
+    const seed32 = session.seed32.slice();
+    pendingSeedsRef.current.add(seed32);
+    try {
+      const signed = await buildSelfOpenTx({ seed32, netPassphrase: EXPECTED_NETWORK_ID });
+      if (!canContinue()) throw new Error('Wallet locked — signing cancelled.');
+      const r = await submitSignedTransaction(signed.envelopeBase64);
+      if (r.status === 'ERROR') {
+        notify('The network rejected the account creation. Nothing was charged.', 'err');
+        return;
+      }
+      if (r.status !== 'PENDING' && r.status !== 'DUPLICATE') {
+        notify(`Node responded ${r.status}: try again shortly; nothing was charged.`, 'warn');
+        return;
+      }
+      notify('Account creation submitted — waiting for it on chain…', 'warn');
+      // The ledger's own answer is the only proof the account exists, so poll
+      // the public account read instead of assuming it landed.
+      let state = { kind: 'missing', value: null };
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        state = readAccountBalance(await getAccount(active.pubkey).catch(() => null));
+        if (state.kind !== 'missing') break;
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+      setOverviewWalletStates((cur) => ({
+        ...cur, [active.name]: { pubkey: active.pubkey, balance: state },
+      }));
+      if (state.kind === 'missing') {
+        notify('Submitted, but the account is not visible yet. Nothing was charged; check again shortly.', 'warn');
+      } else {
+        notify('Account created at a zero balance — no fee and no reserve were charged.', 'ok');
+      }
+      void refreshBalance(active.pubkey);
+      void verifyNetwork();
+    } catch (err) {
+      notify(`Account creation failed: ${err.message || err}`, 'err');
+    } finally {
+      zeroSeed(seed32);
+      pendingSeedsRef.current.delete(seed32);
+      setBusy(false);
+    }
+  }
+
   // The real send pipeline (unchanged from the audited build). Returns true
   // when the caller may close the review modal; on failure leaves the modal
   // open with the exact reason surfaced as a toast.
@@ -1575,8 +1646,10 @@ export default function WalletPanel() {
           {page === 'overview' && !(watchAddress && !active && wallets.length === 0) && (
             <OverviewPage active={active} wallets={wallets} balance={balance} funded={funded}
               walletChainStates={overviewWalletStates} baseReserve={reserve}
+              chainVersion={chainVersion}
               bus={{ busy, doCreate, doImport, newName, setNewName, newPass, setNewPass,
                 importSeed, setImportSeed, accountEmail }}
+              onSelfOpen={openActiveAccount}
               net={{ net, netOk, ledger: liveLedger ?? ledger, fee, reserve }}
               profileId={profileId}
               notify={notify}
@@ -2030,7 +2103,7 @@ function WatchOnlyHome({ address, addresses = [], balance, funded, onSelect, onR
 }
 
 /* ------------------------- On-chain wallet status ----------------------- */
-function WalletChainStatus({ wallets, states = {}, baseReserve, activeName = '' }) {
+function WalletChainStatus({ wallets, states = {}, baseReserve, chainVersion = null, activeName = '', onSelfOpen = null, selfOpenBusy = false }) {
   // Read this device's own notes after mount so the static render and the
   // browser agree (backup verification, registration attempt).
   const [notes, setNotes] = useState({});
@@ -2080,11 +2153,20 @@ function WalletChainStatus({ wallets, states = {}, baseReserve, activeName = '' 
                 </span>
                 {notCreated && (
                   <span className="nw-small nw-chain-minimum">
-                    {minimum
-                      ? `Needs at least ${fmtGroup(minimum)} NSAT in its first deposit (2× live base reserve).`
-                      : 'Minimum first deposit unavailable — waiting for the live base reserve.'}
+                    {zeroReserve
+                      ? 'No minimum: this network opens accounts at a zero balance.'
+                      : minimum
+                        ? `Needs at least ${fmtGroup(minimum)} NSAT in its first deposit (2× live base reserve).`
+                        : 'Minimum first deposit unavailable — waiting for the live base reserve.'}
                   </span>
                 )}
+                {notCreated && zeroReserve && wallet.name === activeName && onSelfOpen ? (
+                  <button type="button" className="nw-chip-btn" disabled={selfOpenBusy}
+                    title="Create this address on chain: one zero-balance CREATE_ACCOUNT, no fee and no reserve."
+                    onClick={onSelfOpen}>
+                    {selfOpenBusy ? 'Opening…' : 'Open this account — free'}
+                  </button>
+                ) : null}
               </div>
             </li>
           );
@@ -2102,7 +2184,7 @@ function WalletChainStatus({ wallets, states = {}, baseReserve, activeName = '' 
 }
 
 /* --------------------------------- Overview ------------------------------ */
-function OverviewPage({ active, wallets, balance, funded, walletChainStates, baseReserve, bus, net, profileId, notify, onSend, onReceive, onActivity, onManage }) {
+function OverviewPage({ active, wallets, balance, funded, walletChainStates, baseReserve, chainVersion, onSelfOpen, bus, net, profileId, notify, onSend, onReceive, onActivity, onManage }) {
   // First run is one decision, not two competing forms: a phone wallet offers
   // Create or Import as a segmented control, then shows the chosen form.
   const [mode, setMode] = useState('create');
