@@ -23,6 +23,7 @@ import {
 import {
   bindOwner, normalizeAccount, ownerOf,
 } from '../lib/walletBinding';
+import { setBackupVerified } from '../lib/walletNotes';
 
 const configured = isFirebaseWebConfigured();
 
@@ -88,6 +89,11 @@ export default function DriveBackupCard({ onKeystoreChanged } = {}) {
     anchor.click();
     anchor.remove();
     setTimeout(() => URL.revokeObjectURL(url), 4000);
+    // Every wallet in that file now has a copy outside this browser, so the
+    // per-wallet status can stop saying "Backup Required". The flag says only
+    // that: the file exists and the ciphertext is intact, never that the
+    // ledger confirmed anything.
+    for (const wallet of keystoreList()) setBackupVerified(wallet.pubkey, true);
     setDialog(null);
     setNote('Saved the encrypted keystore file to this device. Opening it still needs your wallet password.');
   }
@@ -131,6 +137,8 @@ export default function DriveBackupCard({ onKeystoreChanged } = {}) {
       JSON.parse(parsed.keystore).wallets.map((wallet) => wallet.name));
     for (const wallet of keystoreList()) {
       if (!restoredNames.has(wallet.name)) continue;
+      // The ciphertext just came out of a backup, so this address is backed up.
+      setBackupVerified(wallet.pubkey, true);
       const owner = ownerOf(wallet.name);
       if (owner && normalizeAccount(owner) !== normalizeAccount(email)) continue;
       bindOwner(wallet.name, email);
@@ -227,7 +235,7 @@ export default function DriveBackupCard({ onKeystoreChanged } = {}) {
       </div>
       {note ? <p className="nw-small nw-dim" role="status" style={{ margin: '8px 0 0' }}>{note}</p> : null}
       {error ? <p className="nw-small nw-google-error" role="alert" style={{ margin: '8px 0 0' }}>{error}</p> : null}
-      {!busy && wallets.length && email ? (
+      {!busy && wallets.length ? (
         <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
           No Google Drive? You can still{' '}
           <button type="button" className="nw-linklike" onClick={downloadEncryptedBackup}>
