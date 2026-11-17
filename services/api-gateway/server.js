@@ -864,8 +864,10 @@ const ROUTES = {
 
   // Sponsorship policy: what the wallet needs to decide whether the flow is
   // offerable on THIS network, and how much reserve a sponsor locks. Read
-  // from the live core /info, never hard-coded, so a node on protocol 29
-  // reports 29 and the wallet keeps the flow closed.
+  // from the live core /info, never hard-coded. The gate must use the version
+  // the LEDGER is on (info.ledger.version), not info.protocol_version: the
+  // latter is the newest version the node software can run, so a node that
+  // supports 29 would otherwise advertise sponsorship on a ledger still at 2.
   'GET /api/v1/sponsorship/policy': async (req, res) => {
     try {
       const up = await coreFetchRead('/info');
@@ -878,7 +880,7 @@ const ROUTES = {
       } catch {
         return sendJson(res, 503, { error: 'core info malformed' }, req);
       }
-      const protocolVersion = Number(info && info.protocol_version);
+      const protocolVersion = Number(info && info.ledger && info.ledger.version);
       const baseReserve = Number(info && info.ledger && info.ledger.baseReserve);
       const hasProtocol = Number.isSafeInteger(protocolVersion) && protocolVersion > 0;
       const hasReserve = Number.isSafeInteger(baseReserve) && baseReserve > 0;
