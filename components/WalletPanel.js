@@ -13,6 +13,8 @@ import {
   buildSignedTx, historyLoad, historyClear, historyPush, historyPatch,
 } from '../lib/nsatWallet';
 import { decodeSeed } from '../lib/nsatCodec';
+import { walletStatus } from '../lib/walletStatus';
+import { readWalletNote } from '../lib/walletNotes';
 // Shared send gate (mirror of the desktop/prototype reason contract — one
 // source of truth for WHY a send is blocked; see NSAT-WALLET-BUTTON-STATES).
 import { sendPreflight, maxSendable, fmtGroup } from '../lib/nsatSendPreflight';
@@ -2029,6 +2031,15 @@ function WatchOnlyHome({ address, addresses = [], balance, funded, onSelect, onR
 
 /* ------------------------- On-chain wallet status ----------------------- */
 function WalletChainStatus({ wallets, states = {}, baseReserve, activeName = '' }) {
+  // Read this device's own notes after mount so the static render and the
+  // browser agree (backup verification, registration attempt).
+  const [notes, setNotes] = useState({});
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const next = {};
+    for (const wallet of wallets) next[wallet.name] = readWalletNote(wallet.pubkey);
+    setNotes(next);
+  }, [wallets]);
   if (!wallets?.length) return null;
   const reserveKnown = Number.isSafeInteger(baseReserve) && baseReserve > 0;
   const minimum = reserveKnown ? (BigInt(baseReserve) * 2n).toString() : null;
@@ -2047,19 +2058,23 @@ function WalletChainStatus({ wallets, states = {}, baseReserve, activeName = '' 
           const entry = states[wallet.name]?.balance;
           const notCreated = entry?.kind === 'missing';
           const exists = entry?.kind === 'exact';
+          // Local notes (backup verified, registration attempt) only refine the
+          // off-chain labels; "Active On-chain" still needs the ledger answer.
+          const status = walletStatus({
+            chain: entry,
+            backup: notes[wallet.name]?.backup,
+            registration: notes[wallet.name]?.registration,
+          });
           return (
             <li key={wallet.name} className="nw-acc-row nw-chain-wallet-row">
               <div className="nw-acc-main">
                 <span className="nw-acc-name">{wallet.name}{wallet.name === activeName ? ' · active' : ''}</span>
                 <span className="nw-acc-meta">
                   <span className="nw-mono">{shortAddr(wallet.pubkey, 6)}</span>
+                  <span className={`nw-badge ${status.tone}`}>{status.label}</span>
                   {exists ? (
-                    <span className="nw-acc-bal">on chain · {formatExactBalance(entry.value)} NSAT</span>
-                  ) : notCreated ? (
-                    <span className="nw-badge warn">no on-chain account yet</span>
-                  ) : entry?.kind === 'unavailable' ? (
-                    <span className="nw-badge info">status unavailable</span>
-                  ) : (
+                    <span className="nw-acc-bal">{formatExactBalance(entry.value)} NSAT</span>
+                  ) : notCreated ? null : entry?.kind === 'unavailable' ? null : (
                     <span className="nw-acc-bal">checking…</span>
                   )}
                 </span>
@@ -2077,7 +2092,9 @@ function WalletChainStatus({ wallets, states = {}, baseReserve, activeName = '' 
       </ul>
       {missing.length > 0 && (
         <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
-          Until a wallet receives its minimum first deposit, it has no account on-chain and cannot send.
+          An address without an on-chain account cannot send. Its account is created by a
+          first deposit of at least 2× the live base reserve, or by sponsored activation
+          once the network enables it.
         </p>
       )}
     </section>
