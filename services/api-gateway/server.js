@@ -51,8 +51,8 @@ const CONFIG = {
   // (services/sponsor/sponsor-open.js).
   sponsorship: {
     enabled: process.env.NSAT_SPONSORSHIP_ENABLED === '1',
-    requiredProtocol: 30,
-    reserveUnits: 2
+    requiredProtocol: 14,
+    reserveUnits: 3
   },
 
   // Read-only confirmation indexer. The upstream is fixed by configuration so a

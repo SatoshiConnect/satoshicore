@@ -41,23 +41,27 @@ function opEnd(userPub) {
 }
 const ZERO_AMOUNT = new Uint8Array(16);
 
-test('gate: protocol 29 is refused, protocol 30 is open', () => {
-  const old = sponsorshipGate({ protocolVersion: 29, policyEnabled: true });
+test('gate: protocol 13 is refused, protocol 14 is open', () => {
+  // Sponsorship operations are rejected below the ledger version that accepts
+  // them (Begin/EndSponsoringFutureReserves isOpSupported: V_14).
+  const old = sponsorshipGate({ protocolVersion: 13, policyEnabled: true });
   assert.equal(old.available, false);
-  assert.match(old.reason, /protocol 30/);
+  assert.match(old.reason, /protocol 14/);
 
   const now = sponsorshipGate({ protocolVersion: SPONSORSHIP_PROTOCOL_VERSION, policyEnabled: true });
   assert.equal(now.available, true);
 
-  const closed = sponsorshipGate({ protocolVersion: 30, policyEnabled: false });
+  const closed = sponsorshipGate({ protocolVersion: 14, policyEnabled: false });
   assert.equal(closed.available, false);
 
   assert.equal(sponsorshipGate({ protocolVersion: null }).available, false);
-  assert.equal(sponsorshipGate({ protocolVersion: 30 }).available, true);
+  assert.equal(sponsorshipGate({ protocolVersion: 14 }).available, true);
 });
 
-test('reserve cost is exactly two base reserves', () => {
-  assert.equal(reserveForNewAccount(100000000), 200000000n);
+test('reserve cost is three base reserves (measured on ledger v14)', () => {
+  // 2 for the account entry + 1 for the sponsorship relation. A sponsor with
+  // exactly 2 units available is refused with CREATE_ACCOUNT_LOW_RESERVE.
+  assert.equal(reserveForNewAccount(100000000), 300000000n);
   assert.throws(() => reserveForNewAccount(0), /positive/);
 });
 
