@@ -43,11 +43,11 @@ function startMockCore() {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
 }
 
-function request(port, path, { method = 'GET', body = null, origin } = {}) {
+function request(port, path, { method = 'GET', body = null, origin, headers = {} } = {}) {
   return new Promise((resolve, reject) => {
     const req = http.request(
       { host: '127.0.0.1', port, path, method,
-        headers: { ...(origin ? { Origin: origin } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) } },
+        headers: { ...headers, ...(origin ? { Origin: origin } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) } },
       (res) => {
         let data = '';
         res.on('data', (c) => (data += c));
@@ -229,6 +229,72 @@ test('rate limit enforced per IP', async () => {
   } finally {
     gateway.close();
     mockCore.close();
+  }
+});
+
+// Behind Caddy every socket peer is loopback: the limit must key on the client
+// the proxy reports, not on 127.0.0.1 shared by every visitor.
+test('rate limit keys on the forwarded client, not the proxy socket', async () => {
+  const mockCore = await startMockCore();
+  process.env.NSAT_CORE_HTTP_URL = `http://127.0.0.1:${mockCore.address().port}`;
+  process.env.RATE_MAX_REQUESTS = '2';
+  process.env.RATE_WINDOW_MS = '60000';
+  process.env.TRUST_PROXY = '1';
+  delete require.cache[require.resolve('../server.js')];
+  const { createServer: freshCreate } = require('../server.js');
+  const gateway = freshCreate();
+  await new Promise((r) => gateway.listen(0, '127.0.0.1', r));
+  const port = gateway.address().port;
+  const clientA = { headers: { 'X-Forwarded-For': '198.51.100.10' } };
+  const clientB = { headers: { 'X-Forwarded-For': '198.51.100.11' } };
+  try {
+    assert.equal((await request(port, '/api/v1/chain/info', clientA)).status, 200);
+    assert.equal((await request(port, '/api/v1/chain/info', clientA)).status, 200);
+    assert.equal((await request(port, '/api/v1/chain/info', clientA)).status, 429);
+    // Prepending a made-up address must not escape the bucket: the rightmost
+    // entry is the one the proxy appended.
+    const spoofed = { headers: { 'X-Forwarded-For': '203.0.113.99, 198.51.100.10' } };
+    assert.equal((await request(port, '/api/v1/chain/info', spoofed)).status, 429);
+    // A second visitor must not inherit the first visitor's exhausted bucket.
+    assert.equal((await request(port, '/api/v1/chain/info', clientB)).status, 200);
+  } finally {
+    gateway.close();
+    mockCore.close();
+  }
+});
+
+// The wallet polls chain info continuously; that read traffic must not stop a
+// message send, and chat traffic must not starve balance/history reads.
+test('chat has its own rate-limit budget, separate from wallet polling', async () => {
+  const mockCore = await startMockCore();
+  process.env.NSAT_CORE_HTTP_URL = `http://127.0.0.1:${mockCore.address().port}`;
+  process.env.RATE_MAX_REQUESTS = '2';
+  process.env.CHAT_RATE_MAX_REQUESTS = '3';
+  process.env.RATE_WINDOW_MS = '60000';
+  process.env.NSAT_CHAT_RELAY = '1';
+  process.env.NSAT_CHAT_DB = ':memory:';
+  delete require.cache[require.resolve('../server.js')];
+  const { createServer: freshCreate } = require('../server.js');
+  const gateway = freshCreate();
+  await new Promise((r) => gateway.listen(0, '127.0.0.1', r));
+  const port = gateway.address().port;
+  const client = { headers: { 'X-Forwarded-For': '198.51.100.20' } };
+  try {
+    // Exhaust the ordinary API budget for this client.
+    assert.equal((await request(port, '/api/v1/chain/info', client)).status, 200);
+    assert.equal((await request(port, '/api/v1/chain/info', client)).status, 200);
+    assert.equal((await request(port, '/api/v1/chain/info', client)).status, 429);
+
+    // Chat still answers: route mounted (400 = address required), own budget.
+    assert.equal((await request(port, '/api/v1/chat/keys', client)).status, 400);
+    assert.equal((await request(port, '/api/v1/chat/keys', client)).status, 400);
+    assert.equal((await request(port, '/api/v1/chat/keys', client)).status, 400);
+    assert.equal((await request(port, '/api/v1/chat/keys', client)).status, 429);
+  } finally {
+    gateway.close();
+    mockCore.close();
+    delete process.env.NSAT_CHAT_RELAY;
+    delete process.env.NSAT_CHAT_DB;
   }
 });
 

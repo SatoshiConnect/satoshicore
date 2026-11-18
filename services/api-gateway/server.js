@@ -15,6 +15,7 @@
 'use strict';
 
 const http = require('node:http');
+const net = require('node:net');
 const { URL } = require('node:url');
 
 const CONFIG = {
@@ -36,6 +37,16 @@ const CONFIG = {
     windowMs: Number(process.env.RATE_WINDOW_MS) || 60_000,
     maxRequests: Number(process.env.RATE_MAX_REQUESTS) || 120
   },
+  // Chat has its own budget: the wallet polls chain info continuously, and that
+  // read traffic must never consume the allowance a message send needs.
+  chatRateLimit: {
+    windowMs: Number(process.env.RATE_WINDOW_MS) || 60_000,
+    maxRequests: Number(process.env.CHAT_RATE_MAX_REQUESTS) || 120
+  },
+  // The gateway runs loopback behind Caddy/cloudflared, so every socket peer is
+  // 127.0.0.1. Trust the proxy's client-IP headers only for a loopback peer;
+  // a direct remote connection is always keyed by its own address.
+  trustProxyHeaders: process.env.TRUST_PROXY !== '0',
   // Timeout for upstream core calls (ms).
   coreTimeoutMs: Number(process.env.CORE_TIMEOUT_MS) || 10_000,
   // Bounded busy-retry for upstream responses carrying {"status":"busy"}
@@ -83,23 +94,48 @@ function log(level, event, fields = {}) {
   );
 }
 
-// --- rate limiting (fixed window per IP) ------------------------------------
+// --- rate limiting (fixed window per IP and request class) ------------------
 const rateBuckets = new Map();
-function rateLimited(ip) {
-  const { windowMs, maxRequests } = CONFIG.rateLimit;
+function rateLimited(bucketKey, limit = CONFIG.rateLimit) {
+  const { windowMs, maxRequests } = limit;
   const now = Date.now();
-  const bucket = rateBuckets.get(ip) || { count: 0, resetAt: now + windowMs };
+  const bucket = rateBuckets.get(bucketKey) || { count: 0, resetAt: now + windowMs };
   if (now > bucket.resetAt) {
     bucket.count = 0;
     bucket.resetAt = now + windowMs;
   }
   bucket.count += 1;
-  rateBuckets.set(ip, bucket);
+  rateBuckets.set(bucketKey, bucket);
   if (rateBuckets.size > 10_000) {
     // bounded memory: drop expired buckets
     for (const [k, b] of rateBuckets) if (now > b.resetAt) rateBuckets.delete(k);
   }
   return bucket.count > maxRequests;
+}
+
+function isLoopback(address) {
+  const value = String(address || '');
+  return value === '::1' || value === '127.0.0.1' || value.startsWith('::ffff:127.');
+}
+
+/**
+ * The address a rate limit is keyed on. Keying on the socket would put every
+ * visitor behind Caddy in one bucket (and let wallet polling starve chat), so a
+ * loopback peer may supply the real client address. The rightmost forwarded
+ * entry is the one the nearest proxy actually saw; entries to its left are
+ * client-supplied and must not let a caller choose their own bucket.
+ */
+function clientIp(req) {
+  const remote = req.socket.remoteAddress || 'unknown';
+  if (!CONFIG.trustProxyHeaders || !isLoopback(remote)) return remote;
+  const header = req.headers['x-forwarded-for'];
+  const chain = Array.isArray(header) ? header.join(',') : String(header || '');
+  const entries = chain.split(',');
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const value = entries[i].trim();
+    if (net.isIP(value)) return value;
+  }
+  return remote;
 }
 
 // --- helpers ----------------------------------------------------------------
@@ -1019,8 +1055,6 @@ function handleChatRequest(req, res, pathname, searchParams) {
 // --- server ------------------------------------------------------------------
 function createServer() {
   return http.createServer((req, res) => {
-    const ip = req.socket.remoteAddress || 'unknown';
-
     if (req.method === 'OPTIONS') {
       const headers = corsHeaders(req);
       if (!headers['Access-Control-Allow-Origin']) {
@@ -1031,14 +1065,19 @@ function createServer() {
       return res.end();
     }
 
-    if (rateLimited(ip)) {
-      log('warn', 'rate_limited', { ip });
+    const url = new URL(req.url, 'http://x');
+    const pathname = url.pathname;
+    const chatRequest = CHAT_ENABLED && pathname.startsWith(CHAT_PREFIX);
+    const ip = clientIp(req);
+    const bucket = chatRequest ? 'chat' : 'api';
+    // Separate buckets: background wallet reads cannot exhaust the chat budget,
+    // and chat traffic cannot starve balance/history reads.
+    if (rateLimited(`${bucket}:${ip}`, chatRequest ? CONFIG.chatRateLimit : CONFIG.rateLimit)) {
+      log('warn', 'rate_limited', { ip, bucket });
       return sendJson(res, 429, { error: 'rate limit exceeded' });
     }
 
-    const url = new URL(req.url, 'http://x');
-    const pathname = url.pathname;
-    if (CHAT_ENABLED && pathname.startsWith(CHAT_PREFIX)) {
+    if (chatRequest) {
       return handleChatRequest(req, res, pathname, url.searchParams);
     }
     const isIndexerRoute =
