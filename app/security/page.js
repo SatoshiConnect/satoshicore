@@ -38,6 +38,10 @@ const CONTROLS = [
     body: 'Locking drops the signing key from memory. The idle timeout locks automatically; signing never survives a reload.'
   },
   {
+    title: 'Optional device unlock',
+    body: 'On supported devices, WebAuthn can ask the platform authenticator (Face ID, fingerprint, Windows Hello, security key, or device PIN) to unlock a separate AES-GCM encrypted copy stored only in this browser. The site receives no face/fingerprint data and sends no key to a server. This depends on this device and browser; deleting the authenticator or browser data can remove this convenience, so keep the original wallet password and encrypted backup.'
+  },
+  {
     title: 'No caching of chain state',
     body: 'The service worker caches only the static shell — never API paths, so a stale balance or verdict cannot be served.'
   }
@@ -50,7 +54,7 @@ const LIMITS = [
   },
   {
     title: 'Password strength is your responsibility',
-    body: 'The keystore is only as strong as its password. There is no server-side reset and no way for the project to unlock a wallet.'
+    body: 'The original keystore is protected by its password. Device unlock is an optional convenience on the enrolled browser only; it is not a recovery method. There is no server-side reset and no way for the project to unlock a wallet.'
   },
   {
     title: 'Shielded transfers are desktop-only',
@@ -58,7 +62,7 @@ const LIMITS = [
   },
   {
     title: 'Google sign-in is not wallet custody',
-    body: 'Optional Google sign-in identifies a website session only. It does not unlock, sync or recover an NSAT wallet key, and it cannot sign or spend. You may also link one public wallet address to the account so another device can show that address\'s balance and receive screen after sign-in — watching an address is not ownership, and sending still requires the wallet password and key on the signing device. The app does not request Gmail mailbox access.'
+    body: 'Google sign-in is optional: the wallet also opens without a website account, which lists only wallets not linked to an account. When used, it opens the wallet session and signing out ends it: the wallet locks before the Google call returns and the screen is cleared. Sign-in does not unlock, sync or recover an NSAT wallet key, and it cannot sign or spend. You may also link one public wallet address to the account so another device can show that address\'s balance and receive screen after sign-in — watching an address is not ownership, and sending still requires the wallet password and key on the signing device. The app does not request Gmail mailbox access.'
   },
   {
     title: 'Website connections are not enabled',

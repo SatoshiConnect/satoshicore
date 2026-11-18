@@ -9,7 +9,7 @@
   "id": "./",
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui"],
-  "orientation": "portrait-primary",
+  "orientation": "any",
   "background_color": "#0a0c11",
   "theme_color": "#0a0c11",
   "categories": ["finance", "utilities"],

@@ -1,15 +1,26 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { isFirebaseWebConfigured, loadGoogleAuth } from '../lib/firebaseAuth';
+import {
+  getFirebaseWebConfig, isFirebaseWebConfigured, loadGoogleAuth,
+  setGoogleSessionPersistence, setRememberGoogleSession, shouldRememberGoogleSession,
+  signOutGoogleSession,
+} from '../lib/firebaseAuth';
+import {
+  clearSessionExpired, describeSessionPolicy, markSessionExpired, readSessionExpired,
+  readSessionRecord, sessionIsStale, touchSessionRecord,
+} from '../lib/sessionPolicy';
 import {
   currentTheme, disableThemeSync, enableThemeSync, pullThemeForUser,
   syncEnabledFor,
 } from '../lib/themeSync';
 import { keystoreList } from '../lib/nsatWallet';
 import {
-  linkAddressForUser, linkedAddressForCurrentUser, unlinkAddressForUser,
+  MAX_LINKED_ADDRESSES, addLinkedAddressForUser, classifyLinkFailure,
+  describeLinkFailure, diagnoseFirestoreProblem, linkedAddressesForCurrentUser,
+  removeLinkedAddressForUser, unlinkAddressForUser,
 } from '../lib/walletLinks';
+import DriveFailureDialog from './DriveFailureDialog';
 
 const configured = isFirebaseWebConfigured();
 
@@ -23,24 +34,60 @@ function friendlyAuthError(error) {
 
 const shortAddress = (address) => (address ? `${address.slice(0, 6)}…${address.slice(-6)}` : '');
 
-export default function GoogleAccount() {
+// `variant="row"` is the wallet-screen entry point: one line with the account
+// state and its single action, so signing in does not require Settings.
+// The full card stays in Settings, where there is room to explain each choice.
+export default function GoogleAccount({ variant = 'card', onUseStandalone } = {}) {
   const [user, setUser] = useState(null);
   const [ready, setReady] = useState(!configured);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [rememberDevice, setRememberDevice] = useState(false);
   // Theme sync is a separate, opt-in choice; signing in alone uploads nothing.
   const [syncOn, setSyncOn] = useState(false);
   const [syncNote, setSyncNote] = useState('');
-  // Optional watch-only address link. Also separate from sign-in: nothing is
-  // stored until the user links an address here.
-  const [linked, setLinked] = useState('');
+  // A link that could not be saved says why in a dialog: the usual cause is a
+  // disabled database or a rules denial, and both have a page that fixes them.
+  const [linkDialog, setLinkDialog] = useState(null);
+  // Optional watch-only address links. Also separate from sign-in: nothing is
+  // stored until the user links a wallet here, and one account can link several
+  // because one person usually holds more than one wallet.
+  const [linked, setLinked] = useState([]);
   const [linkTarget, setLinkTarget] = useState('');
   const [linkNote, setLinkNote] = useState('');
   const [localWallets, setLocalWallets] = useState([]);
+  // A saved sign-in this browser ended because it went unused too long. Reading
+  // the flag does not clear it, so a second mount of the gate still shows the
+  // explanation; signing in again is what clears it.
+  const [sessionExpiredNotice, setSessionExpiredNotice] = useState(false);
+
+  useEffect(() => {
+    setSessionExpiredNotice(readSessionExpired() > 0);
+  }, []);
 
   useEffect(() => {
     setLocalWallets(keystoreList());
   }, [user]);
+
+  // Wallets on this device that the account is not watching yet: only those are
+  // offered, so linking never duplicates an address.
+  const unlinkedLocal = localWallets.filter((wallet) => !linked.includes(wallet.pubkey));
+
+  // Ask the API only when the write itself did not say why: an anonymous probe
+  // always gets "permission denied" once the rules are owner-only, so it must
+  // never override the SDK's own explanation.
+  async function linkFailureDialog(err, action) {
+    let code = classifyLinkFailure(err, '');
+    if (!code) code = classifyLinkFailure(err, (await diagnoseFirestoreProblem()).code);
+    return describeLinkFailure(code, { action, projectId: getFirebaseWebConfig().projectId });
+  }
+
+  // Settings is not the only screen that cares: the wallet home shows a
+  // watch-only view from the same list, so a change here has to reach it without
+  // a reload.
+  function announceLinksChanged() {
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event('nsat:links-changed'));
+  }
 
   useEffect(() => {
     if (!configured) return undefined;
@@ -56,18 +103,35 @@ export default function GoogleAccount() {
           email: nextUser.email || '',
         } : null);
         setSyncOn(syncEnabledFor(uid));
+        setRememberDevice(shouldRememberGoogleSession());
         setReady(true);
+        if (uid) {
+          // A remembered sign-in unused for the policy window is ended here
+          // rather than opened. This touches only the website session: every
+          // wallet stays encrypted on the device, and the gate says why a
+          // sign-in is needed again. Unknown or unreadable records are never
+          // expired, so blocked storage cannot lock a visitor out.
+          if (sessionIsStale(readSessionRecord(), { now: Date.now() })) {
+            markSessionExpired();
+            void signOutGoogleSession().catch(() => {});
+            return;
+          }
+          touchSessionRecord(uid);
+          // The visitor is signed in again, so the expired-session explanation
+          // is no longer true for this browser.
+          clearSessionExpired();
+        }
         // An opted-in account brings its theme to this device. A miss just
         // leaves the local theme as it is.
         if (uid) void pullThemeForUser(uid).catch(() => {});
         // A linked address only pre-fills the field; it is never applied to a
         // wallet or used to sign anything.
         if (uid) {
-          void linkedAddressForCurrentUser().then((address) => {
-            if (mounted) setLinked(address || '');
-          }).catch(() => { if (mounted) setLinked(''); });
+          void linkedAddressesForCurrentUser().then((list) => {
+            if (mounted) setLinked(list);
+          }).catch(() => { if (mounted) setLinked([]); });
         } else {
-          setLinked('');
+          setLinked([]);
         }
       }, () => {
         setError('Could not read the Google sign-in session.');
@@ -89,11 +153,39 @@ export default function GoogleAccount() {
     setError('');
     try {
       const { auth, authSdk } = await loadGoogleAuth();
+      // Persistence is set before starting OAuth so a completed sign-in is
+      // stored only according to the explicit checkbox state. The helper
+      // refuses LOCAL persistence if the opt-in flag cannot be saved locally.
+      await setGoogleSessionPersistence(rememberDevice);
       const provider = new authSdk.GoogleAuthProvider();
       provider.setCustomParameters({ prompt: 'select_account' });
       await authSdk.signInWithPopup(auth, provider);
     } catch (err) {
+      // A cancelled/failed OAuth attempt must not leave persistent sign-in
+      // enabled as a side effect of the pre-login checkbox.
+      if (!user) {
+        try { await setGoogleSessionPersistence(false); } catch { /* auth may never have initialized */ }
+        setRememberGoogleSession(false);
+        setRememberDevice(false);
+      }
       setError(friendlyAuthError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleRememberDevice() {
+    const next = !rememberDevice;
+    setBusy(true);
+    setError('');
+    try {
+      // Firebase migrates the currently signed-in user to the selected mode.
+      // If it fails, leave the checkbox unchanged and explain that the current
+      // session is unaffected.
+      await setGoogleSessionPersistence(next);
+      setRememberDevice(next);
+    } catch {
+      setError('Could not change this device’s sign-in setting. Your current session is unchanged.');
     } finally {
       setBusy(false);
     }
@@ -103,8 +195,10 @@ export default function GoogleAccount() {
     setBusy(true);
     setError('');
     try {
-      const { auth, authSdk } = await loadGoogleAuth();
-      await authSdk.signOut(auth);
+      // The shared helper announces the sign-out before it reaches Firebase, so
+      // the wallet locks and wipes its session immediately.
+      await signOutGoogleSession();
+      setRememberDevice(false);
     } catch {
       setError('Could not sign out. Please try again.');
     } finally {
@@ -141,25 +235,45 @@ export default function GoogleAccount() {
 
   async function linkAddress() {
     const uid = user?.uid;
-    const target = (linkTarget || localWallets[0]?.pubkey || '').trim();
+    const target = (linkTarget || unlinkedLocal[0]?.pubkey || '').trim();
     if (!uid) return;
     setBusy(true);
     setError('');
     setLinkNote('');
     try {
-      const saved = await linkAddressForUser(uid, target);
+      const saved = await addLinkedAddressForUser(uid, target);
       setLinked(saved);
       setLinkTarget('');
-      setLinkNote(`Linked ${shortAddress(saved)}. Balance and receive now work on another device after Google sign-in; sending still needs this wallet's key.`);
+      announceLinksChanged();
+      setLinkNote(`${shortAddress(target)} is linked. ${saved.length} wallet${saved.length === 1 ? '' : 's'} on this account can now be watched and receive after Google sign-in on another device; sending still needs the wallet's key.`);
     } catch (err) {
       const message = String(err?.message || '');
-      setError(
-        /account id/.test(message)
-          ? 'That is not a wallet address. Use the full 56-character address starting with G.'
-          : /did not complete/.test(message)
-            ? 'The address was not confirmed as saved. Reload to check before relying on it; if it appears, it is linked.'
-            : 'Could not link the address. The site database may not be configured yet.',
-      );
+      if (err?.code === 'LINK_LIMIT') {
+        setError(`This account already links ${MAX_LINKED_ADDRESSES} wallets, which is the limit. Remove one first.`);
+      } else if (/account id/.test(message)) {
+        setError('That is not a wallet address. Use the full 56-character address starting with G.');
+      } else {
+        setLinkDialog(await linkFailureDialog(err, 'link'));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // One wallet at a time: removing wallet A must leave B linked.
+  async function unlinkOne(address) {
+    const uid = user?.uid;
+    if (!uid) return;
+    setBusy(true);
+    setError('');
+    setLinkNote('');
+    try {
+      const remaining = await removeLinkedAddressForUser(uid, address);
+      setLinked(remaining);
+      announceLinksChanged();
+      setLinkNote(`${shortAddress(address)} is no longer linked. ${remaining.length ? `${remaining.length} wallet${remaining.length === 1 ? '' : 's'} still linked.` : 'No wallets are linked to this account now.'}`);
+    } catch (err) {
+      setLinkDialog(await linkFailureDialog(err, 'unlink'));
     } finally {
       setBusy(false);
     }
@@ -173,15 +287,110 @@ export default function GoogleAccount() {
     setLinkNote('');
     try {
       await unlinkAddressForUser(uid);
-      setLinked('');
-      setLinkNote('Address unlinked and deleted from your account.');
+      setLinked([]);
+      announceLinksChanged();
+      setLinkNote('All linked addresses were removed from your account.');
     } catch (err) {
-      setError(/did not complete/.test(String(err?.message || ''))
-        ? 'Unlinking was not confirmed. Reload to check whether it is still linked.'
-        : 'Could not unlink the address. The site database may not be configured yet.');
+      setLinkDialog(await linkFailureDialog(err, 'unlink'));
     } finally {
       setBusy(false);
     }
+  }
+
+  // The gate is the wallet's front door: a browser that is not signed in shows
+  // this instead of the wallet screen. A Google account is one of two ways in —
+  // the directive requires that a visitor who does not want Google can still
+  // use the standalone wallet — so the card offers both choices and says what
+  // each one reveals on a shared device.
+  if (variant === 'gate') {
+    return (
+      <section className="nw-card nw-gate" aria-labelledby="nw-gate-title">
+        <h2 id="nw-gate-title" style={{ color: 'var(--text)' }}>Open your wallet</h2>
+        <p className="nw-small nw-dim" style={{ margin: '8px 0 14px' }}>
+          Sign in with Google to identify your website session, or use the wallets on this
+          device without an account. Signing out locks the wallet and clears this session,
+          so the next person on this device starts here instead of in your wallet.
+        </p>
+        {sessionExpiredNotice ? (
+          <p className="nw-small nw-dim" role="status" style={{ margin: '0 0 12px' }}>
+            The saved sign-in on this browser ended after 30 days without use. Sign in again to
+            reopen it — your wallet, its password and its balances are unchanged.
+          </p>
+        ) : null}
+        {!configured ? (
+          <p className="nw-small nw-dim" role="status">
+            Google sign-in is not configured in this build, so the wallet opens without it.
+          </p>
+        ) : !ready ? (
+          <p className="nw-small nw-dim" role="status">Checking sign-in session…</p>
+        ) : user ? (
+          <p className="nw-small nw-dim" role="status">
+            {`Signed in as ${user.email || 'your Google account'}. Opening your wallet…`}
+          </p>
+        ) : (
+          <>
+            <button type="button" className="nw-send-btn nw-gate-btn"
+              onClick={signIn} disabled={busy}>
+              {busy ? 'Opening Google…' : 'Continue with Google'}
+            </button>
+            <label className="nw-small" style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 12 }}>
+              <input type="checkbox" checked={rememberDevice} disabled={busy}
+                onChange={(e) => setRememberDevice(e.target.checked)}
+                style={{ marginTop: 2, width: 'auto' }} />
+              <span>
+                <strong>Remember this device</strong>
+                <span className="nw-dim"> — stay signed in on this browser. Do not use on a shared device. This does not remember the wallet password or unlock the wallet.</span>
+              </span>
+            </label>
+          </>
+        )}
+        {error ? <p className="nw-small nw-google-error" role="alert">{error}</p> : null}
+        {onUseStandalone ? (
+          <>
+            <button type="button" className="nw-ghost-btn nw-gate-skip"
+              onClick={onUseStandalone} disabled={busy}>
+              Use without an account
+            </button>
+            <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
+              Without an account, only wallets that are not linked to a website account are
+              listed here. A wallet that belongs to a Google account stays hidden, not deleted,
+              until that account signs in.
+            </p>
+          </>
+        ) : null}
+        <p className="nw-small nw-dim" style={{ margin: '12px 0 0' }}>
+          Your encrypted wallet stays on this device and is never uploaded; the Google account
+          only identifies the session. Signing out deletes no wallet.
+        </p>
+      </section>
+    );
+  }
+
+  if (variant === 'row') {
+    return (
+      <div className="nw-signin-row">
+        <span className="nw-signin-row-main">
+          <span className="nw-signin-row-title">Website account</span>
+          <span className="nw-small nw-dim">
+            {!configured ? 'Google sign-in is not configured in this build.'
+              : !ready ? 'Checking sign-in session…'
+                : user ? (user.email || 'signed in') : 'not signed in'}
+          </span>
+        </span>
+        {configured && ready ? (
+          user ? (
+            <button type="button" className="nw-chip-btn" onClick={signOut} disabled={busy}>
+              {busy ? 'Signing out…' : 'Sign out'}
+            </button>
+          ) : (
+            <button type="button" className="nw-chip-btn nw-signin-row-btn"
+              onClick={signIn} disabled={busy}>
+              {busy ? 'Opening Google…' : 'Sign in'}
+            </button>
+          )
+        ) : null}
+      </div>
+    );
   }
 
   return (
@@ -208,12 +417,36 @@ export default function GoogleAccount() {
           </button>
         </div>
       ) : (
-        <button type="button" className="nw-send-btn" onClick={signIn} disabled={busy}>
-          {busy ? 'Opening Google…' : 'Continue with Google'}
-        </button>
+        <>
+          <button type="button" className="nw-send-btn" onClick={signIn} disabled={busy}>
+            {busy ? 'Opening Google…' : 'Continue with Google'}
+          </button>
+          <label className="nw-small" style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 10 }}>
+            <input type="checkbox" checked={rememberDevice} onChange={(e) => setRememberDevice(e.target.checked)}
+              disabled={busy} style={{ marginTop: 2, width: 'auto' }} />
+            <span>
+              <strong>Remember this device</strong>
+              <span className="nw-dim"> — stay signed in to this website on this browser. Do not use on a shared device. This does not unlock the wallet or remember its password.</span>
+            </span>
+          </label>
+        </>
       )}
       {error ? <p className="nw-small nw-google-error" role="alert">{error}</p> : null}
-      {user ? <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>Signed in for this browser session only.</p> : null}
+      {user ? (
+        <div className="nw-google-sync" style={{ marginTop: 10 }}>
+          <label className="nw-small" style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+            <input type="checkbox" checked={rememberDevice} onChange={toggleRememberDevice}
+              disabled={busy} style={{ marginTop: 2, width: 'auto' }} />
+            <span>
+              <strong>Remember this device</strong>
+              <span className="nw-dim"> — stay signed in to this website on this browser. Do not use on a shared device. This does not unlock the wallet or remember its password.</span>
+            </span>
+          </label>
+          <p className="nw-small nw-dim" style={{ margin: '6px 0 0' }}>
+            {describeSessionPolicy({ remembered: rememberDevice })}
+          </p>
+        </div>
+      ) : null}
       {user ? (
         <div className="nw-google-sync">
           <div className="nw-kv">
@@ -237,59 +470,90 @@ export default function GoogleAccount() {
       {user ? (
         <div className="nw-google-sync">
           <div className="nw-kv">
-            <span className="nw-k">Wallet address</span>
-            <span className="nw-v nw-mono nw-small">{linked ? shortAddress(linked) : 'not linked'}</span>
+            <span className="nw-k">Linked wallets</span>
+            <span className="nw-v nw-mono nw-small">
+              {linked.length ? `${linked.length} of ${MAX_LINKED_ADDRESSES}` : 'not linked'}
+            </span>
           </div>
+          {linked.length ? (
+            <ul className="nw-link-list">
+              {linked.map((address) => (
+                <li key={address} className="nw-link-row">
+                  <span className="nw-mono nw-small">{shortAddress(address)}</span>
+                  <button type="button" className="nw-chip-btn" disabled={busy}
+                    aria-label={`Stop watching ${address}`}
+                    onClick={() => unlinkOne(address)}>
+                    Remove
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
           <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
-            Optional. Stores this public address with your website account so you can see
-            its balance and receive screen after signing in on another device. An address is
-            public and cannot move funds, so this is not backup or recovery: sending still
-            needs the wallet password and key on the device that signs. No balance, history,
-            wallet name or seed is stored, and unlinking deletes the entry.
+            {`Optional. Stores these public addresses with your website account so each wallet's `
+              + `balance and receive screen work after signing in on another device — one account `
+              + `can link up to ${MAX_LINKED_ADDRESSES} wallets. An address is public and cannot `
+              + 'move funds, so this is not backup or recovery: sending still needs the wallet '
+              + 'password and key on the device that signs. No balance, history, wallet name or '
+              + 'seed is stored, and Remove deletes that one entry.'}
           </p>
-          {linked ? (
+          {linked.length < MAX_LINKED_ADDRESSES ? (
+            unlinkedLocal.length > 0 || localWallets.length === 0 ? (
+              <>
+                {localWallets.length > 0 ? (
+                  <div className="nw-kv" style={{ marginTop: 8 }}>
+                    <span className="nw-k">Add</span>
+                    <span className="nw-v">
+                      <select
+                        aria-label="Wallet address to link"
+                        value={linkTarget || unlinkedLocal[0]?.pubkey || ''}
+                        onChange={(e) => setLinkTarget(e.target.value)}>
+                        {unlinkedLocal.map((wallet) => (
+                          <option key={wallet.name} value={wallet.pubkey}>
+                            {`${wallet.name} (this device)`}
+                          </option>
+                        ))}
+                      </select>
+                    </span>
+                  </div>
+                ) : (
+                  <input
+                    type="text"
+                    spellCheck={false}
+                    aria-label="Public wallet address to link"
+                    placeholder="G… public address"
+                    value={linkTarget}
+                    onChange={(e) => setLinkTarget(e.target.value)}
+                    style={{ marginTop: 8 }} />
+                )}
+                <div className="nw-btn-row" style={{ margin: '8px 0 0' }}>
+                  <button type="button" className="nw-chip-btn" onClick={linkAddress} disabled={busy}>
+                    {linked.length ? 'Link another wallet' : 'Link address'}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
+                Every wallet on this device is already linked.
+              </p>
+            )
+          ) : (
+            <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
+              {`This account links ${MAX_LINKED_ADDRESSES} wallets, which is the limit. Remove one to add another.`}
+            </p>
+          )}
+          {linked.length > 1 ? (
             <div className="nw-btn-row" style={{ margin: '8px 0 0' }}>
               <button type="button" className="nw-chip-btn" onClick={unlinkAddress} disabled={busy}>
-                Unlink address
+                Remove all
               </button>
             </div>
-          ) : (
-            <>
-              {localWallets.length > 0 ? (
-                <div className="nw-kv" style={{ marginTop: 8 }}>
-                  <span className="nw-k">Use</span>
-                  <span className="nw-v">
-                    <select
-                      aria-label="Wallet address to link"
-                      value={linkTarget}
-                      onChange={(e) => setLinkTarget(e.target.value)}>
-                      <option value="">{`${localWallets[0].name} (this device)`}</option>
-                      {localWallets.slice(1).map((w) => (
-                        <option key={w.name} value={w.pubkey}>{w.name} (this device)</option>
-                      ))}
-                    </select>
-                  </span>
-                </div>
-              ) : (
-                <input
-                  type="text"
-                  spellCheck={false}
-                  aria-label="Public wallet address to link"
-                  placeholder="G… public address"
-                  value={linkTarget}
-                  onChange={(e) => setLinkTarget(e.target.value)}
-                  style={{ marginTop: 8 }} />
-              )}
-              <div className="nw-btn-row" style={{ margin: '8px 0 0' }}>
-                <button type="button" className="nw-chip-btn" onClick={linkAddress} disabled={busy}>
-                  Link address
-                </button>
-              </div>
-            </>
-          )}
+          ) : null}
           {linkNote ? <p className="nw-small nw-dim" role="status" style={{ margin: '6px 0 0' }}>{linkNote}</p> : null}
         </div>
       ) : null}
+      <DriveFailureDialog dialog={linkDialog} onClose={() => setLinkDialog(null)}
+        step="WEBSITE ACCOUNT · LINKED WALLETS" />
     </section>
   );
 }

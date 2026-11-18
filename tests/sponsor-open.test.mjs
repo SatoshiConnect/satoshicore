@@ -24,7 +24,9 @@ function startMockCore() {
         info: {
           network: NETWORK,
           protocol_version: 30,
-          ledger: { baseReserve: 100000000, baseFee: 10 },
+          // The tool must gate on the ledger version, not on the version the
+          // node software supports.
+          ledger: { baseReserve: 100000000, baseFee: 10, version: 30 },
         },
       }));
       return;
@@ -71,7 +73,7 @@ function testEnv(coreUrl, ledgerFile) {
     NODE_NO_WARNINGS: '1',
     NSAT_CORE_HTTP_URL: coreUrl,
     NSAT_EXPECT_NETWORK: NETWORK,
-    NSAT_SPONSOR_DAILY_BUDGET_STROOPS: '200000000',
+    NSAT_SPONSOR_DAILY_BUDGET_STROOPS: '300000000',
     NSAT_SPONSOR_MAX_PER_DAY: '1',
     ...(ledgerFile ? { NSAT_SPONSOR_LEDGER_FILE: ledgerFile } : {}),
     NSAT_SPONSOR_SEED_FILE: path.join(path.dirname(ledgerFile || os.tmpdir()), 'test-seed-file-must-not-be-read'),
@@ -126,7 +128,7 @@ test('sponsor budget reservation serializes concurrent requests and never submit
     const entries = fs.readFileSync(ledger, 'utf8').trim().split('\n');
     assert.equal(entries.length, 1);
     const entry = JSON.parse(entries[0]);
-    assert.equal(entry.reserve_stroops, '200000000');
+    assert.equal(entry.reserve_stroops, '300000000');
     assert.equal(fs.statSync(ledger).mode & 0o077, 0);
     assert.equal(core.submits, 0);
 

@@ -31,7 +31,8 @@ permissions:
   contents: read
 
 env:
-  NODE_VERSION: '20'
+  # The messenger relay tests import node:sqlite; Node 20 does not provide it.
+  NODE_VERSION: '24'
   # Production endpoints and the exact Mainnet identity. Root base path: the
   # live site proves it (`/_next/...` in its HTML).
   NEXT_PUBLIC_BASE_PATH: ''

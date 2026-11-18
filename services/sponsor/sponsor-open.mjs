@@ -170,7 +170,12 @@ async function main() {
 
   const info = await getJson('/info');
   if (info.status !== 200 || !info.body || !info.body.info) fail('core /info unavailable', 3);
-  const { network, protocol_version: protocolVersion, ledger } = info.body.info;
+  // The gate must use the version the LEDGER is on (info.ledger.version), not
+  // info.protocol_version (the newest version this node software can run):
+  // otherwise a node supporting 29 happily sponsors on a ledger still at 2,
+  // where the core rejects the ops.
+  const { network, ledger } = info.body.info;
+  const protocolVersion = Number(ledger && ledger.version);
   if (network !== EXPECTED_NETWORK) {
     fail(`wrong network: expected "${EXPECTED_NETWORK}", core reports "${network}"`, 3);
   }

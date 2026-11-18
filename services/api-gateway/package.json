@@ -6,7 +6,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test tests/"
+    "test": "node --test tests/gateway.test.js tests/sdk-contract.test.mjs tests/sdk-identity.test.mjs"
   },
   "engines": {
     "node": ">=20"

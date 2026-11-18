@@ -106,6 +106,51 @@ test('a genuinely-created backup restores and unlocks to the same address', asyn
   assert.ok(seed instanceof Uint8Array && seed.length === 32, 'restore must faithfully reproduce the original seed');
 });
 
+// A backup file is always older than the device, so restoring must never be the
+// reason a wallet created afterwards disappears. These three cases are the
+// difference between "add my backup" and "erase my newer wallets".
+test('restore keeps a wallet that was created after the backup', async () => {
+  await keystoreCreate('early', 'pw-early-1234567');
+  const backup = keystoreExport();
+  await keystoreCreate('later', 'pw-later-1234567');
+
+  const result = keystoreRestore(backup);
+  assert.deepEqual(result, { added: 0, updated: 0, conflicts: [] });
+  assert.deepEqual(keystoreList().map((w) => w.name).sort(), ['early', 'later']);
+  assert.equal((await keystoreUnlock('later', 'pw-later-1234567')).length, 32);
+});
+
+test('restore adds missing wallets and never overwrites a different key of the same name', async () => {
+  await keystoreCreate('shared-name', 'pw-first-1234567');
+  await keystoreCreate('from-backup', 'pw-backup-1234567');
+  const olderBackup = keystoreExport();
+
+  // Another device: same wallet name, different seed, no 'from-backup'.
+  items.clear();
+  await keystoreCreate('shared-name', 'pw-second-12345678');
+  const liveBox = JSON.parse(keystoreExport()).wallets[0].box;
+
+  const result = keystoreRestore(olderBackup);
+  assert.equal(result.added, 1, 'the wallet only the backup has is added');
+  assert.equal(result.updated, 0);
+  assert.deepEqual(result.conflicts, ['shared-name']);
+
+  const after = JSON.parse(keystoreExport()).wallets;
+  assert.equal(after.length, 2, 'nothing is deleted');
+  assert.equal(after.find((w) => w.name === 'shared-name').box, liveBox,
+    'the different key under that name is left untouched');
+  assert.equal((await keystoreUnlock('shared-name', 'pw-second-12345678')).length, 32);
+  assert.equal((await keystoreUnlock('from-backup', 'pw-backup-1234567')).length, 32);
+});
+
+test('restoring the same backup twice changes nothing the second time', async () => {
+  await keystoreCreate('once', 'pw-once-1234567');
+  const backup = keystoreExport();
+  assert.deepEqual(keystoreRestore(backup), { added: 0, updated: 0, conflicts: [] });
+  assert.deepEqual(keystoreRestore(backup), { added: 0, updated: 0, conflicts: [] });
+  assert.equal(keystoreList().length, 1);
+});
+
 test('new wallets require the password floor; import enforces it too', async () => {
   assert.equal(checkNewPassword('short').ok, false);
   assert.equal(checkNewPassword(' '.repeat(MIN_PASSWORD_LENGTH)).ok, false);

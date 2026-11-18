@@ -1,7 +1,7 @@
 # NSAT Universal Wallet — Project Status
 
-อัปเดต: 2026-11-14 · Repo: `SatoshiConnect/satoshicore` (โฟลเดอร์ `satoshicore-web`) · Branch: `feat/sponsored-accounts-wallet`
-Commit ล่าสุดของรอบนี้: `e013e06` (ก่อน tranche homepage) · ดู §6 สำหรับ tranche 2026-11-14
+อัปเดต: 2026-11-16 · Repo: `SatoshiConnect/satoshicore` (โฟลเดอร์ `satoshicore-web`) · Branch: `feat/messenger-payments-p3`
+Commit ล่าสุดของรอบนี้: `5f3b3d4` (Messenger P3 + same-origin chat/PWA fixes) · ดู §0 สำหรับ deployment log
 
 สถานะที่ใช้: **IMPLEMENTED → VERIFIED → REVIEWED → MERGED → RELEASE-READY → DEPLOYED**
 สถานะการตรวจ: IMPLEMENTED / VERIFIED / BROKEN / MISSING / BLOCKED / NOT INSPECTED
@@ -19,6 +19,82 @@ Commit ล่าสุดของรอบนี้: `e013e06` (ก่อน tr
 | Backup ก่อน deploy | `satoshicore-webroot.bak-20261114-025324` และ `.bak` รอบที่สอง (rollback = copy กลับ) |
 | หลักฐาน | `verify-deployed-site` 8 passed / 0 failed; `index.html` sha256 ตรงระหว่าง `out/` กับ root ที่เสิร์ฟ; security scan 45 ไฟล์สะอาด; mainnet identity 4 chunks |
 | ไม่ได้แตะ | DNS, Caddy config, mainnet/genesis/mint, ไม่มีธุรกรรมใด ๆ |
+
+### Deploy 2026-11-16 — standalone gate (commit `44b9cbe`)
+
+| รายการ | ค่า |
+|---|---|
+| เวลาที่ deploy | 2026-11-16 00:26 (local) |
+| Commit ที่ build | `44b9cbe` — build จาก git worktree สะอาดของ commit นั้น (ไม่ได้ build จาก working tree ที่มีไฟล์ค้าง) |
+| โหมด build | `NEXT_PUBLIC_API_SAME_ORIGIN=1` |
+| Caddy root | `/Users/migssa-ngakhaonu/nsat-ops/satoshicore-webroot` → `satoshicore-webroot-standalone-44b9cbe` |
+| Rollback | symlink กลับไป `satoshicore-webroot-fixedscreen-aca6e34` (โฟลเดอร์เดิมยังอยู่ครบ) |
+| หลักฐาน | `index.html` sha256 `d2b6030e055d24b16c9dffb7eec415733e6d54d3558afb45f59a3d69fb8a6ddd`; `verify:deployed` 8 passed / 0 failed / 2 advisory; incognito 430×932: gate มีสองปุ่ม, `Use without an account` เข้าหน้าตัว wallet ได้, reload กลับมาที่ gate; `/privacy/` `/security/` `/terms/` แสดงข้อความ optional; console ว่าง |
+| ไม่ได้แตะ | Mainnet/genesis/ledger/validator/คีย์จริง, DNS, Caddy config, ไม่มีธุรกรรมใด ๆ |
+| ยังไม่ deploy | `6f2e7cd` (session idle limit 30 วัน) — รออนุมัติแยก |
+
+### Deploy 2026-11-16 (Messenger P3) — payment requests + verified cards (commit `7d6ad99`)
+
+| รายการ | ค่า |
+|---|---|
+| Commit ที่ build | `7d6ad99` บน `feat/messenger-payments-p3` (`694dcf0` + same-origin chat relay fix) |
+| สิ่งที่เปลี่ยน | คำขอจ่ายแบบ exact integer ในแชท; การ์ดธุรกรรมที่ตรวจ exact hash กับ indexer; P2 block gate บน relay; Firestore rules สำหรับ contact graph |
+| แก้ระหว่าง acceptance | build แรก (`694dcf0`) ตั้ง `relayOrigin=''` ใน same-origin mode ทำให้ Messages ขึ้นว่าไม่มี relay; `7d6ad99` resolve เป็น `window.location.origin` เมื่อเปิดหน้าแชท |
+| Firestore | ruleset `e4bac944-e3f3-4765-83fd-a4583dccb127`; sha256 `5ce23c7b4e38e9b389eb7dc6f17d167a4415e5f0d93477c2051f2c5263415f81` |
+| Gateway | `server.js` ไม่เปลี่ยน; `chat-relay.mjs` sha256 `a0218edb7939cb6ceaf6794f2e4c3c006652c2d149a53ef5651f00d5f637c02c`; launchd running |
+| Caddy root | `satoshicore-webroot-messenger-p3fix-7d6ad99` |
+| Rollback | webroot `satoshicore-webroot-menu-02f5644`; gateway backups `~/nsat-ops/backups/p3-20261116/`; ruleset เดิม `1f1bbce6-cf44-49f2-b2da-59b46b55a2e9` |
+| หลักฐาน | live index sha256 `ddb1ac85a4489f5d030b112f0f3e6c6d67a0a3b7144aa47b2e300dcc92d4c456`; P3 checker 4/4; `verify:deployed` 8 passed / 0 failed / 2 advisory; focused payment tests 21/21; live bundle มี `window.location.origin`, marker P3 และ `chatEnabled:!0`; artifact 66 ไฟล์ ไม่มี source map/private key |
+| Live acceptance | กระเป๋า unfunded สองใบแยก browser profile: ส่งคำขอ `9007199254740993` NSAT สำเร็จ; ผู้รับเห็นจำนวน/address ตรง, กด Review แล้ว `#nw-amt`/`#nw-dest` ตรงเป๊ะ, ปุ่ม `Review Transaction` ถูกปิดเพราะยังไม่มีเงิน, ไม่เปิด modal และไม่มีธุรกรรม; relay 200 ทุกเส้นทาง, ack สำเร็จ, ลบ key/quota ทดสอบแล้วเหลือ 0, account ทั้งคู่ 404 |
+| หมายเหตุ | headless console มี 404 จาก service-worker registration ที่ `/wallet/sw.js` (pre-existing; ไม่กระทบ payment/chat) — แก้แล้วใน deploy ถัดไป `5f3b3d4` |
+| ยังไม่ได้ทดสอบ | การ์ดจากธุรกรรมที่ส่งใหม่ผ่าน UI (ห้ามส่งธุรกรรม); acceptance ใช้ standalone wallets ไม่ได้ลงชื่อด้วย Google |
+| ไม่ได้แตะ | Mainnet/genesis/ledger/validator/คีย์จริง/DNS/Caddy config; ไม่มีธุรกรรมหรือการใช้เงิน |
+
+### Deploy 2026-11-16 — PWA service worker root registration (commit `5f3b3d4`)
+
+| รายการ | ค่า |
+|---|---|
+| Commit ที่ build | `5f3b3d4` — PWA fix ต่อจาก P3 ที่ deploy แล้ว (`7d6ad99`) |
+| สิ่งที่เปลี่ยน | `SwRegister` resolve `sw.js` จาก `NEXT_PUBLIC_BASE_PATH` แทน `document.baseURI`; หน้า `/wallet/` จึงลงทะเบียน `/sw.js` ด้วย scope `/` ไม่ใช่ `/wallet/sw.js` |
+| Caddy root | `satoshicore-webroot-swfix-5f3b3d4` |
+| Rollback | `satoshicore-webroot-messenger-p3fix-7d6ad99` (P3 ใช้งานได้แต่ยังมี PWA 404) หรือ `satoshicore-webroot-menu-02f5644` |
+| หลักฐาน | live index sha256 `b47b51f3f096d2cc00470f5c85bc5e043a1db0709adb656fe8764345a265da2e`; live `/sw.js` sha256 `bab838d7ac4579247c259d68719ef7ce338b6f3d695bcfc97e67049adcc1596b`; `verify:deployed` 8 passed / 0 failed / 2 advisory; P3 checker 4/4; service-worker test 4/4 |
+| Browser acceptance | Chrome profile ใหม่ที่ `/wallet/`: registration `scriptURL=https://satoshicore.org/sw.js`, `scope=https://satoshicore.org/`, state `activated`; cache `nsat-pwa-v4` มี `/` และ `/wallet/`; controller เป็น `/sw.js` หลัง reload; ไม่มี request `/wallet/sw.js`, ไม่มี failed request หรือ console error |
+| ไม่ได้แตะ | Mainnet/genesis/ledger/validator/คีย์จริง/DNS/Caddy config; ไม่มีธุรกรรมหรือการใช้เงิน |
+
+### Deploy 2026-11-16 (รอบสี่) — แจ้งเตือนการโอน (commit `94ab5ed`)
+
+| รายการ | ค่า |
+|---|---|
+| Commit ที่ build | `94ab5ed` — รวม `d5f24e7` (แจ้งเตือนการโอนทั้งสองฝั่ง) และ `94ab5ed` (เก็บรายการข้ามการล็อกใน `sessionStorage`) |
+| สิ่งที่เปลี่ยน | Activity มีการ์ด "Transfer notices" และ toast ต่อการโอนที่เลดเจอร์ยืนยันแล้ว; รายการผูกกับ address และเก็บไว้ 20 รายการต่อแท็บ; ผู้ใช้เห็นย้อนหลังได้หลังปลดล็อกอีกครั้ง |
+| Caddy root | `satoshicore-webroot-notices-persist-94ab5ed` |
+| Rollback | `satoshicore-webroot-transfer-notices-d5f24e7`, `satoshicore-webroot-mint-visibility-a795d5c`, `satoshicore-webroot-wallet-security-741b2c7` |
+| หลักฐาน | `index.html` sha256 `f6fa0c532b14ebc83cf72b24dfae6708f1926a7b5f5f78f58aa6e26967c92b1e` ตรงกับไฟล์ที่เสิร์ฟ (`cmp`); 9 routes 200; `verify:deployed` 8 passed / 0 failed (2 advisory); bundle มี `Transfer notices` และ `nsat-notices-v1`; แท็บที่ลงชื่ออยู่ยังเปิด wallet ได้ (ไม่โดน gate) |
+| หมายเหตุ ops | ระหว่างตรวจพบ HTTP 429 จาก gateway (`/api/v1/chain/info`, `/health`) เพราะเปิดหลายแท็บพร้อมกันจนเกิน 120 req/min ต่อ IP (wallet poll ประมาณ 15 req/min ต่อแท็บ); เมื่อหมดหน้าต่าง 60 วินาทีกลับมา 200 ทั้งคู่ — ไม่ใช่ gateway ล่ม แต่ควรลดจำนวนแท็บหรือปรับ `RATE_MAX_REQUESTS` ถ้าใช้งานหลายแท็บจริง |
+| ยังไม่ได้ทดสอบ | การโอนจริงบน Mainnet (ห้ามส่งตาม directive) — ยืนยันด้วย stub indexer ในเครื่องและ unit test 12/12 |
+
+### Deploy 2026-11-16 (รอบสาม) — mint status เฉพาะกระเป๋าที่เกี่ยวข้อง (commit `a795d5c`)
+
+| รายการ | ค่า |
+|---|---|
+| Commit ที่ build | `a795d5c` — worktree สะอาดของ commit นั้น + `.env.local` ของ production |
+| สิ่งที่เปลี่ยน | Activity แสดง Mint status และยิง `getMintStatus()` เฉพาะเมื่อกระเป๋าที่เปิดดูคือบัญชีปลายทาง Founder Mint (`GDAIL…QB55`) — กระเป๋าอื่นไม่เห็นการ์ดและไม่มีการเรียก API |
+| Caddy root | `satoshicore-webroot-mint-visibility-a795d5c` |
+| Rollback | `satoshicore-webroot-wallet-security-741b2c7` (หรือ `…-standalone-44b9cbe`, `…-fixedscreen-aca6e34`) |
+| หลักฐาน | `index.html` sha256 `2aaf1a551829d7190c067a0d54324e4af787ed3d336199a9c7685021543e9a66`, `cmp` ตรงกับไฟล์ที่เสิร์ฟ; 12 routes 200; `verify:deployed` 8/0 (2 advisory); incognito: gate + console ว่าง; live Activity (locked, watch address `GAHS2R…HK3W`) ไม่มี `.nw-mint-head` และไม่มีข้อความ "Mint status" — ก่อนรอบนี้การ์ดอยู่บนสุดของ Activity ทุกกระเป๋า |
+| ยังไม่ได้เห็นด้วยตา | กรณี "เห็นได้" (กระเป๋า `mainnet-treasury` ปลดล็อกแล้ว) ต้องใช้รหัสกระเป๋าของเจ้าของ — ยืนยันด้วย `tests/mint-visibility.test.mjs` 3/3 + โค้ดการ์ดเดิมไม่เปลี่ยน |
+
+### Deploy 2026-11-16 (รอบสอง) — รวม fix จากการตรวจความปลอดภัย (commit `741b2c7`)
+
+| รายการ | ค่า |
+|---|---|
+| Commit ที่ build | `741b2c7` — build จาก git worktree สะอาดของ commit นั้น |
+| รวมอะไรบ้าง | `44b9cbe` (standalone gate) + `6f2e7cd` (session idle limit) + `8468a47` (deploy log) + `3759193` (ตรวจสิทธิ์ก่อนถอดรหัส) + `be27a35` (ชื่อว่าง/ข้อความ) + `741b2c7` (restore merge + disclosure) |
+| Caddy root | `satoshicore-webroot-wallet-security-741b2c7` |
+| Rollback | symlink กลับไป `satoshicore-webroot-standalone-44b9cbe` หรือ `satoshicore-webroot-fixedscreen-aca6e34` (ทั้งคู่ยังอยู่ครบ) |
+| หลักฐาน | `index.html` sha256 `139203c255412fe922d8255bfc920816586ca223beb35d5206cd68ab2db4e459` และ `cmp` ตรงกับไฟล์ที่เสิร์ฟ; `verify:deployed` 8 passed / 0 failed / 2 advisory; 12 routes 200; incognito 430×932: gate 2 ทาง, standalone เข้าหน้าตัว wallet, reload กลับ gate, console ว่าง, `localStorage` ว่างก่อนใช้งาน; privacy แสดงหัวข้อ Drive backup และ "sign-in is optional"; แท็บที่ลงชื่ออยู่ยังเปิด wallet ได้ (ไม่ถูกบังคับ sign-out) และมี key `nsat-web-session-v1` ตามนโยบายใหม่ |
+| ไม่ได้แตะ | Mainnet/genesis/ledger/validator/คีย์จริง, DNS, Caddy config, ไม่มีธุรกรรมใด ๆ |
 
 ## 1. ผลตรวจสภาพปัจจุบัน (§3)
 
@@ -215,3 +291,129 @@ Chrome 157.0.8103.52 (โปรไฟล์ใหม่, ไม่ headless) ก
 3. ตัดสินใจเรื่อง `www` + `wallet.satoshicore.org` (redirect หรือคงไว้) — ยังไม่มี DNS record ทั้งคู่
 4. เริ่ม security review ของ website-connection (dApp provider) ก่อนเปิดเป็นฟีเจอร์; ระหว่างนี้หน้า `/security/` ประกาศว่าไม่มี provider
 5. ทดสอบ offline shell แบบตัดเน็ตจริง (ระบุไว้ใน risks — ยังไม่ได้ทำ)
+
+## 8. Tranche 2026-11-15 — standalone wallet + นโยบาย session
+
+| รายการ | สถานะ | หลักฐาน / หมายเหตุ |
+|---|---|---|
+| ใช้ wallet ได้โดยไม่ต้องมี Google (directive §9) | **IMPLEMENTED + VERIFIED (local)** | หน้า gate มีสองทาง: `Continue with Google` และ `Use without an account`; โหมดไม่มีบัญชีเป็น state ในหน่วยความจำ (reload/sign-out กลับไป gate, account session จริงยกเลิกโหมดนี้) |
+| การมองเห็น wallet ตอนไม่มีบัญชี | **VERIFIED (unit test)** | `walletsForAccount()` ใน `lib/walletBinding.js`: ไม่มีบัญชี → เห็นเฉพาะ wallet ที่ไม่ผูกบัญชี; wallet ที่ผูกบัญชีอื่นยังเข้ารหัสบนเครื่อง ไม่ถูกลบ; เทสต์ `standalone mode never lists a wallet that belongs to another account` |
+| ข้อความ legal/docs | **IMPLEMENTED** | `/privacy/` `/security/` `/terms/` เลิกเขียนว่า sign-in "required"; `docs/GOOGLE-SIGN-IN.md` เพิ่มหัวข้อ "Opening the wallet without Google" |
+| นโยบายหมดอายุ session ที่จำไว้บนเครื่อง | **IMPLEMENTED + VERIFIED (unit test)** | `lib/sessionPolicy.js`: เก็บเฉพาะ `{uid, lastSeenAt}`; ไม่ได้ใช้ 30 วัน → จบ session บนเบราว์เซอร์นี้และแจ้งที่ gate (อ่านซ้ำได้ ไม่หายตอน mount ซ้อน) แล้วล้างเมื่อ sign-in สำเร็จ; record ที่อ่านไม่ได้/หายไป **ไม่**ทำให้ถูกบังคับ sign-in; เทสต์ `tests/session-policy.test.mjs` 8/8 |
+| ลำดับการตรวจสิทธิ์ก่อนถอดรหัส keystore | **FIXED + DEPLOYED (2026-11-16, `741b2c7`)** | พบว่า `unlockWithPassword()` ถอดรหัสก่อนแล้วค่อยหา entry และไม่ปฏิเสธเมื่อไม่พบ → ย้ายไปที่ `visibleWalletNamed()` **ก่อน** `keystoreUnlock()`; เทสต์ `an unlock request resolves only wallets this session may see` |
+| Restore keystore ต้องไม่ทำกุญแจหาย | **FIXED + DEPLOYED (`741b2c7`)** | เดิม `keystoreRestore()` เขียนทับทั้ง keystore ทำให้ wallet ที่สร้างหลัง backup หายถาวร → เปลี่ยนเป็น merge (เพิ่ม/ใช้ entry เมื่อกุญแจเดียวกัน/รายงาน conflict เมื่อชื่อซ้ำแต่กุญแจต่าง); เทสต์ใน `tests/keystore.test.mjs` (13/13) และเพิ่มไฟล์นี้เข้า `npm test` |
+| แจ้งเตือนการโอนสำหรับผู้ส่งและผู้รับ | **FIXED + DEPLOYED (`94ab5ed`, 2026-11-16)** | ใช้ row ที่ indexer commit หลังแนบผลเลดเจอร์ (มีให้ทั้ง source และ destination) → toast + การ์ด "Transfer notices" ใน Activity; dedupe ต่อ address+hash, ไม่ประกาศรายการที่เก่ากว่าที่กระเป๋ารู้อยู่แล้ว; เทสต์ `tests/transfer-notice.test.mjs` 10/10 + ตรวจในเบราว์เซอร์ด้วย stub indexer (5 รายการ → 5 แจ้งเตือน ไม่ซ้ำ) — **ไม่มีแชต/ข้ามเครื่อง** ตาม `docs/TRANSFER-NOTICES.md` |
+| Mint status แสดงเฉพาะกระเป๋าที่เกี่ยวข้อง | **FIXED + DEPLOYED (`a795d5c`, 2026-11-16)** | Founder Mint เครดิตบัญชีปลายทางเดียว (`GDAIL…QB55` ใน `nsat-core/src/ledger/NSATFounderMint.cpp`) → `lib/mintVisibility.js` + `seesMintStatus()` ใช้ทั้งการซ่อนการ์ดใน Activity และการไม่ยิง request `getMintStatus()` สำหรับกระเป๋าที่ไม่เกี่ยว; เทสต์ `tests/mint-visibility.test.mjs` (3/3, ตรวจตรงกับค่าคงที่ใน core) |
+| Disclosure ของ Google Drive backup / export | **FIXED + DEPLOYED (`741b2c7`)** | การ์ดและ `/privacy/` ระบุว่าไฟล์มีชื่อ wallet + public address อ่านได้ (seed เป็น ciphertext); toast ของ export บอกจำนวน wallet ที่ซ่อนอยู่ในไฟล์ |
+| ข้อจำกัด: wallet ที่ผูกบัญชีแล้วใช้งานแบบไม่มีบัญชีไม่ได้ | **KNOWN LIMITATION (by design)** | เมื่อผูกบัญชีแล้วและบัญชีไม่ได้ลงชื่อบนเบราว์เซอร์นี้ wallet จะถูกซ่อนจนกว่าจะลงชื่อกลับ (ไม่มี UI ปลด binding นอกจากลบ wallet) — ปลอดภัยกับเครื่องร่วม แต่ต้องแจ้งเจ้าของว่าเป็นพฤติกรรมที่ตั้งใจ |
+| การเพิกถอน session ของเครื่องที่หายไปจากระยะไกล | **BLOCKED (ไม่มี backend)** | Firebase client SDK ทำไม่ได้; ต้องมี Admin SDK/identity-provider session API + deploy target + quota ซึ่งยังไม่อยู่ในขอบเขตที่อนุมัติ → บันทึกเป็นข้อจำกัดใน docs ไม่ประกาศว่ามี |
+| เคลียร์สถานะเมื่อ signing key ไม่ได้อยู่บนเครื่อง | **VERIFIED (ของเดิม)** | watch-only view + ข้อความ "sending still needs the wallet password and key on the device that signs"; ไม่มีปุ่ม Send บน address ที่ดูอย่างเดียว |
+
+```
+NEXT_PUBLIC_API_SAME_ORIGIN=1 npm run build   ✓ exit 0
+npm test                                      ✓ exit 0, 0 failing (มี session-policy + wallet-binding + static-export)
+npm run verify:deployed -- https://satoshicore.org   8 passed / 0 failed, 2 advisory (ยังเป็น build เดิมที่ live)
+browser 430×932 (/  local)                    gate มีสองปุ่ม, standalone เข้าหน้าตัว wallet, reload กลับ gate
+```
+
+หมายเหตุ: รอบนี้ **deploy ขึ้น production แล้ว** (2026-11-16, `741b2c7`); ยังไม่ทดสอบ Google OAuth จริง (sign-in/sign-out round trip), ยังไม่ได้ทดสอบ account switching ด้วยกระเป๋าจริงสองใบ และยังไม่ได้คลิก restore ผ่าน UI (ยืนยันด้วย unit test)
+
+## 9. Tranche 2026-11-16 — แชทเข้ารหัส + โปรไฟล์ (deploy ขึ้นโดเมนจริง)
+
+| รายการ | สถานะ | หลักฐาน / หมายเหตุ |
+|---|---|---|
+| แชท E2E ระหว่างกระเป๋า | **ENABLED ON PRODUCTION (2026-11-16)** | `lib/e2eChat.js` (คีย์จาก seed = libsodium `crypto_sign_ed25519_sk_to_curve25519`, อ้าง vector จาก PyNaCl), `services/api-gateway/chat-relay.mjs` (เก็บเฉพาะ ciphertext, auth ด้วยลายเซ็นกระเป๋า), `lib/chatClient.js`, `components/ChatPanel.js`; `tests/e2e-chat.test.mjs` 6/6, `chat-relay` 5/5, `chat-client` 5/5; สาธิตจริง: UI ส่ง → relay 200 → seed ผู้รับถอดได้ข้อความเดิม, `strings` บน DB ไม่พบ plaintext; เปิดใช้จริงแล้ว: gateway launchd มี `NSAT_CHAT_RELAY=1` + `NSAT_CHAT_DB=~/nsat-ops/gateway/data/chat.sqlite`, `server.js`/`chat-relay.mjs` คัดจาก `ccd24cd`; web build `75af7cb` ด้วย `NEXT_PUBLIC_CHAT_RELAY=1` (chunk ที่ live มี `chatEnabled:!0`); ทดสอบบน production ด้วยคู่กุญแจชั่วคราว (ไม่ใช้เงิน/ไม่มีธุรกรรม): publishKey → send → inbox ถอดได้ข้อความเดิม → ack เหลือ 0, แล้วลบแถวคีย์ทดสอบออก (0 keys/0 messages) และ `strings` บน db+wal ไม่พบ plaintext; rollback: ถอด 2 key ใน plist + `launchctl bootout/bootstrap` (route กลับเป็น 404, DB คงอยู่) + สลับ webroot กลับ `satoshicore-webroot-profile-ccd24cd` |
+| โปรไฟล์: ID ของตัวเอง + อีเมล verified + กระเป๋าหลัก | **LIVE + VERIFIED END-TO-END (2026-11-16)** | `lib/profile.js`, `components/ProfileCard.js`, `firestore.rules` (`profiles/{uid}`, `profileIds/{id}`); `tests/profile.test.mjs` 12/12; build นี้ live ที่ `d06138d` — ทดสอบบน production ด้วยบัญชีจริงแล้ว: การ์ดขึ้นอีเมล `verified`, มี ID + primary wallet ให้เลือก, และเมื่อกดสร้าง **rules ที่ publish อยู่ปฏิเสธ** (`permission-denied` → ข้อความ "The database refused this change") ไม่มีอะไรถูกเขียน — rules ใหม่ **deploy แล้ว** ด้วย Firebase CLI (`firebase-tools` 15.36.0, `firebase.json` + `.firebaserc` → `nsat-wallet-login`): `cloud.firestore: released rules firestore.rules` (compile ผ่าน) — แล้วทดสอบสร้างจริงบน `https://satoshicore.org/wallet/` ด้วยบัญชี appmigs@gmail.com (verified): สร้าง `@appmigs` + primary wallet สำเร็จ (`Profile @appmigs created.`), reload แล้วยังอยู่ (อ่านจาก Firestore จริง), `Edit profile` → เปลี่ยน primary → `Save changes` สำเร็จ (`Profile changes saved.`); ก่อน deploy rules การกระทำเดิมถูกปฏิเสธ (`The database refused this change`) |
+| เปลี่ยน ID / แสดง `@id` บนหน้ากระเป๋า | **DEPLOYED** (`ccd24cd`) | ID เก็บ `@` เป็นส่วนของค่า (`@somchai`) ไม่ใช่เติมตอนแสดง — label, ฟิลด์ `profileId` และเอกสาร claim `profileIds/@id` เป็นสตริงเดียวกัน; ชื่อที่ไม่มี `@` ถูกปฏิเสธ (ไม่แปลงเงียบ ๆ) การ์ดเป็นโหมดดู/แก้: `Edit profile` → แก้ ID + primary wallet → `Save changes` / `Cancel` โดยเขียนทั้งคู่ในครั้งเดียว (`saveProfileIn()`) จอง ID ใหม่ → เขียน → คืน ID เก่า; ล้มเหลว = คืน ID ใหม่และคงของเดิม; ปุ่ม `@id` ข้าง address คัดลอกค่าจริง; เทสต์ `tests/profile.test.mjs` 13/13 |
+
+```
+รอบส่งเหรียญจากในแชท (2026-11-16, `02f5644`)
+npm run build + npm test                                                   ✓ exit 0, 0 failing
+6 routes 200 · verify-deployed 8 passed / 0 failed (advisory เดิม)
+live index.html sha256 = c89a9a84…d5 · webroot → satoshicore-webroot-coin-02f5644
+chunk ที่ live (`378-e14a81d98c77c74b.js`) มี "Confirm payment"                    ✓
+ใช้ `submitSend({toOverride, amountOverride})` เดิม (network identity, fee, reserve, confirm) ไม่มี logic เซ็นใหม่
+ไม่มีการยิงธุรกรรมจริงเพื่อทดสอบ (ห้ามใช้เงิน owner) · rollback: ln -sfn satoshicore-webroot-pay-e4af3d7 ~/nsat-ops/satoshicore-webroot
+```
+
+```
+รอบคู่สนทนา → ส่งเหรียญ (2026-11-16, `e4af3d7`)
+npm run build + npm test                                                   ✓ exit 0, 0 failing
+6 routes 200 · verify-deployed 8 passed / 0 failed (advisory เดิม)
+live index.html sha256 = da572b81…13 · webroot → satoshicore-webroot-pay-e4af3d7
+chunk ที่ live (`378-cf872affd7c50d5f.js`) มี "Send NSAT to this address"          ✓
+rollback: ln -sfn satoshicore-webroot-friends-0396435 ~/nsat-ops/satoshicore-webroot
+ข้อจำกัด: ต้องปลดล็อกกระเป๋าจึงจะเข้าหน้า Messages ได้ จึงยังไม่ได้คลิกส่งจริง
+```
+
+```
+รอบเพิ่มเพื่อนใน Messages (2026-11-16, `0396435`)
+npm test (รวม tests/chat-friends.test.mjs 7 เคส)                            ✓ exit 0, 0 failing
+firebase deploy --only firestore:rules (get 1 profile ให้ signed-in)         ✓ compiled + released
+npm run build + deploy webroot                                              ✓ exit 0
+live index.html sha256 = 5927895c…84 · webroot → satoshicore-webroot-friends-0396435
+chunk ที่ live (`378-cd468a09ece5a14a.js`) มี "Add friend" + "scw-chat-friends"  ✓
+6 routes 200 · rollback: ln -sfn satoshicore-webroot-addr-cc565d7 ~/nsat-ops/satoshicore-webroot
+ข้อจำกัด: UI เพิ่มเพื่อนต้องปลดล็อกกระเป๋า (seed ใน memory) จึงยังไม่ได้คลิกทดสอบจริง
+```
+
+```
+รอบชื่อคู่สัญญา → Explorer (2026-11-16, `cc565d7`)
+npm run build + npm test                                                  ✓ exit 0, 0 failing
+10 routes 200 · verify-deployed 8 passed / 0 failed (advisory เดิม)
+live index.html sha256 = 90613cfc…4d · webroot → satoshicore-webroot-addr-cc565d7
+chunk ที่ live (`757-ad458b3a2dc014f6.js`) มี `nw-addr-link` + `href:nE(...)` → /explorer/?q=G…
+/explorer/?q=GAHS2RVH…WWHK3W                                                 ✓ Account + balance + transactions
+rollback: ln -sfn satoshicore-webroot-explorer-a7c31e0 ~/nsat-ops/satoshicore-webroot
+```
+
+```
+รอบ Activity → Explorer (2026-11-16, `a7c31e0`)
+npm run build (SAME_ORIGIN + CHAT_RELAY)                                     ✓ exit 0
+npm test                                                                    ✓ exit 0, 0 failing
+10 routes 200 · verify-deployed 8 passed / 0 failed, 2 advisory (เดิม)
+live index.html sha256 = fe617fdc…18 · webroot → satoshicore-webroot-explorer-a7c31e0
+/explorer/?q=e94ab09e…1d5a (hash จริงจาก indexer)                          ✓ เติมช่องค้นหาเอง + แสดง Transaction ledger 313951
+rollback: ln -sfn satoshicore-webroot-chat-75af7cb ~/nsat-ops/satoshicore-webroot
+```
+
+```
+รอบเปิดแชท E2E บน production (2026-11-16)
+node --test tests/e2e-chat.test.mjs tests/chat-relay.test.mjs tests/chat-client.test.mjs  ✓ 16/16
+node --test services/api-gateway/tests/gateway.test.js                            ✓ 15/15
+pre-flight บนพอร์ตแยก (8795 flag off / 8796 flag on, core ชี้ :1)                ✓ off=404, on=400/401, CORS allow X-NSAT-*
+gateway backup: server.js.bak-20261116-063417-pre-chat (sha256 2f6ad316…), plist backup เก็บที่ ~/nsat-ops/
+restart ด้วย server.js ใหม่โดย flag off                                             ✓ 3 endpoints 200, chat 404
+gateway plist + NSAT_CHAT_RELAY=1 (NSAT_CHAT_DB=…/gateway/data/chat.sqlite)          ✓ gateway up 1s
+public: /api/v1/chat/keys 400 address required · POST messages 401 signature required
+public CORS preflight จาก https://satoshicore.org                                    ✓ allow-origin + X-NSAT-Address/Ts/Nonce/Signature
+production smoke (คู่กุญแจชั่วคราว, ไม่มีธุรกรรม): publishKey→send→inbox(ถอดได้)→ack  ✓ เหลือ 0
+web build 75af7cb: NEXT_PUBLIC_API_SAME_ORIGIN=1 NEXT_PUBLIC_CHAT_RELAY=1           ✓ exit 0, chatEnabled:!0
+live index.html sha256 = a98e0ce6…341eef · 10 routes 200 · verify-deployed 8 passed / 0 failed
+webroot: ~/nsat-ops/satoshicore-webroot → satoshicore-webroot-chat-75af7cb
+rollback web: ln -sfn satoshicore-webroot-profile-ccd24cd ~/nsat-ops/satoshicore-webroot
+rollback gateway: PlistBuddy Delete NSAT_CHAT_RELAY/NSAT_CHAT_DB + bootout/bootstrap
+```
+
+```
+รอบ @id + Edit/Save (2026-11-16, `ccd24cd`)
+node --test tests/profile.test.mjs                                  ✓ 13/13 pass
+NEXT_PUBLIC_API_SAME_ORIGIN=1 npm run build (worktree ccd24cd)      ✓ exit 0
+npm test (ใน satoshicore-web)                                        ✓ exit 0, 0 failing
+node scripts/verify-deployed-site.mjs https://satoshicore.org       ✓ 8 passed / 0 failed, 2 advisory
+live index.html sha256 = 77a49528…4efb72
+10 routes: / /wallet /dashboard /download /explorer /docs /security /privacy /terms /status → 200
+webroot: ~/nsat-ops/satoshicore-webroot → satoshicore-webroot-profile-ccd24cd
+rollback: ln -sfn satoshicore-webroot-profile-d06138d ~/nsat-ops/satoshicore-webroot
+```
+
+```
+รอบก่อน (d06138d)
+cd .deploy-d06138d && NEXT_PUBLIC_API_SAME_ORIGIN=1 npm run build   ✓ exit 0
+npm test (ใน worktree ที่ build แล้ว)                               ✓ exit 0, 160 ✔, 0 failing
+node scripts/verify-deployed-site.mjs https://satoshicore.org       ✓ 8 passed / 0 failed, 2 advisory
+live index.html sha256 = 117bdf36…6aa114 (ตรงกับ out/index.html)
+9 routes: / /wallet/ /docs/ /explorer/ /dashboard/ /status/ /privacy/ /terms/ /download/ → 200
+```
+
+หมายเหตุ: deploy ใช้ symlink swap (`satoshicore-webroot` → `satoshicore-webroot-profile-d06138d`); rollback = `ln -sfn satoshicore-webroot-notices-persist-94ab5ed ~/nsat-ops/satoshicore-webroot`. บน macOS ต้องใช้ `ln -sfn` (ไม่ใช่ `mv` ทับ symlink ที่ชี้ไปโฟลเดอร์). ยังไม่มีอะไรถูกเขียนลงฐานข้อมูลจากรอบนี้; console มี 429 จาก gateway rate limit (120/min/IP) เพราะเปิดหลายแท็บ ไม่ใช่จาก build ใหม่.

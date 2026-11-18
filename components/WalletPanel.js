@@ -3,23 +3,50 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   isGatewayConfigured, isIndexerConfigured, EXPECTED_NETWORK_ID,
-  verifyNetworkIdentity, getChainInfo, getAccount,
-  submitSignedTransaction, estimateFee, formatExactBalance,
+  verifyNetworkIdentity, getChainInfo, getAccount, getAccountHistory, getMintStatus,
+  readAccountBalance, submitSignedTransaction, estimateFee, formatExactBalance,
   waitForConfirmation, accountEventsUrl,
 } from '../lib/nsatClient';
 import {
   keystoreCreate, keystoreImport, keystoreUnlock, keystoreList,
-  keystoreExport, keystoreRestore, zeroSeed, MIN_PASSWORD_LENGTH,
-  buildSignedTx, historyLoad, historyPush, historyPatch,
+  keystoreExport, keystoreRestore, keystoreRemove, zeroSeed, MIN_PASSWORD_LENGTH,
+  buildSignedTx, historyLoad, historyClear, historyPush, historyPatch,
 } from '../lib/nsatWallet';
 import { decodeSeed } from '../lib/nsatCodec';
+import { buildSelfOpenTx, selfOpenGate } from '../lib/nsatSelfOpen';
+import { walletStatus } from '../lib/walletStatus';
+import { readWalletNote } from '../lib/walletNotes';
 // Shared send gate (mirror of the desktop/prototype reason contract — one
 // source of truth for WHY a send is blocked; see NSAT-WALLET-BUTTON-STATES).
 import { sendPreflight, maxSendable, fmtGroup } from '../lib/nsatSendPreflight';
 import { startBalanceRefresh } from '../lib/walletBalanceRefresh.mjs';
-import { isFirebaseWebConfigured, loadGoogleAuth } from '../lib/firebaseAuth';
-import { pullLinkedAddressForUser } from '../lib/walletLinks';
+import {
+  ACCOUNT_SIGNED_OUT_EVENT, isFirebaseWebConfigured, loadGoogleAuth, signOutGoogleSession,
+} from '../lib/firebaseAuth';
+import { pullLinkedAddressesForUser } from '../lib/walletLinks';
+import {
+  biometricWalletNames, enableBiometricUnlock, hasBiometricUnlock,
+  removeBiometricUnlock, unlockWithBiometric,
+} from '../lib/biometricUnlock';
+import { backupSilently } from '../lib/driveBackup';
+import ChatPanel from './ChatPanel';
+import { seesMintStatus } from '../lib/mintVisibility';
+import {
+  addNotice, buildTransferNotice, clearAllStoredNotices, isNewTransfer,
+  loadStoredNotices, saveStoredNotices,
+} from '../lib/transferNotice';
+import {
+  bindOwner, unbindOwner, visibleWalletNamed, walletNameForAccount, walletsForAccount,
+} from '../lib/walletBinding';
 import GoogleAccount from './GoogleAccount';
+import ContactsCard from './ContactsCard';
+import ProfileCard from './ProfileCard';
+import { readMyProfile } from '../lib/profile';
+import DriveBackupCard from './DriveBackupCard';
+import BackupReminder from './BackupReminder';
+import ThemeToggle from './ThemeToggle';
+import { recordDriveBackup } from '../lib/backupReminder';
+import { NSAT } from '../lib/nsatToken';
 
 // Full transactional Web Wallet rendered in the ORIGINAL DESKTOP WALLET
 // DESIGN (canonical source: nsat-core desktop/satoshicore-wallet
@@ -51,10 +78,11 @@ const PAGE_GLYPH = {
   overview: '◆', activity: '⚡', settings: '⚙',
 };
 // Pages reached from an action; the app bar shows Back instead of Receive.
-const SUB_PAGES = ['send', 'receive', 'shielded'];
+const SUB_PAGES = ['send', 'receive', 'shielded', 'chat', 'contacts'];
 const PAGE_TITLE = {
   overview: 'Overview', send: 'Send NSAT', receive: 'Receive NSAT',
-  shielded: 'Shielded NSAT', activity: 'Activity', settings: 'Settings',
+  shielded: 'Shielded NSAT', activity: 'Activity', settings: 'Settings', chat: 'Messages',
+  contacts: 'Contacts',
 };
 // One short line per section — context only, never an essay. Overview and
 // Settings need none: the cards say what they are.
@@ -63,40 +91,97 @@ const PAGE_LEAD = {
   send: 'Recipient, amount, then a review with the exact total.',
   receive: 'Your public address only.',
   shielded: 'Desktop only — the native prover is required.',
-  activity: 'Transfers signed here, with the ledger\'s verdict.',
+  activity: 'Every indexed transfer, with the ledger\'s verdict.',
   settings: null,
+  chat: 'End-to-end encrypted with the wallets you transacted with.',
+  contacts: 'Who may start a conversation with you — and who may not.',
 };
 
-// Founder Mint policy (docs/NSAT-FOUNDER-MINT-ENGINE.md): 18,175 units were
-// intended through ledger 313,988, and the engine mints 4 units per ledger.
-// The mint is an internal credit, so it never appears as a transfer of its
-// own while a 2.1e24 balance barely moves in its last digits; this figure
-// starts small and therefore visibly ticks. Pure read: no key, no transaction.
-const MINT_REFERENCE_LEDGER = 313_988;
-const MINT_THROUGH_REFERENCE = 18_175;
-const MINT_PER_LEDGER = 4;
+// Founder Mint totals come from the ledger header, never from a rate applied
+// here. `totalCoins` is the chain's own supply figure and the genesis supply is
+// fixed, so minted-since-activation is an exact subtraction. Both numbers
+// exceed 2^53, which is why this is BigInt and never a Number.
+const GENESIS_SUPPLY = 2_100_000_000_000_000_000_000_000n;
+const HISTORY_PAGE = 100;
 
-function policyMinted(ledger) {
-  const n = Number(ledger);
-  if (!Number.isFinite(n) || n < MINT_REFERENCE_LEDGER) return null;
-  return MINT_THROUGH_REFERENCE + MINT_PER_LEDGER * (n - MINT_REFERENCE_LEDGER);
+// Encrypted chat needs a relay that stores ciphertext and nothing else. It is
+// off unless the deployment turns it on, so a build pointed at a gateway without
+// the relay says so instead of queueing messages that can never be delivered.
+const CHAT_RELAY_ENABLED = process.env.NEXT_PUBLIC_CHAT_RELAY === '1';
+const CHAT_RELAY_SAME_ORIGIN = CHAT_RELAY_ENABLED
+  && process.env.NEXT_PUBLIC_API_SAME_ORIGIN === '1';
+const CHAT_RELAY_ORIGIN = !CHAT_RELAY_ENABLED
+  ? ''
+  : CHAT_RELAY_SAME_ORIGIN
+    ? ''
+    : (process.env.NEXT_PUBLIC_API_GATEWAY_URL || '').replace(/\/$/, '');
+// A same-origin build still needs an absolute origin for the fetch client;
+// an empty string here used to make the enabled Messages screen say that no
+// relay was configured. Resolve it when the chat screen actually renders.
+const chatRelayOrigin = () => CHAT_RELAY_ORIGIN
+  || (CHAT_RELAY_SAME_ORIGIN && typeof window !== 'undefined' ? window.location.origin : '');
+
+function supplyAndMinted(totalCoins) {
+  try {
+    const supply = BigInt(String(totalCoins));
+    const minted = supply - GENESIS_SUPPLY;
+    return { supply: supply.toString(), minted: minted >= 0n ? minted.toString() : null };
+  } catch {
+    return { supply: null, minted: null };
+  }
+}
+
+const historyKey = (item) => `${item.hash}:${item.op_index ?? 0}`;
+
+function mergeHistory(prev, doc) {
+  const seen = new Set(prev.map(historyKey));
+  const add = (Array.isArray(doc?.items) ? doc.items : []).filter((item) => !seen.has(historyKey(item)));
+  return [...prev, ...add];
 }
 
 export default function WalletPanel() {
+  // The wallet is an app-like surface on touch devices, not a document to
+  // pinch-zoom or drag around. Keep its viewport at device scale while mounted;
+  // restore the site's normal viewport if this component is ever unmounted.
+  useEffect(() => {
+    const meta = document.querySelector('meta[name="viewport"]');
+    if (!meta) return undefined;
+    const previous = meta.getAttribute('content');
+    meta.setAttribute(
+      'content',
+      'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover',
+    );
+    return () => {
+      if (previous == null) meta.removeAttribute('content');
+      else meta.setAttribute('content', previous);
+    };
+  }, []);
+
   // gateway/network
   const [net, setNet] = useState(null);          // { ok, network, reason, ledger }
   const [liveLedger, setLiveLedger] = useState(null); // public ledger height, polled
   const [fee, setFee] = useState(null);          // live base fee (NSAT integer unit)
   const [reserve, setReserve] = useState(null);  // live base reserve (NSAT integer unit)
+  const [chainVersion, setChainVersion] = useState(null); // live ledger protocol version
   // wallet session
   const [wallets, setWallets] = useState([]);
+  const [biometricWallets, setBiometricWallets] = useState([]);
   const [active, setActive] = useState(null);    // { name, pubkey, seed32 }
   const [balance, setBalance] = useState(null);  // exact stroops string
   const [funded, setFunded] = useState(null);    // true / false / unknown
-  // Watch-only: a PUBLIC address linked to the signed-in website account. It
-  // shows a balance and a receive screen on a device with no key, and can do
-  // nothing else — there is no seed here, so nothing can be signed.
-  const [watch, setWatch] = useState(null);      // { address } | null
+  // Watch-only: PUBLIC addresses linked to the signed-in website account. They
+  // show a balance and a receive screen on a device with no key, and can do
+  // nothing else — there is no seed here, so nothing can be signed. One account
+  // can link several wallets, so `watchPick` is which of them this screen shows.
+  const [watchAddresses, setWatchAddresses] = useState([]);
+  const [watchPick, setWatchPick] = useState('');
+  // The address this account named as primary for its profile. It only decides
+  // which linked wallet opens first; it grants nothing, and a primary address
+  // that is no longer linked is ignored rather than shown.
+  const [primaryAddress, setPrimaryAddress] = useState('');
+  // The profile ID, shown on the wallet screen so a handle the person chose is
+  // visible where they use it. Display only: it grants no spending power.
+  const [profileId, setProfileId] = useState('');
   // ui
   const [page, setPage] = useState('overview');
   const [busy, setBusy] = useState(false);
@@ -104,19 +189,66 @@ export default function WalletPanel() {
   // forms
   const [newName, setNewName] = useState('');
   const [newPass, setNewPass] = useState('');
+  // Signed-in website account, if any. It seeds the wallet name so a Google
+  // sign-up creates a wallet without typing one; the password stays the user's.
+  const [accountEmail, setAccountEmail] = useState('');
+  const [accountUid, setAccountUid] = useState('');
+  // The gate asks who is using the wallet, but Google is optional (UNIVERSAL
+  // WALLET DIRECTIVE §9): a visitor may open this device's wallet without a
+  // website account. That choice lives in memory only, so a reload or a
+  // sign-out puts the gate back instead of leaving a shared browser in the
+  // previous person's standalone session. `accountReady` keeps the wallet from
+  // flashing while the first auth-state callback is still in flight.
+  const signInRequired = SHOW_GOOGLE_ACCOUNT && isFirebaseWebConfigured();
+  const [standalone, setStandalone] = useState(false);
+  const [accountReady, setAccountReady] = useState(!signInRequired);
   const [importSeed, setImportSeed] = useState('');
   const [unlockName, setUnlockName] = useState('');
   const [unlockPass, setUnlockPass] = useState('');
+  // Account switcher, opened from the name pill in the app bar — the same
+  // gesture as the iPhone build, where tapping the account name lists the
+  // wallets on this device instead of jumping into Settings.
+  const [accountsOpen, setAccountsOpen] = useState(false);
+  const [walletManagerView, setWalletManagerView] = useState('list');
+  const [walletDetails, setWalletDetails] = useState(null);
+  const [walletRemoveState, setWalletRemoveState] = useState(null);
+  const [switchName, setSwitchName] = useState('');
+  const [switchPass, setSwitchPass] = useState('');
+  // name -> { kind: 'loading' | 'exact' | 'missing' | 'unavailable', value }
+  const [switchBalances, setSwitchBalances] = useState({});
+  // Read-only account existence/balance for every local wallet on the homepage.
+  const [overviewWalletStates, setOverviewWalletStates] = useState({});
+  // public address -> balance state for linked wallet choices in Send
+  const [sendRecipientBalances, setSendRecipientBalances] = useState({});
   const [dest, setDest] = useState('');
   const [createDest, setCreateDest] = useState(false);
   const [amount, setAmount] = useState('');
   const [review, setReview] = useState(null);    // { amount, fee, total }
+  // The hash of the last signed envelope, so the chat can show what it paid.
+  const lastSendRef = useRef(null);
   const [history, setHistory] = useState([]);
+  // Indexed chain history for the address on screen, newest first, paged with a
+  // `(ledger, tx, op)` cursor so "load older" never repeats a row. `coverage`
+  // is what the index actually holds: history is never claimed beyond it.
+  const [chainHistory, setChainHistory] = useState({
+    phase: 'idle', items: [], total: null, coverage: null, next: null,
+    loadingMore: false, error: '',
+  });
+  // Founder Mint state read from the latest indexed ledger header.
+  const [mintStatus, setMintStatus] = useState({
+    phase: 'idle', data: null, timeline: [], unattributed: null, error: '',
+  });
+  // Confirmed transfers this session announced, newest first. Built from the
+  // indexer's committed rows for this wallet (both directions); nothing leaves
+  // the device.
+  const [notices, setNotices] = useState([]);
 
-  const notify = (text, kind = 'ok') => {
+  // Stable identity: the event stream and other callbacks list it as a
+  // dependency, and a new function every render would reconnect the stream.
+  const notify = useCallback((text, kind = 'ok') => {
     setToast({ text, kind });
     window.setTimeout(() => setToast(null), 6000);
-  };
+  }, []);
 
   // Locking must destroy the seed bytes, not just drop the state reference:
   // an unreferenced Uint8Array is still readable until the GC runs. Reading the
@@ -125,6 +257,12 @@ export default function WalletPanel() {
   const activeRef = useRef(null);
   const lockEpoch = useRef(0);
   const pendingSeedsRef = useRef(new Set());
+  // A row the wallet already shows is not news: the stream replays from
+  // `since=0`, so the newest known ledger and the ids already announced keep a
+  // page load from reporting months of history.
+  const newestLedgerRef = useRef(0);
+  const noticesSeenRef = useRef(new Set());
+  const streamStartedRef = useRef(0);
   const lockWallet = useCallback((message) => {
     lockEpoch.current += 1;
     const current = activeRef.current;
@@ -145,6 +283,72 @@ export default function WalletPanel() {
     setActive(session);
   }, []);
 
+  // Everything a session accumulated. `lockWallet` zeroes the signing key; this
+  // also drops every screen state that belonged to the account — watch list,
+  // balances, history, mint data, forms and open dialogs — so the next person
+  // starts from the sign-in gate, not from the previous user's screen.
+  const endSession = useCallback(() => {
+    lockWallet();
+    setWatchAddresses([]);
+    setWatchPick('');
+    setHistory([]);
+    setChainHistory({ phase: 'idle', items: [], total: null, coverage: null, next: null, loadingMore: false, error: '' });
+    setMintStatus({ phase: 'idle', data: null, timeline: [], unattributed: null, error: '' });
+    // Signing out is a change of person: the stored notices for this address go
+    // with the session, so the next one does not read the previous wallet's
+    // payment history.
+    if (typeof window !== 'undefined') clearAllStoredNotices(window.sessionStorage);
+    setNotices([]);
+    noticesSeenRef.current = new Set();
+    newestLedgerRef.current = 0;
+    setBalance(null);
+    setReview(null);
+    setAccountsOpen(false);
+    setWalletDetails(null);
+    setWalletRemoveState(null);
+    setDest(''); setAmount(''); setCreateDest(false);
+    setUnlockName('');
+    setSwitchName(''); setSwitchPass('');
+    setSwitchBalances({});
+    setOverviewWalletStates({});
+    setPrimaryAddress('');
+    setProfileId('');
+    setSendRecipientBalances({});
+    setToast(null);
+    setPage('overview');
+    // Signing out also leaves standalone mode: the gate is the starting point
+    // for whoever uses this browser next, with or without an account.
+    setStandalone(false);
+    // A sign-out must not leave the panel busy: the same component instance is
+    // still mounted behind the gate and serves the next sign-in.
+    setBusy(false);
+  }, [lockWallet]);
+
+  // A real account session supersedes standalone mode, so the two can never
+  // both be active and the gate cannot be skipped by a stale in-memory flag.
+  useEffect(() => {
+    if (accountUid) setStandalone(false);
+  }, [accountUid]);
+
+  // A sign-out — from Settings, from the account switcher, or from another tab
+  // — ends the whole session, not just the Google identity.
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const onSignedOut = () => endSession();
+    window.addEventListener(ACCOUNT_SIGNED_OUT_EVENT, onSignedOut);
+    return () => window.removeEventListener(ACCOUNT_SIGNED_OUT_EVENT, onSignedOut);
+  }, [endSession]);
+
+  // The auth callback is authoritative: a session that disappears without the
+  // event (expired token, revoked access, another tab signing out) tears the
+  // wallet down here too.
+  const lastAccountUid = useRef('');
+  useEffect(() => {
+    const had = lastAccountUid.current;
+    lastAccountUid.current = accountUid;
+    if (had && !accountUid) endSession();
+  }, [accountUid, endSession]);
+
   // An in-app route change unmounts this panel without a pagehide event, so
   // wipe the session buffer on unmount as well: a client-side navigation must
   // not leave signing-key bytes behind in a detached component.
@@ -159,9 +363,13 @@ export default function WalletPanel() {
   // Lock immediately when the app leaves the foreground, and invalidate any
   // pending WebCrypto operation so an unlock cannot resurrect the session.
   useEffect(() => {
+    // Locking on background is a guarantee, not an event to announce: on a
+    // phone the user switches apps constantly, and the toast followed them
+    // back over the unlock screen. The wallet still locks; the unlock form
+    // already says so.
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') {
-        lockWallet('Wallet locked — signing key cleared when the app went to the background.');
+        lockWallet();
       }
     };
     const onPageHide = () => lockWallet();
@@ -213,13 +421,45 @@ export default function WalletPanel() {
     setNet(r);
     if (r.ok) {
       try { setFee(await estimateFee()); } catch { setFee(null); }
-      try { setReserve(Number((await getChainInfo())?.info?.ledger?.baseReserve || 0)); }
-      catch { setReserve(null); }
+      try {
+        const info = await getChainInfo();
+        setReserve(Number(info?.info?.ledger?.baseReserve || 0));
+        // The ledger version decides whether an account still needs a reserve
+        // (below V_15) or opens at a zero balance (V_15 and later).
+        setChainVersion(Number(info?.info?.ledger?.version || 0) || null);
+      } catch { setReserve(null); setChainVersion(null); }
     }
     return r;
   }, [configured]);
 
-  const refreshWallets = useCallback(() => setWallets(keystoreList()), []);
+  // What this browser may list for the session in progress. A wallet bound to
+  // another account stays encrypted on disk — nothing is deleted — but its name
+  // is not shown, so a shared browser does not hand the next person the
+  // previous person's wallet list. That includes standalone mode on a device
+  // that offers Google: without the bound account, only wallets that belong to
+  // no account are listed. Signing back in as the bound account brings the rest
+  // back.
+  const visibleWallets = useCallback(() => (
+    walletsForAccount(keystoreList(), accountEmail, { signInRequired })
+  ), [accountEmail, signInRequired]);
+
+  const refreshWallets = useCallback(() => {
+    const listed = visibleWallets();
+    setWallets(listed);
+    setBiometricWallets(biometricWalletNames().filter((name) => listed.some((w) => w.name === name)));
+  }, [visibleWallets]);
+
+  // The list depends on who is signed in, so it is rebuilt whenever that
+  // changes — including sign-out, where it must empty.
+  useEffect(() => { refreshWallets(); }, [refreshWallets]);
+
+  // Signing in with Google pre-fills the wallet name, so a first wallet needs
+  // one thing typed — the password — instead of a form. Only ever fills an
+  // empty field, never overwrites what the user already typed.
+  useEffect(() => {
+    if (!accountEmail) return;
+    setNewName((current) => current || walletNameForAccount(accountEmail));
+  }, [accountEmail]);
 
   const refreshBalance = useCallback(async (pubkey) => {
     // A brand-new (unfunded) account reads as HTTP 404 from the gateway —
@@ -239,7 +479,6 @@ export default function WalletPanel() {
     }
   }, []);
 
-  useEffect(() => { setWallets(keystoreList()); }, []);
   useEffect(() => { void verifyNetwork(); }, [verifyNetwork]);
 
   // Ledger height for the policy-issuance figure: public, cheap, key-free, so
@@ -260,17 +499,33 @@ export default function WalletPanel() {
     const id = window.setInterval(tick, 4000);
     return () => { alive = false; window.clearInterval(id); };
   }, [configured]);
+  // A picked address wins only while it is still linked; otherwise the
+  // account's primary wallet, and failing that the first linked one.
+  const watchAddress = watchAddresses.includes(watchPick)
+    ? watchPick
+    : (watchAddresses.includes(primaryAddress) ? primaryAddress : (watchAddresses[0] || ''));
+  // Mint status belongs to the wallet the Founder Mint pays and to no other:
+  // the unlocked wallet in view, or a linked watch-only address for it.
+  const mintVisible = seesMintStatus(active?.pubkey || watchAddress);
+  // Chat contacts are the other side of transfers this address already has, so
+  // nobody can start a conversation with a wallet that never touched this one.
+  const chatContacts = Array.from(new Set((chainHistory.items || [])
+    .map((item) => String(item.counterparty || '').toUpperCase())
+    .filter((address) => /^G[A-Z0-9]{55}$/.test(address)
+      && address !== (active?.pubkey || watchAddress || '').toUpperCase())))
+    .slice(0, 20);
+
   useEffect(() => {
     if (active) {
       void refreshBalance(active.pubkey);
       setHistory(historyLoad(active.name));
-    } else if (watch) {
+    } else if (watchAddress) {
       // Read-only balance for the linked address. No key, no history of ours:
       // this wallet never signed anything from this device.
-      void refreshBalance(watch.address);
+      void refreshBalance(watchAddress);
       setHistory([]);
     } else { setBalance(null); setHistory([]); }
-  }, [active, watch, refreshBalance]);
+  }, [active, watchAddress, refreshBalance]);
 
   // Follow the website account: if it has a linked address and this device has
   // no wallet of its own, the wallet opens in watch-only mode instead of the
@@ -284,15 +539,264 @@ export default function WalletPanel() {
       if (!alive) return;
       unsubscribe = authSdk.onAuthStateChanged(auth, (user) => {
         const uid = user?.uid || '';
-        if (!uid) { if (alive) setWatch(null); return; }
-        pullLinkedAddressForUser(uid).then((address) => {
-          if (!alive) return;
-          setWatch(address ? { address } : null);
-        }).catch(() => { /* no database yet: leave the wallet as it is */ });
-      }, () => { /* a session read failure must not break the wallet */ });
+        if (alive) setAccountEmail(user?.email || '');
+        if (alive) setAccountUid(uid);
+        if (alive) setAccountReady(true);
+      }, () => {
+        // A session read failure must not leave the panel stuck on "checking";
+        // with no confirmed account the gate stays closed.
+        if (alive) setAccountReady(true);
+      });
     }).catch(() => { /* sign-in unavailable: watch-only simply stays off */ });
     return () => { alive = false; unsubscribe(); };
   }, []);
+
+  // Which linked wallet this account calls primary. Read with the list so the
+  // two cannot disagree, and re-read when Settings changes either one.
+  useEffect(() => {
+    if (!accountUid) { setPrimaryAddress(''); setProfileId(''); return undefined; }
+    let alive = true;
+    const reload = () => {
+      readMyProfile().then((doc) => {
+        if (!alive) return;
+        setPrimaryAddress(doc?.primaryAddress || '');
+        setProfileId(doc?.profileId || '');
+      }).catch(() => { /* no profile yet, or no database: no preference */ });
+    };
+    reload();
+    window.addEventListener('nsat:links-changed', reload);
+    window.addEventListener('nsat:profile-changed', reload);
+    return () => {
+      alive = false;
+      window.removeEventListener('nsat:links-changed', reload);
+      window.removeEventListener('nsat:profile-changed', reload);
+    };
+  }, [accountUid]);
+
+  // The linked-wallet list is read once per account and again whenever Settings
+  // changes it. Without this, linking or removing a wallet left this screen
+  // showing the old set until a reload.
+  useEffect(() => {
+    if (!accountUid) { setWatchAddresses([]); return undefined; }
+    let alive = true;
+    const reload = () => {
+      pullLinkedAddressesForUser(accountUid).then((list) => {
+        if (alive) setWatchAddresses(list);
+      }).catch(() => { /* no database yet: leave the wallet as it is */ });
+    };
+    reload();
+    window.addEventListener('nsat:links-changed', reload);
+    return () => { alive = false; window.removeEventListener('nsat:links-changed', reload); };
+  }, [accountUid]);
+
+  // Activity reads the indexer for the address on screen, so older transfers
+  // (and transfers signed elsewhere) appear. Read-only: no key, no signing.
+  useEffect(() => {
+    const address = active?.pubkey || watchAddress;
+    if (page !== 'activity') return undefined;
+    if (!address) {
+      setChainHistory({ phase: 'none', items: [], total: null, coverage: null, next: null, loadingMore: false, error: '' });
+      return undefined;
+    }
+    if (!isIndexerConfigured()) {
+      setChainHistory({ phase: 'unavailable', items: [], total: null, coverage: null, next: null, loadingMore: false, error: 'indexer not configured' });
+      return undefined;
+    }
+    let cancelled = false;
+    setChainHistory({ phase: 'loading', items: [], total: null, coverage: null, next: null, loadingMore: false, error: '' });
+    getAccountHistory(address, { limit: HISTORY_PAGE })
+      .then((doc) => {
+        if (cancelled) return;
+        const items = Array.isArray(doc?.items) ? doc.items : [];
+        setChainHistory({
+          phase: 'ready',
+          items,
+          total: Number.isFinite(Number(doc?.total)) ? Number(doc.total) : items.length,
+          coverage: doc?.coverage || null,
+          next: doc?.next_cursor || null,
+          loadingMore: false,
+          error: '',
+        });
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setChainHistory({ phase: 'unavailable', items: [], total: null, coverage: null, next: null, loadingMore: false, error: String(err?.message || err) });
+      });
+    return () => { cancelled = true; };
+  }, [page, active?.pubkey, watchAddress]);
+
+  // Founder Mint is close-level accounting carried in the ledger header. Read it
+  // from the index (the header itself), never recomputed from a policy rate.
+  // It is read only when the wallet in view is the one the mint pays: other
+  // wallets are not involved in it, so neither the read nor the card is for them.
+  //
+  // Every ledger close writes a new heartbeat and grows totalCoins, so a single
+  // read freezes the figure the moment Activity opens. While the page is on
+  // screen it is re-read on an interval, and again as soon as the tab becomes
+  // visible — the card therefore shows the latest indexed header, not the one
+  // that happened to be current at the first click.
+  useEffect(() => {
+    if (page !== 'activity' || !mintVisible || !isIndexerConfigured()) return undefined;
+    let cancelled = false;
+    let inFlight = false;
+    const read = async ({ first = false } = {}) => {
+      if (inFlight) return;
+      inFlight = true;
+      if (first) {
+        setMintStatus({ phase: 'loading', data: null, timeline: [], unattributed: null, fetchedAt: null, error: '' });
+      }
+      try {
+        const doc = await getMintStatus();
+        if (cancelled) return;
+        setMintStatus({
+          phase: 'ready',
+          data: doc?.mint || null,
+          // Issuance eras derived by the index from consecutive header
+          // totalCoins deltas, plus the growth they cannot attribute.
+          timeline: Array.isArray(doc?.timeline) ? doc.timeline : [],
+          unattributed: doc?.timeline_unattributed ?? null,
+          fetchedAt: Date.now(),
+          error: '',
+        });
+      } catch (err) {
+        if (cancelled) return;
+        // A refresh that fails must not blank the last known header: it stays
+        // on screen, and the error travels with it.
+        setMintStatus((cur) => (cur.data
+          ? { ...cur, phase: 'ready', error: String(err?.message || err) }
+          : {
+            phase: 'unavailable', data: null, timeline: [], unattributed: null,
+            fetchedAt: null, error: String(err?.message || err),
+          }));
+      } finally {
+        inFlight = false;
+      }
+    };
+    void read({ first: true });
+    // The API is a live header read; avoid reusing the 5-second HTTP cache.
+    // Poll at that same cadence so normal ledger closes are reflected promptly.
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void read();
+    }, 5_000);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void read();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [page, mintVisible]);
+
+  // One older page, appended. Paging stops on an error and says so rather than
+  // silently ending the list as if it were complete.
+  const loadOlderHistory = useCallback(async () => {
+    const address = active?.pubkey || watchAddress;
+    const before = chainHistory.next;
+    if (!address || !before || chainHistory.loadingMore) return;
+    setChainHistory((cur) => ({ ...cur, loadingMore: true, error: '' }));
+    try {
+      const doc = await getAccountHistory(address, { limit: HISTORY_PAGE, before });
+      setChainHistory((cur) => ({
+        ...cur,
+        phase: 'ready',
+        items: mergeHistory(cur.items, doc),
+        total: Number.isFinite(Number(doc?.total)) ? Number(doc.total) : cur.total,
+        coverage: doc?.coverage || cur.coverage,
+        next: doc?.next_cursor || null,
+        loadingMore: false,
+      }));
+    } catch (err) {
+      setChainHistory((cur) => ({
+        ...cur,
+        loadingMore: false,
+        error: `Could not load older transfers (${String(err?.message || err)}).`,
+      }));
+    }
+  }, [active?.pubkey, watchAddress, chainHistory.next, chainHistory.loadingMore]);
+
+  // Read the signed-in account's other linked wallets for the Send shortcuts.
+  // Their public balances are informational only; the sender's local key remains
+  // the sole authority for signing, and the normal review gate is unchanged.
+  useEffect(() => {
+    const recipients = watchAddresses.filter((address) => address && address !== active?.pubkey);
+    if (page !== 'send' || recipients.length === 0) return undefined;
+    let cancelled = false;
+    setSendRecipientBalances((current) => {
+      const next = {};
+      for (const address of recipients) {
+        next[address] = current[address] ?? { kind: 'loading', value: null };
+      }
+      return next;
+    });
+    Promise.all(recipients.map(async (address) => {
+      let entry;
+      try { entry = readAccountBalance(await getAccount(address)); }
+      catch { entry = { kind: 'unavailable', value: null }; }
+      if (!cancelled) setSendRecipientBalances((current) => ({ ...current, [address]: entry }));
+    }));
+    return () => { cancelled = true; };
+  }, [page, watchAddresses, active?.pubkey]);
+
+  // A notice belongs to one wallet. Switching the wallet, or a new watch
+  // address, starts a fresh list; the previous wallet's payments are not left
+  // on screen for the next person. What was already announced stays remembered
+  // (keyed by address), so a stream replay cannot toast the same payment twice.
+  useEffect(() => {
+    newestLedgerRef.current = 0;
+    streamStartedRef.current = Date.now();
+    const address = active?.pubkey || watchAddress;
+    // The lock that fires when the app leaves the foreground must not erase what
+    // the wallet was told: restoring this address's last notices is what lets a
+    // recipient read them on the way back.
+    const stored = address && typeof window !== 'undefined'
+      ? loadStoredNotices(window.sessionStorage, address)
+      : [];
+    for (const notice of stored) {
+      noticesSeenRef.current.add(`${String(address).toUpperCase()}:${notice.id}`);
+    }
+    setNotices(stored);
+  }, [active?.pubkey, watchAddress]);
+
+  // Whatever the history already shows is not news, so it becomes the floor for
+  // the stream that replays from `since=0`.
+  useEffect(() => {
+    const newest = Number(chainHistory.items?.[0]?.ledger);
+    if (chainHistory.phase === 'ready' && Number.isFinite(newest) && newest > 0) {
+      newestLedgerRef.current = Math.max(newestLedgerRef.current, newest);
+    }
+  }, [chainHistory]);
+
+  // One notice per confirmed row, for the sender and for the recipient: the
+  // index writes the row for both accounts, and it only writes it once the
+  // ledger result is attached. A failed payment is announced as failed instead
+  // of as a payment, because only the fee moved.
+  const announceTransfer = useCallback((rawData, address) => {
+    let row = null;
+    try { row = JSON.parse(rawData || 'null'); } catch { return; }
+    if (!row || typeof row !== 'object') return;
+    const notice = buildTransferNotice(row);
+    if (!notice) return;
+    // The same ledger row can arrive more than once (an `EventSource`
+    // reconnect replays from its cursor, and a dev re-mount opens a second
+    // stream). One announcement per address per row, not one per delivery.
+    const seenKey = `${String(address || '').toUpperCase()}:${notice.id}`;
+    if (noticesSeenRef.current.has(seenKey)) return;
+    if (!isNewTransfer(row, {
+      baselineLedger: newestLedgerRef.current,
+      startedAt: streamStartedRef.current,
+    })) return;
+    noticesSeenRef.current.add(seenKey);
+    if (notice.ledger) newestLedgerRef.current = Math.max(newestLedgerRef.current, notice.ledger);
+    setNotices((current) => {
+      const next = addNotice(current, notice);
+      if (typeof window !== 'undefined') saveStoredNotices(window.sessionStorage, address, next);
+      return next;
+    });
+    notify(`${notice.title}${notice.detail ? ` — ${notice.detail}` : ''}`,
+      notice.failed ? 'err' : 'ok');
+  }, [notify]);
 
   // Recipient/sender balance notifications.
   //
@@ -305,7 +809,9 @@ export default function WalletPanel() {
   // EventSource reconnects on its own and replays from `Last-Event-ID`, so a
   // dropped connection does not lose the transfer that caused the refresh.
   useEffect(() => {
-    const pubkey = active?.pubkey;
+    // The address on screen, unlocked or watch-only: the recipient of a payment
+    // is often watching an address they hold on another device.
+    const pubkey = active?.pubkey || watchAddress;
     if (!pubkey) return undefined;
     let closed = false;
     let stream = null;
@@ -320,7 +826,10 @@ export default function WalletPanel() {
     }
     try {
       stream = new window.EventSource(accountEventsUrl(pubkey, 0));
-      stream.addEventListener('tx', () => { void refreshBalance(pubkey); });
+      stream.addEventListener('tx', (event) => {
+        void refreshBalance(pubkey);
+        announceTransfer(event?.data, pubkey);
+      });
       stream.addEventListener('error', () => {
         // The stream is bounded (the indexer closes it after ~1 minute) and a
         // proxy can buffer it; poll until EventSource reconnects.
@@ -334,7 +843,7 @@ export default function WalletPanel() {
       if (stream) stream.close();
       stopPolling?.();
     };
-  }, [active?.pubkey, refreshBalance]);
+  }, [active?.pubkey, watchAddress, refreshBalance, announceTransfer]);
 
   // Re-check one stored transfer against the exact-hash endpoint. This never
   // upgrades a row to "confirmed" without a ledger result for that hash.
@@ -359,6 +868,12 @@ export default function WalletPanel() {
   // ---------------- wallet actions (logic unchanged from the audited build) ----
   async function doCreate(e) {
     e.preventDefault();
+    // A form submitted without a real user click can skip the browser's
+    // `required` check, and an unnamed wallet is a blank row nobody can pick.
+    if (!newName.trim()) {
+      notify('Give the wallet a name first.', 'err');
+      return;
+    }
     const operationEpoch = lockEpoch.current;
     setBusy(true);
     try {
@@ -369,12 +884,20 @@ export default function WalletPanel() {
         zeroSeed(seed32);
         return;
       }
-      setWallets(keystoreList());
+      setWallets(visibleWallets());
       // The freshly created seed stays in this closure's memory only —
       // the same trust level as an explicit Unlock.
       activateWallet({ name: r.name, pubkey: r.pubkeyG, seed32 });
       setNewName(''); setNewPass(''); setImportSeed('');
+      setAccountsOpen(false);
+      setWalletManagerView('list');
+      // A wallet created while signed in belongs to that account, so a later
+      // account on this browser cannot adopt it.
+      if (accountEmail) bindOwner(r.name, accountEmail);
       notify(`Wallet "${r.name}" created. Export the encrypted backup NOW (Settings) and store it privately — it is the only copy.`, 'ok');
+      // Only refreshes a Drive backup this session already has access to; it
+      // never opens a Google window on its own.
+      void backupSilentlyAfterChange(r.name);
     } catch (err) { notify(String(err.message || err), 'err'); }
     finally {
       setNewPass('');
@@ -385,6 +908,10 @@ export default function WalletPanel() {
 
   async function doImport(e) {
     e.preventDefault();
+    if (!newName.trim()) {
+      notify('Give the wallet a name first.', 'err');
+      return;
+    }
     const operationEpoch = lockEpoch.current;
     setBusy(true);
     try {
@@ -395,10 +922,13 @@ export default function WalletPanel() {
         zeroSeed(seed32);
         return;
       }
-      setWallets(keystoreList());
+      setWallets(visibleWallets());
       activateWallet({ name: r.name, pubkey: r.pubkeyG, seed32 });
       setNewName(''); setNewPass(''); setImportSeed('');
+      setAccountsOpen(false);
+      setWalletManagerView('list');
       notify(`Wallet "${r.name}" imported.`, 'ok');
+      void backupSilentlyAfterChange(r.name);
     } catch (err) { notify(String(err.message || err), 'err'); }
     finally {
       setNewPass('');
@@ -407,28 +937,181 @@ export default function WalletPanel() {
     }
   }
 
+  // A new or imported wallet is bound to the signed-in account and, when this
+  // page already has Drive access, re-uploaded as ciphertext. Failures stay
+  // silent here: Settings owns the visible status and the manual button.
+  async function backupSilentlyAfterChange(name) {
+    try {
+      const result = await backupSilently(keystoreExport());
+      if (result.backedUp && result.email) {
+        bindOwner(name, result.email);
+        // A silent upload counts: the copy in Drive is current again, and it
+        // covers the wallet that was just added.
+        recordDriveBackup(result.email, result.modifiedTime ? new Date(result.modifiedTime) : new Date(), {
+          wallets: keystoreList().map((wallet) => wallet.pubkey),
+        });
+        setWallets(visibleWallets());
+      }
+    } catch { /* no session, no Drive grant, or offline: manual backup remains */ }
+  }
+
   async function doUnlock(e) {
     e.preventDefault();
     if (!unlockName) return;
-    const operationEpoch = lockEpoch.current;
     const name = unlockName;
-    let password = unlockPass;
+    const password = unlockPass;
     setUnlockPass('');
+    const ok = await unlockWithPassword(name, password);
+    if (ok) setUnlockName('');
+  }
+
+  // One unlock path for both the sign-in card and the account switcher. The
+  // password is only ever held for the duration of the call; the session it
+  // produces replaces any previous one through activateWallet(), which wipes
+  // the previous seed first.
+  async function unlockWithPassword(name, password) {
+    // Visibility is decided BEFORE any decryption. A wallet that belongs to
+    // another account stays hidden even when its name is typed exactly: the
+    // request is refused while it is still just a name, so no seed is ever
+    // unwrapped for a wallet this session may not use.
+    const entry = visibleWalletNamed(keystoreList(), accountEmail, name, { signInRequired });
+    if (!entry) {
+      notify('That wallet is not available in this session. Sign in with the account it belongs to, or check the name.', 'err');
+      return false;
+    }
+    const operationEpoch = lockEpoch.current;
     setBusy(true);
     try {
       const seed32 = await keystoreUnlock(name, password);
       if (operationEpoch !== lockEpoch.current) {
         zeroSeed(seed32);
-        return;
+        return false;
       }
-      const list = keystoreList();
-      const entry = list.find(w => w.name === name);
-      activateWallet({ name, pubkey: entry?.pubkey, seed32 });
-      setUnlockName('');
+      // The keystore's own integrity check proves the decrypted seed belongs to
+      // this entry's address, so the visible address is the one we sign with.
+      activateWallet({ name, pubkey: entry.pubkey, seed32 });
       notify(`Wallet "${name}" unlocked.`, 'ok');
-    } catch (err) { notify(String(err.message || err), 'err'); }
-    finally {
-      password = '';
+      return true;
+    } catch (err) {
+      notify(String(err?.message || err), 'err');
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function unlockWithDevice(name = unlockName) {
+    const entry = visibleWallets().find((wallet) => wallet.name === name);
+    if (!entry || !hasBiometricUnlock(name)) {
+      notify('Device unlock is not set up for this wallet. Use its password.', 'err');
+      return false;
+    }
+    const operationEpoch = lockEpoch.current;
+    setBusy(true);
+    try {
+      const seed32 = await unlockWithBiometric(name, entry.pubkey);
+      if (operationEpoch !== lockEpoch.current) {
+        zeroSeed(seed32);
+        return false;
+      }
+      activateWallet({ name, pubkey: entry.pubkey, seed32 });
+      setUnlockName('');
+      notify(`Wallet "${name}" unlocked on this device.`, 'ok');
+      return true;
+    } catch (err) {
+      notify(String(err.message || 'Device unlock failed. Use the wallet password.'), 'err');
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // The homepage shows whether each local wallet has been created on-chain.
+  // Public account lookups need no unlock and never access key material.
+  useEffect(() => {
+    if (page !== 'overview' || wallets.length === 0) return undefined;
+    let cancelled = false;
+    setOverviewWalletStates((current) => {
+      const next = {};
+      for (const wallet of wallets) {
+        next[wallet.name] = current[wallet.name]?.pubkey === wallet.pubkey
+          ? current[wallet.name]
+          : { pubkey: wallet.pubkey, balance: { kind: 'loading', value: null } };
+      }
+      return next;
+    });
+    Promise.all(wallets.map(async (wallet) => {
+      let balanceState;
+      try { balanceState = readAccountBalance(await getAccount(wallet.pubkey)); }
+      catch { balanceState = { kind: 'unavailable', value: null }; }
+      if (!cancelled) {
+        setOverviewWalletStates((current) => ({
+          ...current,
+          [wallet.name]: { pubkey: wallet.pubkey, balance: balanceState },
+        }));
+      }
+    }));
+    return () => { cancelled = true; };
+  }, [page, wallets]);
+
+  // Balances inside the switcher come from a read-only lookup of each public
+  // address — no key involved — so a locked wallet can still show its amount
+  // and a person can pick by balance. One failure only affects its own row.
+  useEffect(() => {
+    if (!accountsOpen || wallets.length === 0) return undefined;
+    let cancelled = false;
+    setSwitchBalances((cur) => {
+      const next = {};
+      for (const w of wallets) next[w.name] = cur[w.name] ?? { kind: 'loading', value: null };
+      return next;
+    });
+    (async () => {
+      for (const w of wallets) {
+        if (!w.pubkey) continue;
+        let entry;
+        try {
+          entry = readAccountBalance(await getAccount(w.pubkey));
+        } catch {
+          entry = { kind: 'unavailable', value: null };
+        }
+        if (cancelled) return;
+        setSwitchBalances((cur) => ({ ...cur, [w.name]: entry }));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [accountsOpen, wallets]);
+
+  async function toggleBiometricUnlock() {
+    if (!active?.seed32) {
+      notify('Unlock this wallet with its password before setting up device unlock.', 'err');
+      return;
+    }
+    const name = active.name;
+    if (hasBiometricUnlock(name)) {
+      removeBiometricUnlock(name);
+      setBiometricWallets(biometricWalletNames());
+      notify('Device unlock removed from this browser. Your wallet password still works.', 'ok');
+      return;
+    }
+    const session = activeRef.current;
+    const operationEpoch = lockEpoch.current;
+    const canContinue = () => operationEpoch === lockEpoch.current && activeRef.current === session;
+    const seed32 = session.seed32.slice();
+    pendingSeedsRef.current.add(seed32);
+    setBusy(true);
+    try {
+      await enableBiometricUnlock({
+        name, pubkey: active.pubkey, seed32,
+        shouldCancel: () => !canContinue(),
+      });
+      if (!canContinue()) return;
+      setBiometricWallets(biometricWalletNames());
+      notify('Device unlock enabled for this browser. Keep using your wallet password as a backup.', 'ok');
+    } catch (err) {
+      notify(String(err.message || err), 'err');
+    } finally {
+      zeroSeed(seed32);
+      pendingSeedsRef.current.delete(seed32);
       setBusy(false);
     }
   }
@@ -437,14 +1120,96 @@ export default function WalletPanel() {
     lockWallet('Wallet locked — signing key cleared from memory.');
   }
 
+  async function checkWalletRemoval(wallet) {
+    if (!wallet?.name || !wallet?.pubkey || wallet.name !== walletDetails?.name) return;
+    setBusy(true);
+    setWalletRemoveState({ phase: 'checking', message: 'Checking the live network…' });
+    try {
+      const identity = await verifyNetworkIdentity();
+      if (!identity.ok || identity.network !== EXPECTED_NETWORK_ID) {
+        throw new Error('Could not verify NSAT Mainnet. The wallet was not removed. Try again when the network is available.');
+      }
+      const account = await getAccount(wallet.pubkey);
+      if (account?.status !== 'not_found') {
+        throw new Error('This address has an on-chain account (or an unexpected response). It was not removed. Move any funds or retain the wallet safely.');
+      }
+      setWalletRemoveState({ phase: 'confirm', message: 'Mainnet confirms this address has no on-chain account. Confirm only if you have another backup or no longer need this key.' });
+    } catch (error) {
+      setWalletRemoveState({ phase: 'error', message: String(error?.message || 'Wallet was not removed.') });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmRemoveWallet(wallet) {
+    if (!wallet?.name || !wallet?.pubkey || wallet.name !== walletDetails?.name
+      || walletRemoveState?.phase !== 'confirm') return;
+    setBusy(true);
+    setWalletRemoveState({ phase: 'checking', message: 'Rechecking Mainnet before removal…' });
+    try {
+      const identity = await verifyNetworkIdentity();
+      if (!identity.ok || identity.network !== EXPECTED_NETWORK_ID) {
+        throw new Error('Could not verify NSAT Mainnet. The wallet was not removed.');
+      }
+      const account = await getAccount(wallet.pubkey);
+      if (account?.status !== 'not_found') {
+        throw new Error('The address now has an on-chain account or returned an unexpected response. The wallet was not removed.');
+      }
+      if (activeRef.current?.name === wallet.name) lockWallet();
+      const removed = keystoreRemove(wallet.name);
+      if (!removed) throw new Error('The wallet was not found in this device’s keystore.');
+      removeBiometricUnlock(wallet.name);
+      historyClear(wallet.name);
+      unbindOwner(wallet.name);
+      setWalletDetails(null);
+      setWalletManagerView('list');
+      refreshWallets();
+      setOverviewWalletStates((current) => {
+        const next = { ...current };
+        delete next[wallet.name];
+        return next;
+      });
+      setSwitchBalances((current) => {
+        const next = { ...current };
+        delete next[wallet.name];
+        return next;
+      });
+      setWalletRemoveState(null);
+      notify(`“${wallet.name}” was removed from this device. Its Google Drive backup was left unchanged.`, 'ok');
+    } catch (error) {
+      setWalletRemoveState({ phase: 'error', message: String(error?.message || 'Wallet was not removed.') });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   // Account switching never reuses the previous key: it drops the active seed
   // and asks for THIS wallet's password, exactly like a fresh unlock. Nothing
   // is signed until that password is entered again.
   function switchTo(name) {
+    if (activeRef.current?.name === name) {
+      setAccountsOpen(false);
+      return;
+    }
+    setSwitchName(name);
+    setSwitchPass('');
+    setAccountsOpen(true);
+  }
+
+  async function doSwitchAccount(e) {
+    e.preventDefault();
+    const name = switchName;
+    const password = switchPass;
+    setSwitchPass('');
+    if (!name || !password) return;
+    // Lock first so the previous key cannot survive a failed unlock.
     if (activeRef.current) lockWallet();
-    setUnlockName(name);
-    setPage('overview');
-    notify(`Selected “${name}” — unlock it with its password to sign.`, 'ok');
+    const ok = await unlockWithPassword(name, password);
+    if (ok) {
+      setSwitchName('');
+      setAccountsOpen(false);
+      setPage('overview');
+    }
   }
 
   function doBackup() {
@@ -464,7 +1229,14 @@ export default function WalletPanel() {
       a.href = url; a.download = 'scw-web-backup.json'; a.click();
       URL.revokeObjectURL(url);
     }
-    notify('Encrypted keystore downloaded. Keep it private.', 'ok');
+    // The file is the whole keystore, which is what makes it a backup — but in a
+    // session that hides other accounts' wallets it still carries their names and
+    // public addresses (the seeds stay encrypted). Say so instead of letting the
+    // export look like it contained only what is on screen.
+    const hiddenInFile = Math.max(0, keystoreList().length - wallets.length);
+    notify(hiddenInFile
+      ? `Encrypted keystore downloaded. It also carries ${hiddenInFile} wallet${hiddenInFile === 1 ? '' : 's'} this session does not show — names and public addresses included, seeds still encrypted. Keep it private.`
+      : 'Encrypted keystore downloaded. Keep it private.', 'ok');
   }
 
   async function doRestore(e) {
@@ -473,16 +1245,108 @@ export default function WalletPanel() {
     try {
       const backup = await f.text();
       lockWallet();
-      keystoreRestore(backup);
+      // Restore adds to what is here; it never replaces the device's wallets.
+      const restored = keystoreRestore(backup);
       refreshWallets();
-      notify('Keystore restored. Unlock a wallet to sign.', 'ok');
+      const summary = `${restored.added} wallet${restored.added === 1 ? '' : 's'} added`
+        + `${restored.updated ? `, ${restored.updated} updated` : ''}`;
+      if (restored.conflicts.length) {
+        notify(`Keystore restored: ${summary}. ${restored.conflicts.length} name${restored.conflicts.length === 1 ? '' : 's'} `
+          + `already belong to a different wallet here and were left unchanged: ${restored.conflicts.join(', ')}.`, 'err');
+      } else {
+        notify(`Keystore restored: ${summary}. Wallets already on this device were kept — unlock one to sign.`, 'ok');
+      }
     } catch (err) { notify(`restore failed: ${err.message}`, 'err'); }
+  }
+
+  // Open the active wallet's own account on chain. From Core V_16 a key with
+  // no account creates it itself: one CREATE_ACCOUNT at a zero balance, no fee
+  // and no sponsor. This is the only transaction that can be signed for an
+  // address the ledger does not know yet.
+  async function openActiveAccount() {
+    if (!active?.seed32) { notify('Unlock this wallet to create its account.', 'err'); return; }
+    if (!net?.ok) { notify('Network identity not verified — refusing to sign.', 'err'); return; }
+    if (net.network !== EXPECTED_NETWORK_ID) {
+      notify('Network identity changed since verification — refusing to sign.', 'err');
+      return;
+    }
+    const gate = selfOpenGate({ protocolVersion: chainVersion });
+    if (!gate.available) { notify(gate.reason, 'err'); return; }
+    const session = activeRef.current;
+    if (!session?.seed32 || session.name !== active.name) {
+      notify('Wallet locked. Unlock again before signing.', 'err');
+      return;
+    }
+    setBusy(true);
+    const operationEpoch = lockEpoch.current;
+    const canContinue = () => operationEpoch === lockEpoch.current
+      && activeRef.current === session;
+    const seed32 = session.seed32.slice();
+    pendingSeedsRef.current.add(seed32);
+    try {
+      const signed = await buildSelfOpenTx({ seed32, netPassphrase: EXPECTED_NETWORK_ID });
+      if (!canContinue()) throw new Error('Wallet locked — signing cancelled.');
+      const r = await submitSignedTransaction(signed.envelopeBase64);
+      if (r.status === 'ERROR') {
+        notify('The network rejected the account creation. Nothing was charged.', 'err');
+        return;
+      }
+      if (r.status !== 'PENDING' && r.status !== 'DUPLICATE') {
+        notify(`Node responded ${r.status}: try again shortly; nothing was charged.`, 'warn');
+        return;
+      }
+      notify('Account creation submitted — waiting for it on chain…', 'warn');
+      // The ledger's own answer is the only proof the account exists, so poll
+      // the public account read instead of assuming it landed.
+      let state = { kind: 'missing', value: null };
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        state = readAccountBalance(await getAccount(active.pubkey).catch(() => null));
+        if (state.kind !== 'missing') break;
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+      setOverviewWalletStates((cur) => ({
+        ...cur, [active.name]: { pubkey: active.pubkey, balance: state },
+      }));
+      if (state.kind === 'missing') {
+        notify('Submitted, but the account is not visible yet. Nothing was charged; check again shortly.', 'warn');
+      } else {
+        notify('Account created at a zero balance — no fee and no reserve were charged.', 'ok');
+      }
+      void refreshBalance(active.pubkey);
+      void verifyNetwork();
+    } catch (err) {
+      notify(`Account creation failed: ${err.message || err}`, 'err');
+    } finally {
+      zeroSeed(seed32);
+      pendingSeedsRef.current.delete(seed32);
+      setBusy(false);
+    }
   }
 
   // The real send pipeline (unchanged from the audited build). Returns true
   // when the caller may close the review modal; on failure leaves the modal
   // open with the exact reason surfaced as a toast.
-  async function submitSend() {
+  //
+  // `toOverride` / `amountOverride` exist so the chat can pay the person in the
+  // conversation without duplicating any of this: it calls the same function,
+  // with its own explicit confirmation in front of it. `createOverride` keeps a
+  // stale CREATE-account checkbox from changing a chat payment operation.
+  async function submitSend({ toOverride = null, amountOverride = null, createOverride = null } = {}) {
+    const target = String(toOverride ?? dest).trim();
+    const value = String(amountOverride ?? amount);
+    const create = createOverride ?? createDest;
+    lastSendRef.current = null;
+    if (toOverride != null) {
+      const clean = value.replace(/[,_ ]/g, '');
+      if (!/^\d+$/.test(clean) || BigInt(clean) <= 0n) {
+        notify('Enter a whole-number amount greater than zero.', 'err');
+        return false;
+      }
+      if (target === active?.pubkey) {
+        notify('This wallet cannot pay itself from a chat request.', 'err');
+        return false;
+      }
+    }
     if (!active?.seed32) { notify('Unlock the wallet first.', 'err'); return false; }
     if (!net?.ok) { notify('Network identity not verified — refusing to sign.', 'err'); return false; }
     if (net.network !== EXPECTED_NETWORK_ID) {
@@ -507,13 +1371,26 @@ export default function WalletPanel() {
     };
     try {
       requireActiveSession();
+      // A wallet whose account is not on chain cannot be a source: the node
+      // would answer "source account missing" after the signature existed.
+      // Check first and say what actually has to happen.
+      const source = await getAccount(active.pubkey).catch(() => null);
+      requireActiveSession();
+      if (!source) {
+        notify('Could not read this account from the network — nothing was signed.', 'err');
+        return false;
+      }
+      if (source.status !== 'ok') {
+        notify('This wallet has no on-chain account yet, so it cannot send. An account is created by its first incoming deposit (≈ 2× base reserve). Send funds to this address first.', 'err');
+        return false;
+      }
       const baseFee = await estimateFee();
       requireActiveSession();
       const info = await getChainInfo();
       requireActiveSession();
       const reserve = Number(info?.info?.ledger?.baseReserve || 0);
-      const amtClean = amount.replace(/[,_ ]/g, '');
-      if (createDest && reserve > 0 && /^\d+$/.test(amtClean)
+      const amtClean = value.replace(/[,_ ]/g, '');
+      if (create && reserve > 0 && /^\d+$/.test(amtClean)
         && BigInt(amtClean) < BigInt(2 * reserve)) {
         notify(`CREATE starting balance must be ≥ ${BigInt(2 * reserve).toLocaleString()} NSAT (2× base reserve) — the chain would charge the fee and fail the operation.`, 'err');
         setBusy(false);
@@ -523,23 +1400,25 @@ export default function WalletPanel() {
         seed32,
         netPassphrase: EXPECTED_NETWORK_ID,   // the VERIFIED identity, exact
         seqFetch: async () => getAccount(active.pubkey),
-        destG: dest.trim(),
-        amount: amount.trim(),
+        destG: target,
+        amount: value.trim(),
         fee: baseFee,
-        create: createDest,
+        create,
         shouldCancel: () => !canContinue(),
       });
       requireActiveSession();
       requireActiveSession();
       const r = await submitSignedTransaction(signed.envelopeBase64);
+      lastSendRef.current = { hash: signed.txHashHex, status: r.status };
       // Locking after submission cannot revoke a signed envelope already sent.
       // Core /tx statuses (verified in nsat-core TransactionQueue.cpp):
       //   PENDING | DUPLICATE | ERROR | TRY_AGAIN_LATER | FILTERED
       if (r.status === 'ERROR') {
+        lastSendRef.current = { hash: signed.txHashHex, status: 'rejected' };
         notify('Node REJECTED the transaction before inclusion (invalid or insufficient). Nothing was signed again — see Activity.', 'err');
         historyPush(active.name, {
-          time: new Date().toLocaleString(), dir: 'sent', to: dest.trim(),
-          amount: amount.trim(), fee: 0, txhash: signed.txHashHex,
+          time: new Date().toLocaleString(), dir: 'sent', to: target,
+          amount: value.trim(), fee: 0, txhash: signed.txHashHex,
           ledger: null, ledger_hash: null, status: 'rejected',
         });
         setHistory(historyLoad(active.name));
@@ -566,9 +1445,10 @@ export default function WalletPanel() {
         timeoutMs: 90_000,
       });
       const base = {
-        time: new Date().toLocaleString(), dir: 'sent', to: dest.trim(),
-        amount: amount.trim(), fee: signed.fee, txhash: signed.txHashHex,
+        time: new Date().toLocaleString(), dir: 'sent', to: target,
+        amount: value.trim(), fee: signed.fee, txhash: signed.txHashHex,
       };
+      lastSendRef.current = { hash: signed.txHashHex, status: verdict.status };
       if (verdict.status === 'confirmed' || verdict.status === 'failed') {
         historyPush(active.name, {
           ...base,
@@ -577,7 +1457,9 @@ export default function WalletPanel() {
           evidence: verdict.evidence, confirmed_at: verdict.confirmation_time,
         });
         setHistory(historyLoad(active.name));
-        setAmount(''); setDest(''); setReview(null);
+        if (toOverride == null && amountOverride == null) {
+          setAmount(''); setDest(''); setReview(null);
+        }
         notify(
           verdict.status === 'confirmed'
             ? `Confirmed on ledger ${verdict.ledger} (${verdict.result_code}).`
@@ -605,6 +1487,20 @@ export default function WalletPanel() {
     }
   }
 
+  // Chat-side payment: the same pipeline, the same guards, with the person in
+  // the conversation as the destination. The chat shows its own confirmation
+  // step before this is called, so a stray tap cannot move anything.
+  async function sendCoinsFromChat(to, coinAmount) {
+    const ok = await submitSend({
+      toOverride: to, amountOverride: coinAmount, createOverride: false,
+    });
+    return {
+      ok,
+      hash: lastSendRef.current?.hash || '',
+      status: lastSendRef.current?.status || '',
+    };
+  }
+
   function openReview() {
     const amtClean = amount.replace(/[,_ ]/g, '');
     const feeVal = fee ?? 0;
@@ -619,8 +1515,31 @@ export default function WalletPanel() {
     && BigInt(amount.replace(/[,_ ]/g, '') || '0') > 0n;
   const destOk = ACCOUNT_RE.test(dest.trim()) && dest.trim() !== active?.pubkey;
   const hasWallets = wallets.length > 0;
+  // Wallets still encrypted on this device but bound to a Google account that is
+  // not signed in here: they are not listed, and the unlock form says so instead
+  // of looking empty.
+  const hiddenWallets = Math.max(0, keystoreList().length - wallets.length);
 
   const ledger = net?.ledger ?? null;
+
+  // Signed out and not in standalone mode: the gate is the whole screen. Nothing
+  // of the wallet — address, balance, wallet names, history or the tab bar — is
+  // reachable before that choice, which is what makes "sign out" a real end of
+  // use. The gate card renders immediately, including in the static HTML; it
+  // reports the in-flight session check itself instead of the page looking
+  // empty.
+  if (!standalone && (!accountReady || (signInRequired && !accountUid))) {
+    return (
+      <div className="nw-root">
+        <div className="nw-phone">
+          <main className="nw-content">
+            <h1 className="nw-visually-hidden">NSAT Wallet</h1>
+            <GoogleAccount variant="gate" onUseStandalone={() => setStandalone(true)} />
+          </main>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="nw-root">
@@ -636,11 +1555,19 @@ export default function WalletPanel() {
             <button type="button" className="nw-round-btn" onClick={() => setPage('receive')}
               aria-label="Show my address" title="Receive — show your address">▦</button>
           )}
-          <button type="button" className="nw-account-pill" onClick={() => setPage('settings')}
-            title={`${netOk ? 'Connected' : net == null ? 'Connecting…' : 'Offline'} — wallet settings`}>
-            <span className="nw-tokenlogo" aria-hidden>◈</span>
+          <button type="button" className="nw-account-pill"
+            onClick={() => {
+              setAccountsOpen(true);
+              setWalletManagerView('list');
+              setWalletDetails(null);
+              setSwitchName('');
+              setSwitchPass('');
+            }}
+            aria-haspopup="dialog"
+            title={`${netOk ? 'Connected' : net == null ? 'Connecting…' : 'Offline'} — switch wallet`}>
+            <span className="nw-tokenlogo"><NsatCoinMark className="nw-coin-mark" /></span>
             <span className="nw-account-name">
-              {active ? active.name : hasWallets ? 'Locked' : watch ? 'Watch only' : 'NSAT Wallet'}
+              {active ? active.name : hasWallets ? 'Locked' : watchAddress ? 'Watch only' : 'NSAT Wallet'}
             </span>
             <span className={'nw-dot ' + (netOk ? 'ok' : net == null ? 'wait' : 'err')} aria-hidden />
             <span className="nw-account-chevron" aria-hidden>⌄</span>
@@ -671,6 +1598,12 @@ export default function WalletPanel() {
             </div>
           )}
 
+          {/* Activity opens on the mint status for the wallet the mint pays:
+           * read-only ledger-header accounting, so it does not need an unlocked
+           * wallet and must not be pushed below the unlock form. Wallets the
+           * mint does not pay do not show it at all. */}
+          {page === 'activity' && mintVisible ? <MintStatusCard mint={mintStatus} /> : null}
+
           {/* Locked state: unlocking is the only thing that matters, so it is
            * a card in the flow instead of a control in a toolbar. */}
           {!active && hasWallets && (
@@ -685,20 +1618,40 @@ export default function WalletPanel() {
                 onChange={(e) => setUnlockPass(e.target.value)} autoComplete="current-password"
                 aria-label="Wallet password" />
               <button className="nw-send-btn" type="submit"
-                disabled={busy || !unlockName}>Unlock</button>
+                disabled={busy || !unlockName}>Unlock with password</button>
+              {hiddenWallets > 0 && (
+                <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
+                  {`${hiddenWallets} wallet${hiddenWallets === 1 ? '' : 's'} on this device `
+                    + `${hiddenWallets === 1 ? 'belongs' : 'belong'} to a Google account that is not `
+                    + 'signed in on this browser, and '
+                    + `${hiddenWallets === 1 ? 'stays' : 'stay'} hidden until it signs in. `
+                    + 'Nothing was deleted.'}
+                </p>
+              )}
+              {unlockName && biometricWallets.includes(unlockName) ? (
+                <button type="button" className="nw-chip-btn" disabled={busy}
+                  onClick={() => void unlockWithDevice()}>
+                  Unlock with this device
+                </button>
+              ) : null}
             </form>
           )}
 
-          {page === 'overview' && !active && wallets.length === 0 && watch && (
-            <WatchOnlyHome address={watch.address} balance={balance} funded={funded}
+          {page === 'overview' && !active && wallets.length === 0 && watchAddress && (
+            <WatchOnlyHome address={watchAddress} addresses={watchAddresses} balance={balance}
+              funded={funded} onSelect={setWatchPick}
               onReceive={() => setPage('receive')} onSettings={() => setPage('settings')} />
           )}
 
-          {page === 'overview' && !(watch && !active && wallets.length === 0) && (
+          {page === 'overview' && !(watchAddress && !active && wallets.length === 0) && (
             <OverviewPage active={active} wallets={wallets} balance={balance} funded={funded}
+              walletChainStates={overviewWalletStates} baseReserve={reserve}
+              chainVersion={chainVersion}
               bus={{ busy, doCreate, doImport, newName, setNewName, newPass, setNewPass,
-                importSeed, setImportSeed }}
-              net={{ net, netOk, ledger: liveLedger ?? ledger, fee, minted: policyMinted(liveLedger ?? ledger) }}
+                importSeed, setImportSeed, accountEmail }}
+              onSelfOpen={openActiveAccount}
+              net={{ net, netOk, ledger: liveLedger ?? ledger, fee, reserve }}
+              profileId={profileId}
               notify={notify}
               onSend={() => setPage('send')} onReceive={() => setPage('receive')}
               onActivity={() => setPage('activity')}
@@ -710,24 +1663,68 @@ export default function WalletPanel() {
               state={{ dest, setDest, amount, setAmount, createDest, setCreateDest }}
               gate={{ netOk, fee, amtInt, destOk, reserve }} busy={busy}
               active={active} balance={balance}
+              funded={funded}
+              linkedRecipients={watchAddresses
+                .filter((address) => address && address !== active?.pubkey)
+                .map((address) => ({
+                  address,
+                  name: wallets.find((wallet) => wallet.pubkey === address)?.name || 'Linked wallet',
+                }))}
+              recipientBalances={sendRecipientBalances}
+              onChooseRecipient={(address) => setDest(address)}
               onReview={openReview} />
           )}
 
           {page === 'receive' && (
-            <ReceivePage activePubkey={active?.pubkey || watch?.address || ''} notify={notify} />
+            <ReceivePage activePubkey={active?.pubkey || watchAddress || ''} notify={notify} />
           )}
 
           {page === 'shielded' && <ShieldedGatePage />}
 
           {page === 'activity' && (
-            <ActivityPage history={history} activeName={active?.name}
+            <ActivityPage history={history}
+              activeName={active?.name || (watchAddress ? `watch only · ${shortAddr(watchAddress, 6)}` : '')}
+              chain={chainHistory}
+              notices={notices}
+              onOpenChat={() => setPage('chat')}
+              chatEnabled={Boolean(CHAT_RELAY_ORIGIN) || CHAT_RELAY_ENABLED}
+              onLoadOlder={loadOlderHistory}
               onRecheck={recheckTransfer} canRecheck={isIndexerConfigured()} />
+          )}
+
+          {page === 'chat' && (
+            <ChatPanel seed32={active?.seed32 || null}
+              address={active?.pubkey || watchAddress || ''}
+              contacts={chatContacts}
+              relayOrigin={chatRelayOrigin()}
+              onSendTo={(address, requestedAmount = '') => {
+                setDest(address);
+                setCreateDest(false);
+                if (requestedAmount) setAmount(requestedAmount);
+                setPage('send');
+              }}
+              onSendCoins={sendCoinsFromChat}
+              onBack={() => setPage('activity')} />
+          )}
+
+          {page === 'contacts' && (
+            <ContactsCard
+              onSendTo={(address, requestedAmount = '') => {
+                setDest(address);
+                setCreateDest(false);
+                if (requestedAmount) setAmount(requestedAmount);
+                setPage('send');
+              }}
+              onOpenSettings={() => setPage('settings')} />
           )}
 
           {page === 'settings' && (
             <SettingsPage
-              s={{ active, doLock, doBackup, doRestore, wallets, onSwitch: switchTo }}
-              onShielded={() => setPage('shielded')} />
+                              s={{ active, busy, doLock, doBackup, doRestore, wallets, biometricWallets,
+                onSwitch: switchTo, onToggleBiometric: toggleBiometricUnlock,
+                onReloadWallets: refreshWallets }}
+              onShielded={() => setPage('shielded')}
+              onOpenContacts={() => setPage('contacts')} />
           )}
       </main>
 
@@ -740,7 +1737,11 @@ export default function WalletPanel() {
               className={'nw-navitem' + (page === p ? ' is-active' : '')}
               onClick={() => setPage(p)}
               aria-current={page === p ? 'page' : undefined}>
-              <span className="nw-navicon" aria-hidden>{PAGE_GLYPH[p]}</span>
+              <span className="nw-navicon" aria-hidden>
+                {p === 'overview'
+                  ? <NsatCoinMark className="nw-nav-coin" />
+                  : PAGE_GLYPH[p]}
+              </span>
               <span className="nw-navlabel">{NAV_LABEL[p]}</span>
             </button>
           ))}
@@ -791,6 +1792,241 @@ export default function WalletPanel() {
         </div>
       )}
 
+      {/* Account switcher: the name pill opens this list, the way the iPhone
+       * build does. Picking another wallet locks the current key and asks for
+       * the chosen wallet's password — switching never carries a key over. */}
+      {accountsOpen && (
+        <div className="nw-modal-back" role="dialog" aria-modal="true"
+          aria-labelledby="nw-accounts-title"
+          onKeyDown={(e) => { if (e.key === 'Escape' && !busy) setAccountsOpen(false); }}
+          onClick={(e) => { if (e.target === e.currentTarget && !busy) setAccountsOpen(false); }}>
+          <div className="nw-modal" tabIndex={-1} autoFocus>
+            <div className="nw-step">WALLETS ON THIS DEVICE</div>
+            <h3 id="nw-accounts-title" style={{ color: 'var(--text)' }}>
+              {walletManagerView === 'create' ? 'Create a New Wallet'
+                : walletManagerView === 'import' ? 'Import an Existing Wallet'
+                  : walletManagerView === 'details' ? 'Wallet details' : 'Wallets'}
+            </h3>
+
+            {walletManagerView === 'list' && (
+              <>
+                <div className="nw-wallet-manager-actions">
+                  <button type="button" className="nw-manager-action"
+                    onClick={() => { setSwitchName(''); setWalletManagerView('create'); }}>
+                    <span className="nw-manager-action-icon" aria-hidden>＋</span>
+                    Create a New Wallet
+                  </button>
+                  <button type="button" className="nw-manager-action"
+                    onClick={() => { setSwitchName(''); setWalletManagerView('import'); }}>
+                    <span className="nw-manager-action-icon" aria-hidden>↓</span>
+                    Import an Existing Wallet
+                  </button>
+                </div>
+                {wallets.length === 0 ? (
+                  <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
+                    No wallet is stored in this browser yet — create or import one to sign here.
+                  </p>
+                ) : (
+                  <ul className="nw-acc-list">
+                    {wallets.map((w) => {
+                      const isActive = active?.name === w.name;
+                      return (
+                        <li key={w.name} className={'nw-acc-row' + (isActive ? ' is-active' : '')}>
+                          <button type="button" className="nw-acc-main"
+                            onClick={() => (isActive ? setAccountsOpen(false) : switchTo(w.name))}
+                            aria-current={isActive ? 'true' : undefined}>
+                            <span className="nw-acc-name">{w.name}</span>
+                            <span className="nw-acc-meta">
+                              <span className="nw-mono">{shortAddr(w.pubkey, 6)}</span>
+                              <span className="nw-acc-bal">{accountBalanceLine(switchBalances[w.name])}</span>
+                            </span>
+                          </button>
+                          {isActive ? <span className="nw-badge ok">active</span> : null}
+                          <button type="button" className="nw-wallet-gear"
+                            aria-label={`Details for ${w.name}`}
+                            onClick={() => {
+                              setWalletDetails(w);
+                              setWalletRemoveState(null);
+                              setWalletManagerView('details');
+                            }}>
+                            ⚙
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+
+                {switchName && (
+                  <form className="nw-unlock" onSubmit={doSwitchAccount} style={{ marginTop: 12 }}>
+                    <label className="nw-label" htmlFor="nw-switch-pass">
+                      {`Password for “${switchName}”`}
+                    </label>
+                    <input id="nw-switch-pass" type="password" placeholder="Password"
+                      value={switchPass} onChange={(e) => setSwitchPass(e.target.value)}
+                      autoComplete="current-password" autoFocus
+                      aria-label={`Password for ${switchName}`} />
+                    <button className="nw-send-btn" type="submit" disabled={busy || !switchPass}>
+                      {busy ? 'Unlocking…' : 'Unlock and switch'}
+                    </button>
+                    {biometricWallets.includes(switchName) ? (
+                      <button type="button" className="nw-chip-btn" disabled={busy}
+                        onClick={async () => {
+                          if (await unlockWithDevice(switchName)) {
+                            setSwitchName('');
+                            setAccountsOpen(false);
+                            setPage('overview');
+                          }
+                        }}>
+                        Unlock with this device
+                      </button>
+                    ) : null}
+                  </form>
+                )}
+                <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
+                  Switching locks the current wallet first and asks for the selected wallet’s password.
+                </p>
+              </>
+            )}
+
+            {walletManagerView === 'create' && (
+              <>
+                <button type="button" className="nw-ghost-btn nw-manager-back"
+                  onClick={() => setWalletManagerView('list')}>← Wallets</button>
+                <form onSubmit={doCreate} className="nw-txf">
+                  <label className="nw-label" htmlFor="nw-manager-new-name">Wallet name</label>
+                  <input id="nw-manager-new-name" value={newName}
+                    onChange={(e) => setNewName(e.target.value)} placeholder="Personal wallet" required />
+                  <label className="nw-label" htmlFor="nw-manager-new-pass">
+                    Password (at least {MIN_PASSWORD_LENGTH} characters)
+                  </label>
+                  <input id="nw-manager-new-pass" type="password" value={newPass}
+                    onChange={(e) => setNewPass(e.target.value)} autoComplete="new-password"
+                    minLength={MIN_PASSWORD_LENGTH} required />
+                  <p className="nw-small nw-dim">Google sign-in cannot recover this password.</p>
+                  <button type="submit" className="nw-send-btn" disabled={busy}>
+                    {busy ? 'Creating…' : 'Create Wallet'}
+                  </button>
+                </form>
+              </>
+            )}
+
+            {walletManagerView === 'import' && (
+              <>
+                <button type="button" className="nw-ghost-btn nw-manager-back"
+                  onClick={() => setWalletManagerView('list')}>← Wallets</button>
+                <form onSubmit={doImport} className="nw-txf">
+                  <label className="nw-label" htmlFor="nw-manager-import-name">Wallet name</label>
+                  <input id="nw-manager-import-name" value={newName}
+                    onChange={(e) => setNewName(e.target.value)} required />
+                  <label className="nw-label" htmlFor="nw-manager-import-seed">Secret seed (S…)</label>
+                  <input id="nw-manager-import-seed" type="password" spellCheck={false}
+                    autoComplete="off" value={importSeed}
+                    onChange={(e) => setImportSeed(e.target.value)} required />
+                  <label className="nw-label" htmlFor="nw-manager-import-pass">
+                    Password (at least {MIN_PASSWORD_LENGTH} characters)
+                  </label>
+                  <input id="nw-manager-import-pass" type="password" value={newPass}
+                    onChange={(e) => setNewPass(e.target.value)} autoComplete="new-password"
+                    minLength={MIN_PASSWORD_LENGTH} required />
+                  <button type="submit" className="nw-send-btn" disabled={busy}>
+                    {busy ? 'Importing…' : 'Import Wallet'}
+                  </button>
+                </form>
+              </>
+            )}
+
+            {walletManagerView === 'details' && walletDetails && (
+              <div className="nw-wallet-details">
+                <button type="button" className="nw-ghost-btn nw-manager-back"
+                  onClick={() => setWalletManagerView('list')}>← Wallets</button>
+                <div className="nw-wallet-details-mark" aria-hidden>
+                  <NsatCoinMark className="nw-coin-mark" />
+                </div>
+                <strong>{walletDetails.name}</strong>
+                <div className="nw-small nw-dim nw-mono">{walletDetails.pubkey}</div>
+                <button type="button" className="nw-chip-btn"
+                  onClick={async () => {
+                    await navigator.clipboard.writeText(walletDetails.pubkey);
+                    notify('Copied public address.');
+                  }}>Copy address</button>
+                {active?.name === walletDetails.name
+                  ? <span className="nw-badge ok">active</span>
+                  : <button type="button" className="nw-send-btn" onClick={() => {
+                    setWalletManagerView('list');
+                    switchTo(walletDetails.name);
+                  }}>Switch wallet</button>}
+                <p className="nw-small nw-dim">
+                  Private keys stay in the encrypted browser keystore and are never displayed here.
+                </p>
+                <p className="nw-small nw-dim">
+                  Remove deletes only this device&apos;s encrypted key and local history. A Google Drive backup is not changed. Removal is available only after Mainnet confirms the address has no on-chain account.
+                </p>
+                {walletRemoveState?.phase === 'checking' && (
+                  <p className="nw-small nw-dim" role="status">{walletRemoveState.message}</p>
+                )}
+                {walletRemoveState?.phase === 'error' && (
+                  <p className="nw-small nw-google-error" role="alert">{walletRemoveState.message}</p>
+                )}
+                {walletRemoveState?.phase === 'confirm' ? (
+                  <div className="nw-remove-confirm" role="alert">
+                    <p className="nw-small">{walletRemoveState.message}</p>
+                    <p className="nw-small nw-dim">
+                      This permanently removes the encrypted key, device-unlock entry, and local history from this browser. It does not delete the Google Drive backup.
+                    </p>
+                    <div className="nw-btn-row">
+                      <button type="button" className="nw-danger-btn" disabled={busy}
+                        onClick={() => void confirmRemoveWallet(walletDetails)}>
+                        Confirm remove
+                      </button>
+                      <button type="button" className="nw-ghost-btn" disabled={busy}
+                        onClick={() => setWalletRemoveState(null)}>
+                        Keep wallet
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button type="button" className="nw-danger-btn nw-remove-wallet"
+                    disabled={busy}
+                    onClick={() => void checkWalletRemoval(walletDetails)}>
+                    {busy ? 'Checking…' : 'Check before removing'}
+                  </button>
+                )}
+              </div>
+            )}
+
+            <div className="nw-btn-row">
+              <button type="button" className="nw-ghost-btn" disabled={busy}
+                onClick={() => setAccountsOpen(false)}>Close</button>
+              {signInRequired && accountEmail ? (
+                <button type="button" className="nw-danger-btn" disabled={busy}
+                  onClick={async () => {
+                    setBusy(true);
+                    try {
+                      // Locks the wallet and clears the session before the
+                      // Google call returns, then the gate replaces this screen.
+                      await signOutGoogleSession();
+                    } catch {
+                      notify('Could not sign out of Google. Please try again.', 'err');
+                    } finally {
+                      // endSession also clears it; this keeps the panel usable
+                      // when the sign-out request itself failed.
+                      setBusy(false);
+                    }
+                  }}>
+                  {busy ? 'Signing out…' : 'Sign out of Google'}
+                </button>
+              ) : null}
+            </div>
+            {signInRequired && accountEmail ? (
+              <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
+                {`Signing out ends this session as ${accountEmail}: the wallet locks, this screen is cleared and the next person starts at the sign-in screen. Wallets are not deleted.`}
+              </p>
+            ) : null}
+          </div>
+        </div>
+      )}
+
       {toast && (
         <div className={`nw-toast ${toast.kind}`} role="status">{toast.text}</div>
       )}
@@ -803,7 +2039,7 @@ export default function WalletPanel() {
 // device can show the balance and the receive screen without a key. Everything
 // that needs a signature is explicitly out of reach here instead of failing
 // later: no Send button, and a plain sentence saying why.
-function WatchOnlyHome({ address, balance, funded, onReceive, onSettings }) {
+function WatchOnlyHome({ address, addresses = [], balance, funded, onSelect, onReceive, onSettings }) {
   const exact = balance == null ? '…' : formatExactBalance(balance);
   return (
     <div className="nw-home">
@@ -832,6 +2068,24 @@ function WatchOnlyHome({ address, balance, funded, onReceive, onSettings }) {
         </button>
       </div>
 
+      {addresses.length > 1 ? (
+        <section className="nw-card" aria-labelledby="nw-watch-pick-title">
+          <h2 id="nw-watch-pick-title" style={{ color: 'var(--text)' }}>Linked wallets</h2>
+          <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
+            {`${addresses.length} wallets on this account. Pick the one to watch on this device.`}
+          </p>
+          <div className="nw-btn-row" style={{ margin: '8px 0 0' }}>
+            {addresses.map((item) => (
+              <button key={item} type="button" className="nw-chip-btn nw-mono"
+                aria-pressed={item === address}
+                onClick={() => onSelect?.(item)}>
+                {item === address ? `● ${shortAddr(item, 6)}` : shortAddr(item, 6)}
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       <section className="nw-card">
         <h2 style={{ color: 'var(--text)' }}>Read-only on this device</h2>
         <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
@@ -848,8 +2102,89 @@ function WatchOnlyHome({ address, balance, funded, onReceive, onSettings }) {
   );
 }
 
+/* ------------------------- On-chain wallet status ----------------------- */
+function WalletChainStatus({ wallets, states = {}, baseReserve, chainVersion = null, activeName = '', onSelfOpen = null, selfOpenBusy = false }) {
+  // Read this device's own notes after mount so the static render and the
+  // browser agree (backup verification, registration attempt).
+  const [notes, setNotes] = useState({});
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const next = {};
+    for (const wallet of wallets) next[wallet.name] = readWalletNote(wallet.pubkey);
+    setNotes(next);
+  }, [wallets]);
+  if (!wallets?.length) return null;
+  const reserveKnown = Number.isSafeInteger(baseReserve) && baseReserve > 0;
+  const minimum = reserveKnown ? (BigInt(baseReserve) * 2n).toString() : null;
+  const missing = wallets.filter((wallet) => states[wallet.name]?.balance?.kind === 'missing');
+
+  return (
+    <section className="nw-card nw-wallet-chain-status" aria-labelledby="nw-wallet-chain-title">
+      <h2 id="nw-wallet-chain-title" style={{ color: 'var(--text)' }}>
+        Wallet account status
+      </h2>
+      <p className="nw-small nw-dim" style={{ margin: '6px 0 10px' }}>
+        Each address is checked directly against the network; this does not unlock or use its key.
+      </p>
+      <ul className="nw-acc-list">
+        {wallets.map((wallet) => {
+          const entry = states[wallet.name]?.balance;
+          const notCreated = entry?.kind === 'missing';
+          const exists = entry?.kind === 'exact';
+          // Local notes (backup verified, registration attempt) only refine the
+          // off-chain labels; "Active On-chain" still needs the ledger answer.
+          const status = walletStatus({
+            chain: entry,
+            backup: notes[wallet.name]?.backup,
+            registration: notes[wallet.name]?.registration,
+          });
+          return (
+            <li key={wallet.name} className="nw-acc-row nw-chain-wallet-row">
+              <div className="nw-acc-main">
+                <span className="nw-acc-name">{wallet.name}{wallet.name === activeName ? ' · active' : ''}</span>
+                <span className="nw-acc-meta">
+                  <span className="nw-mono">{shortAddr(wallet.pubkey, 6)}</span>
+                  <span className={`nw-badge ${status.tone}`}>{status.label}</span>
+                  {exists ? (
+                    <span className="nw-acc-bal">{formatExactBalance(entry.value)} NSAT</span>
+                  ) : notCreated ? null : entry?.kind === 'unavailable' ? null : (
+                    <span className="nw-acc-bal">checking…</span>
+                  )}
+                </span>
+                {notCreated && (
+                  <span className="nw-small nw-chain-minimum">
+                    {zeroReserve
+                      ? 'No minimum: this network opens accounts at a zero balance.'
+                      : minimum
+                        ? `Needs at least ${fmtGroup(minimum)} NSAT in its first deposit (2× live base reserve).`
+                        : 'Minimum first deposit unavailable — waiting for the live base reserve.'}
+                  </span>
+                )}
+                {notCreated && zeroReserve && wallet.name === activeName && onSelfOpen ? (
+                  <button type="button" className="nw-chip-btn" disabled={selfOpenBusy}
+                    title="Create this address on chain: one zero-balance CREATE_ACCOUNT, no fee and no reserve."
+                    onClick={onSelfOpen}>
+                    {selfOpenBusy ? 'Opening…' : 'Open this account — free'}
+                  </button>
+                ) : null}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      {missing.length > 0 && (
+        <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
+          An address without an on-chain account cannot send. Its account is created by a
+          first deposit of at least 2× the live base reserve, or by sponsored activation
+          once the network enables it.
+        </p>
+      )}
+    </section>
+  );
+}
+
 /* --------------------------------- Overview ------------------------------ */
-function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSend, onReceive, onActivity, onManage }) {
+function OverviewPage({ active, wallets, balance, funded, walletChainStates, baseReserve, chainVersion, onSelfOpen, bus, net, profileId, notify, onSend, onReceive, onActivity, onManage }) {
   // First run is one decision, not two competing forms: a phone wallet offers
   // Create or Import as a segmented control, then shows the chosen form.
   const [mode, setMode] = useState('create');
@@ -860,6 +2195,9 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
   if (!active) {
     return (
       <div>
+        {wallets.length > 0 && (
+          <WalletChainStatus wallets={wallets} states={walletChainStates} baseReserve={baseReserve} />
+        )}
         {wallets.length > 0 && (
           <section className="nw-card" hidden={!hideSetup}>
             <h2 style={{ color: 'var(--text)' }}>Add another wallet</h2>
@@ -881,12 +2219,23 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
             onClick={() => setMode('import')}>Import</button>
         </div>
 
+        {/* The website account belongs on the wallet screen itself: signing in
+         * identifies the session, and someone who never opens Settings would
+         * otherwise never see it. It touches no key, no balance and no seed. */}
+        {SHOW_GOOGLE_ACCOUNT ? (
+          <div className="nw-signin-entry"><GoogleAccount variant="row" /></div>
+        ) : null}
+
         {/* Both forms stay in the markup — the segmented control only chooses
          * which one is shown, so a static export still carries both actions
          * and Import is one tap away instead of a page away. */}
         <section className="nw-card" hidden={mode !== 'create'}>
           <h2 style={{ color: 'var(--text)' }}>Create a New Wallet</h2>
-          <p className="nw-small nw-dim">Generated and encrypted in this browser. Use a unique passphrase of at least {MIN_PASSWORD_LENGTH} characters.</p>
+          <p className="nw-small nw-dim">
+            {bus.accountEmail
+              ? `Signed in as ${bus.accountEmail}. The wallet name is already filled in — set a password and it is ready. Keys are generated and encrypted in this browser.`
+              : `Generated and encrypted in this browser. Use a unique passphrase of at least ${MIN_PASSWORD_LENGTH} characters.`}
+          </p>
           <form onSubmit={bus.doCreate} className="nw-txf" style={{ marginTop: 10 }}>
             <label className="nw-label" htmlFor="nw-new-name">Wallet name</label>
             <input id="nw-new-name" value={bus.newName}
@@ -953,8 +2302,26 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
             }}>
             {shortAddr(active.pubkey, 8)}
           </button>
+          {profileId ? (
+            <button type="button" className="nw-chip-btn nw-mono"
+              title="Copy your profile ID — a handle, not a payment address"
+              onClick={async () => {
+                await navigator.clipboard.writeText(profileId);
+                notify('📋 Copied: profile ID');
+              }}>
+              {profileId}
+            </button>
+          ) : null}
         </div>
       </section>
+
+      {wallets.length > 0 && (
+        <WalletChainStatus wallets={wallets} states={walletChainStates} baseReserve={baseReserve} activeName={active.name} />
+      )}
+
+      {/* Money on this device with a stale Drive copy is the one failure the
+       * wallet cannot undo, so it is raised here and recedes on its own. */}
+      <BackupReminder balance={balance} email={bus.accountEmail} notify={notify} />
 
       {/* Send · Receive · Backup — the round actions the phone build puts under
        * the balance. There is no Buy button: nothing behind it can sell NSAT. */}
@@ -973,11 +2340,17 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
         </button>
       </div>
 
+      {/* Same entry as on first run, above the asset list so it stays visible
+       * without hunting through Settings. */}
+      {SHOW_GOOGLE_ACCOUNT ? (
+        <div className="nw-signin-entry"><GoogleAccount variant="row" /></div>
+      ) : null}
+
       {/* One asset, listed the way a wallet lists tokens: name and exact
        * balance, with the live chain state directly under it. */}
       <div className="nw-assets">
         <button type="button" className="nw-asset" onClick={onActivity}>
-          <span className="nw-asset-logo" aria-hidden>◈</span>
+          <span className="nw-asset-logo"><NsatCoinMark className="nw-coin-mark" /></span>
           <span className="nw-asset-main">
             <span className="nw-asset-name">NSAT</span>
             <span className="nw-asset-sub">SatoshiCore mainnet</span>
@@ -1002,7 +2375,7 @@ function OverviewPage({ active, wallets, balance, funded, bus, net, notify, onSe
 }
 
 /* ---------------------------------- Send --------------------------------- */
-function SendPage({ state, gate, busy, active, balance, onReview }) {
+function SendPage({ state, gate, busy, active, balance, funded, linkedRecipients = [], recipientBalances = {}, onChooseRecipient, onReview }) {
   // ONE preflight decides the disabled state and shows WHY (shared with the
   // Desktop wallet / prototype — NSAT-WALLET-BUTTON-STATES.md).
   const pf = sendPreflight({
@@ -1017,10 +2390,10 @@ function SendPage({ state, gate, busy, active, balance, onReview }) {
   });
   const canReview = pf.ok;
   const block = pf.block;
-  const funded = balance != null;
-  const mx = funded ? maxSendable(balance, gate.fee ?? '0') : 0n;
+  const hasBalance = balance != null;
+  const mx = hasBalance ? maxSendable(balance, gate.fee ?? '0') : 0n;
   const doMax = () => {
-    if (!funded) return;
+    if (!hasBalance) return;
     // Max = exact balance − fee, BigInt only; empty form if nothing sendable
     const v = mx.toString();
     state.setAmount(v === '0' ? '' : v);
@@ -1034,6 +2407,33 @@ function SendPage({ state, gate, busy, active, balance, onReview }) {
             onChange={(e) => state.setDest(e.target.value)}
             placeholder="G… (56-char account address)" />
         </div>
+        {linkedRecipients.length > 0 && (
+          <div>
+            <div className="nw-label">Other wallets linked to this account</div>
+            <ul className="nw-acc-list nw-send-recipient-list">
+              {linkedRecipients.map(({ address, name }) => (
+                <li key={address}>
+                  <button type="button"
+                    className={'nw-acc-row nw-send-recipient' + (state.dest.trim() === address ? ' is-selected' : '')}
+                    aria-pressed={state.dest.trim() === address}
+                    onClick={() => onChooseRecipient?.(address)}>
+                    <span className="nw-acc-main">
+                      <span className="nw-acc-name">{name}</span>
+                      <span className="nw-acc-meta">
+                        <span className="nw-mono">{shortAddr(address, 6)}</span>
+                        <span className="nw-acc-bal">{accountBalanceLine(recipientBalances[address])}</span>
+                      </span>
+                    </span>
+                    <span className="nw-chip-btn">Use</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <p className="nw-small nw-dim" style={{ margin: '6px 0 0' }}>
+              Selecting a wallet fills its public address. Review the recipient before sending.
+            </p>
+          </div>
+        )}
         <div className="nw-row">
           <label htmlFor="nw-amt">Amount NSAT</label>
           <input id="nw-amt" inputMode="numeric" value={state.amount}
@@ -1043,12 +2443,12 @@ function SendPage({ state, gate, busy, active, balance, onReview }) {
         <div className="nw-row nw-small">
           <label htmlFor="nw-max">Max</label>
           <button id="nw-max" type="button" className="nw-chip-btn"
-            disabled={!funded || mx <= 0n}
-            title={funded ? 'Set amount to exact balance − fee (BigInt math)' : 'Funding a brand-new account needs ≥ 2× base reserve.'}
+            disabled={!hasBalance || mx <= 0n}
+            title={hasBalance ? 'Set amount to exact balance − fee (BigInt math)' : 'Funding a brand-new account needs ≥ 2× base reserve.'}
             onClick={doMax}>
             Max (balance − fee)
           </button>
-          {funded && mx > 0n && (
+          {hasBalance && mx > 0n && (
             <span className="nw-small nw-dim">{fmtGroup(mx.toString())} NSAT sendable</span>
           )}
         </div>
@@ -1069,6 +2469,12 @@ function SendPage({ state, gate, busy, active, balance, onReview }) {
         )}
         <div className="nw-row nw-small nw-dim"><label>Fee</label>
           <span>{gate.fee ?? '…'} NSAT per operation (live from the verified ledger; exact total shown at Review)</span></div>
+        {funded === false && (
+          <div role="status" className="nw-small nw-send-warning">
+            This wallet has no on-chain account yet. Its first incoming deposit creates the
+            account (≥ 2× base reserve) — until that arrives, sending cannot succeed.
+          </div>
+        )}
         <div className="nw-row">
           <button className="nw-send-btn" disabled={!canReview}
             onClick={onReview} aria-describedby={block ? 'nw-send-block-reason' : undefined}>
@@ -1146,58 +2552,390 @@ function ShieldedGatePage() {
 }
 
 /* -------------------------------- Activity ------------------------------- */
-function ActivityPage({ history, activeName, onRecheck, canRecheck }) {
+/* Mint status card. It is the first thing Activity shows: the mint is
+ * close-level accounting carried in the ledger header, so it can never be a row
+ * in the transfer list, it needs no unlocked wallet to read, and it must not sit
+ * below the unlock form the page body renders. Every figure comes from that
+ * header — never from a rate applied to the current height. */
+function MintStatusCard({ mint }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const chainTime = (seconds) => {
+    const n = Number(seconds);
+    return Number.isFinite(n) && n > 0 ? new Date(n * 1000).toLocaleString() : '';
+  };
+  const mintData = mint?.data;
+  const eras = Array.isArray(mint?.timeline) ? mint.timeline : [];
+  const { supply, minted } = supplyAndMinted(mintData?.total_coins);
   return (
-    <section className="nw-card">
-      <h2 style={{ color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        {activeName ? `History — ${activeName}` : 'History'}
-        <span className="nw-badge info">locally verified · not a chain indexer</span>
-      </h2>
-      {history.length === 0 ? (
-        <EmptyState text="No signed transfers yet." />
-      ) : (
-        <ul className="nw-tx-list" style={{ marginTop: 10 }}>
-          {history.map((h, i) => (
-            <li key={i} className="nw-tx-row">
-              <div className={'nw-tx-dir ' + (h.dir === 'sent' ? 'sent' : 'rec')}>
-                {h.dir === 'sent' ? '↗' : '↙'}</div>
-              <div style={{ flex: 1 }}>
-                <div>
-                  {h.dir === 'sent' ? 'To' : 'Received'}{' '}
-                  <span className="nw-mono">{shortAddr(h.to)}</span>{' '}
-                  <span className={'nw-badge ' + (h.status === 'confirmed' ? 'ok' : h.status === 'failed' ? 'err' : 'warn')}>
-                    {h.status}</span>
-                </div>
-                <div className="nw-small nw-dim">{h.time} · fee {h.fee}</div>
-                {h.result_code && (
-                  <div className="nw-small nw-dim">result {h.result_code}{h.evidence ? ` · ${h.evidence}` : ''}</div>
-                )}
-                {h.reason && <div className="nw-small nw-dim">reason {h.reason}</div>}
+    <section className="nw-card nw-mint-head" aria-labelledby="nw-mint-title">
+        <div className="nw-mint-compact-top">
+          <h2 id="nw-mint-title">Mint status</h2>
+          <span className={`nw-badge ${mint?.error ? 'warn' : mintData ? 'ok' : 'info'}`}>
+            {mint?.error ? 'stale' : mintData ? 'live' : 'loading'}
+          </span>
+        </div>
+        {mint?.phase === 'loading' || mint?.phase === 'idle' ? (
+          <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
+            Reading the mint state from the ledger header…
+          </p>
+        ) : !mintData ? (
+          <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
+            {`No indexed ledger header carries the Founder Mint extension yet${mint?.error ? ` (${mint.error})` : ''}. No minted total is shown rather than an estimate.`}
+          </p>
+        ) : (
+          <>
+            <div className="nw-mint-head-value">{minted == null ? '—' : `${fmtGroup(minted)} NSAT`}</div>
+            <div className="nw-mint-live-meta">
+              {`Minted since activation · ledger ${fmtGroup(String(mintData.ledger))}`}
+              {` · heartbeat ${fmtGroup(String(mintData.heartbeat ?? 0))}`}
+              {mint?.fetchedAt
+                ? ` · updated ${Math.max(0, Math.floor((now - mint.fetchedAt) / 1000))}s ago`
+                : ''}
+            </div>
+            <details className="nw-mint-details">
+              <summary>More mint status</summary>
+            <div className="nw-kv" style={{ marginTop: 6 }}>
+              <span className="nw-k">Total supply on chain</span>
+              <span className="nw-v">{supply == null ? '—' : `${fmtGroup(supply)} NSAT`}</span>
+            </div>
+            <div className="nw-kv">
+              <span className="nw-k">Heartbeats counted</span>
+              <span className="nw-v">{fmtGroup(String(mintData.heartbeat ?? 0))}</span>
+            </div>
+            <div className="nw-kv">
+              <span className="nw-k">Pending escrow</span>
+              <span className="nw-v">{String(mintData.escrow ?? '0') === '0'
+                ? 'none — fully delivered'
+                : `${fmtGroup(String(mintData.escrow))} NSAT`}</span>
+            </div>
+            <div className="nw-kv">
+              <span className="nw-k">As of ledger</span>
+              <span className="nw-v">{`${fmtGroup(String(mintData.ledger))}${chainTime(mintData.close_time) ? ` · ${chainTime(mintData.close_time)}` : ''}`}</span>
+            </div>
+            {mintData.activation_ledger != null && (
+              <div className="nw-kv">
+                <span className="nw-k">Activation ledger</span>
+                <span className="nw-v">{fmtGroup(String(mintData.activation_ledger))}</span>
               </div>
-              <div style={{ textAlign: 'right' }}>
-                {fmtGroup(h.amount)} NSAT
-                {h.ledger && <div className="nw-small nw-dim">ledger {h.ledger}</div>}
-                {canRecheck && h.status !== 'confirmed' && h.status !== 'failed' && (
-                  <button type="button" className="nw-chip-btn" style={{ marginTop: 4 }}
-                    onClick={() => onRecheck(h)}>Check ledger</button>
+            )}
+            {eras.length > 0 && (
+              <details className="nw-mint-eras">
+                <summary>
+                  <span>{`Issuance eras · ${eras.length}`}</span>
+                  <span className="nw-dim">
+                    {`${fmtGroup(String(eras.reduce((sum, era) => sum + Number(era.ledgers || 0), 0)))} ledgers`}
+                  </span>
+                </summary>
+                <p className="nw-small nw-dim" style={{ margin: '6px 0 0' }}>
+                  Each era is a run of finalized ledgers whose header supply (totalCoins) grew by the
+                  same exact amount at every close, read from the headers themselves.
+                </p>
+                <ul className="nw-tx-list" style={{ marginTop: 8 }}>
+                  {eras.map((era) => (
+                    <li key={`${era.from_ledger}-${era.to_ledger}`} className="nw-tx-row"
+                      style={{ alignItems: 'flex-start' }}>
+                      <div style={{ flex: 1 }}>
+                        <div>
+                          {`Ledger ${fmtGroup(String(era.from_ledger))}–${fmtGroup(String(era.to_ledger))}`}{' '}
+                          <span className="nw-badge info">{`${fmtGroup(String(era.ledgers))} ledgers`}</span>
+                        </div>
+                        <div className="nw-small nw-dim">
+                          {`heartbeats ${fmtGroup(String(era.heartbeat_from))}–${fmtGroup(String(era.heartbeat_to))}`}
+                          {chainTime(era.opened_at) ? ` · ${chainTime(era.opened_at)}` : ''}
+                        </div>
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        {era.per_ledger == null
+                          ? <span className="nw-badge warn">rate unknown</span>
+                          : `${fmtGroup(String(era.per_ledger))} / ledger`}
+                        <div className="nw-small nw-dim">
+                          {`${fmtGroup(String(era.minted))} NSAT${era.complete ? '' : ' · partial'}`}
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+                {mint?.unattributed != null && mint.unattributed !== '0' && (
+                  <p className="nw-small" style={{ margin: '8px 0 0', color: 'var(--warn)' }}>
+                    {`${fmtGroup(String(mint.unattributed))} NSAT of header supply growth is not attributable to an era: this index is missing ledgers inside that range.`}
+                  </p>
                 )}
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
+              </details>
+            )}
+            {mint?.error ? (
+              <p className="nw-small" style={{ margin: '8px 0 0', color: 'var(--warn)' }}>
+                {`The last refresh did not answer (${mint.error}). The figures above are the last header read, not a frozen estimate.`}
+              </p>
+            ) : null}
+            <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
+              {`Read from the ledger header: totalCoins minus the fixed genesis supply of ${fmtGroup(GENESIS_SUPPLY.toString())} NSAT. `}
+              One heartbeat is one finalized ledger; the mint is written during the close, so it is
+              not a transaction and never appears in a transfer list. Re-read every 5 seconds while
+              this page is open, and again when you return to the tab.
+            </p>
+            </details>
+          </>
+        )}
+      </section>
+
+  );
+}
+
+function TransferNotices({ notices }) {
+  if (!notices || notices.length === 0) return null;
+  return (
+    <section className="nw-card nw-notices" aria-labelledby="nw-notices-title">
+      <div className="nw-notices-head">
+        <h2 id="nw-notices-title">Transfer notices</h2>
+        <span className="nw-badge info">{notices.length}</span>
+      </div>
+      <p className="nw-small nw-dim" style={{ margin: '6px 0 0' }}>
+        Confirmed by the ledger for this wallet. Each notice is built on this device from the
+        indexer&rsquo;s committed row — nothing is sent to the other party or to any server.
+      </p>
+      <ul className="nw-notice-list">
+        {notices.map((notice) => (
+          <li key={notice.id} className={'nw-notice' + (notice.failed ? ' is-failed' : '')}>
+            <span className="nw-notice-dir" aria-hidden>
+              {notice.direction === 'in' ? '↙' : notice.direction === 'out' ? '↗' : '⇄'}
+            </span>
+            <div style={{ flex: 1 }}>
+              <div className="nw-notice-title">{notice.title}</div>
+              {notice.detail ? <div className="nw-small nw-dim">{notice.detail}</div> : null}
+            </div>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }
 
+function ActivityPage({ history, activeName, chain, notices, chatEnabled, onOpenChat, onLoadOlder, onRecheck, canRecheck }) {
+  // Anything the index already knows is shown from the index; the local list
+  // keeps only what the chain has not reported yet (a transfer sent moments
+  // ago, or one the node rejected before inclusion).
+  const chainItems = chain?.items || [];
+  const onChainHashes = new Set(chainItems.map((item) => String(item.hash || '').toLowerCase()));
+  const localOnly = (history || []).filter(
+    (entry) => !onChainHashes.has(String(entry.txhash || '').toLowerCase()),
+  );
+  const chainTime = (seconds) => {
+    const n = Number(seconds);
+    return Number.isFinite(n) && n > 0 ? new Date(n * 1000).toLocaleString() : '';
+  };
+  const coverage = chain?.coverage;
+  const total = chain?.total;
+  const shown = chainItems.length;
+  const sent = chainItems.filter((item) => item.direction === 'out').length;
+  const received = chainItems.filter((item) => item.direction !== 'out').length;
+  return (
+    <div>
+      <TransferNotices notices={notices} />
+      <section className="nw-card">
+        <h2 style={{ color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {activeName ? `On-chain activity — ${activeName}` : 'On-chain activity'}
+          <span className="nw-badge info">from the chain index · read-only</span>
+        </h2>
+        {chatEnabled && onOpenChat ? (
+          <button type="button" className="nw-chip-btn" style={{ marginTop: 10 }}
+            onClick={onOpenChat}>
+            ✉ Messages <span className="nw-badge ok">end-to-end encrypted</span>
+          </button>
+        ) : null}
+        {chain?.phase === 'none' ? (
+          <EmptyState text="No wallet selected." />
+        ) : chain?.phase === 'loading' || chain?.phase === 'idle' ? (
+          <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>Reading the chain index…</p>
+        ) : chain?.phase === 'unavailable' ? (
+          <p className="nw-small" style={{ margin: '10px 0 0', color: 'var(--warn)' }}>
+            {`Chain history is unavailable right now${chain.error ? ` (${chain.error})` : ''}. Transfers signed on this device still appear below.`}
+          </p>
+        ) : chainItems.length === 0 ? (
+          <>
+            <EmptyState text="No indexed transfers for this address." />
+            {coverage?.from_ledger != null && (
+              <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
+                {`The index covers ledgers ${fmtGroup(String(coverage.from_ledger))}–${fmtGroup(String(coverage.to_ledger))}, and no transfer in that range involves this address.`}
+              </p>
+            )}
+          </>
+        ) : (
+          <>
+          <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
+            {`Showing ${fmtGroup(String(shown))}${total != null && total > shown ? ` of ${fmtGroup(String(total))}` : ''} indexed transfers · ${fmtGroup(String(sent))} sent · ${fmtGroup(String(received))} received`}
+          </p>
+          <ul className="nw-tx-list" style={{ marginTop: 10 }}>
+            {chainItems.map((item) => (
+              <li key={historyKey(item)} className="nw-tx-row">
+                {explorerHrefFor(item.hash) ? (
+                  <a className="nw-tx-open" href={explorerHrefFor(item.hash)}
+                    target="_blank" rel="noreferrer"
+                    aria-label={`Open transaction ${item.hash} in the chain explorer (new tab)`} />
+                ) : null}
+                <div className={'nw-tx-dir ' + (item.direction === 'out' ? 'sent' : 'rec')}>
+                  {item.direction === 'out' ? '↗' : '↙'}</div>
+                <div style={{ flex: 1 }}>
+                  <div>
+                    {item.direction === 'out' ? 'To' : 'From'}{' '}
+                    {explorerAccountHref(item.counterparty) ? (
+                      <a className="nw-mono nw-addr-link" href={explorerAccountHref(item.counterparty)}
+                        target="_blank" rel="noreferrer"
+                        title={`Open ${item.counterparty} in the chain explorer`}>
+                        {shortAddr(item.counterparty)}
+                      </a>
+                    ) : (
+                      <span className="nw-mono">{shortAddr(item.counterparty)}</span>
+                    )}{' '}
+                    <span className={'nw-badge ' + (item.success ? 'ok' : 'err')}>
+                      {item.success ? 'confirmed' : (item.result_code || 'failed')}</span>
+                  </div>
+                  <div className="nw-small nw-dim">
+                    {`${item.kind || 'payment'} · fee ${item.fee ?? '—'}${chainTime(item.close_time) ? ` · ${chainTime(item.close_time)}` : ''}`}
+                  </div>
+                  {String(item.hash || '') && (
+                    <div className="nw-small nw-dim nw-mono">
+                      {`${String(item.hash).slice(0, 10)}…${String(item.hash).slice(-8)}`}
+                      {explorerHrefFor(item.hash) ? <span className="nw-tx-go">explorer ↗</span> : null}
+                    </div>
+                  )}
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  {`${item.direction === 'out' ? '−' : '+'}${fmtGroup(String(item.amount_stroops ?? item.amount ?? '0'))} NSAT`}
+                  <div className="nw-small nw-dim">
+                    {item.success ? `ledger ${item.ledger}` : `ledger ${item.ledger} · not moved`}
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+          {chain.error && (
+            <p className="nw-small" style={{ margin: '8px 0 0', color: 'var(--warn)' }}>{chain.error}</p>
+          )}
+          <div className="nw-btn-row" style={{ margin: '10px 0 0' }}>
+            {chain.next ? (
+              <button type="button" className="nw-chip-btn" onClick={onLoadOlder}
+                disabled={Boolean(chain.loadingMore)}>
+                {chain.loadingMore ? 'Loading older transfers…' : 'Load older transfers'}
+              </button>
+            ) : (
+              <span className="nw-badge ok">end of indexed history</span>
+            )}
+          </div>
+          {coverage?.from_ledger != null && (
+            <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
+              {`Index coverage: ledgers ${fmtGroup(String(coverage.from_ledger))}–${fmtGroup(String(coverage.to_ledger))} (${fmtGroup(String(coverage.ledgers))} ledgers). Transfers outside that range are not in this index.`}
+            </p>
+          )}
+          </>
+        )}
+      </section>
+
+      <section className="nw-card">
+        <h2 style={{ color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          Signed on this device
+          <span className="nw-badge info">local record</span>
+        </h2>
+        {localOnly.length === 0 ? (
+          <EmptyState text={chainItems.length > 0
+            ? 'Nothing pending — every transfer signed here also appears in the chain index.'
+            : 'No signed transfers yet.'} />
+        ) : (
+          <ul className="nw-tx-list" style={{ marginTop: 10 }}>
+            {localOnly.map((h, i) => (
+              <li key={`${h.txhash || 'row'}-${i}`} className="nw-tx-row">
+                {explorerHrefFor(h.txhash) ? (
+                  <a className="nw-tx-open" href={explorerHrefFor(h.txhash)}
+                    target="_blank" rel="noreferrer"
+                    aria-label={`Open transaction ${h.txhash} in the chain explorer (new tab)`} />
+                ) : null}
+                <div className={'nw-tx-dir ' + (h.dir === 'sent' ? 'sent' : 'rec')}>
+                  {h.dir === 'sent' ? '↗' : '↙'}</div>
+                <div style={{ flex: 1 }}>
+                  <div>
+                    {h.dir === 'sent' ? 'To' : 'Received'}{' '}
+                    {explorerAccountHref(h.to) ? (
+                      <a className="nw-mono nw-addr-link" href={explorerAccountHref(h.to)}
+                        target="_blank" rel="noreferrer"
+                        title={`Open ${h.to} in the chain explorer`}>
+                        {shortAddr(h.to)}
+                      </a>
+                    ) : (
+                      <span className="nw-mono">{shortAddr(h.to)}</span>
+                    )}{' '}
+                    <span className={'nw-badge ' + (h.status === 'confirmed' ? 'ok' : h.status === 'failed' ? 'err' : 'warn')}>
+                      {h.status}</span>
+                  </div>
+                  <div className="nw-small nw-dim">{h.time} · fee {h.fee}</div>
+                  {h.result_code && (
+                    <div className="nw-small nw-dim">result {h.result_code}{h.evidence ? ` · ${h.evidence}` : ''}</div>
+                  )}
+                  {h.reason && <div className="nw-small nw-dim">reason {h.reason}</div>}
+                  {explorerHrefFor(h.txhash) ? (
+                    <div className="nw-small nw-dim nw-mono">
+                      {`${String(h.txhash).slice(0, 10)}…${String(h.txhash).slice(-8)}`}
+                      <span className="nw-tx-go">explorer ↗</span>
+                    </div>
+                  ) : null}
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  {fmtGroup(h.amount)} NSAT
+                  {h.ledger && <div className="nw-small nw-dim">ledger {h.ledger}</div>}
+                  {canRecheck && h.status !== 'confirmed' && h.status !== 'failed' && (
+                    <button type="button" className="nw-chip-btn" style={{ marginTop: 4 }}
+                      onClick={() => onRecheck(h)}>Check ledger</button>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+    </div>
+  );
+}
+
 /* ------------------------------- Settings -------------------------------- */
-function SettingsPage({ s, onShielded }) {
+function SettingsPage({ s, onShielded, onOpenContacts }) {
   return (
     <div>
       {SHOW_GOOGLE_ACCOUNT ? <GoogleAccount /> : null}
+      {SHOW_GOOGLE_ACCOUNT ? <ProfileCard /> : null}
+      {/* Contacts are account state, so the entry point sits next to the account
+       * and the profile rather than in the tab bar: the bar stays a wallet. */}
+      {SHOW_GOOGLE_ACCOUNT ? (
+        <section className="nw-card">
+          <h2 style={{ color: 'var(--text)' }}>Contacts</h2>
+          <p className="nw-small nw-dim" style={{ margin: '8px 0 12px' }}>
+            Who may start a conversation with you, who is waiting for an answer, and who
+            is blocked. Find people by @profile ID, wallet address or a consented email.
+          </p>
+          <button type="button" className="nw-chip-btn" onClick={onOpenContacts}>
+            Manage contacts
+          </button>
+        </section>
+      ) : null}
+      {SHOW_GOOGLE_ACCOUNT ? <DriveBackupCard onKeystoreChanged={s.onReloadWallets} /> : null}
       <section className="nw-card">
         <h2 style={{ color: 'var(--text)' }}>Privacy</h2>
         <div className="nw-kv" style={{ marginTop: 10 }}>
+          <span className="nw-k">Device unlock</span>
+          <span className="nw-v">
+            {s.active ? (
+              <button className="nw-chip-btn" onClick={s.onToggleBiometric} disabled={s.busy}>
+                {s.biometricWallets.includes(s.active.name) ? 'Turn off on this browser' : 'Set up Face ID / device unlock'}
+              </button>
+            ) : <span className="nw-badge info">{s.biometricWallets.length ? 'available on this browser' : 'not set up'}</span>}
+          </span>
+        </div>
+        <p className="nw-small nw-dim" style={{ margin: '6px 0 10px' }}>
+          Uses your device&apos;s secure check (Face ID, fingerprint, Windows Hello, or device PIN, depending on the device). This site never sees face or fingerprint data. Your password remains the backup; this setup works only in this browser.
+        </p>
+        <div className="nw-kv">
           <span className="nw-k">Signing power</span>
           <span className="nw-v">
             {s.active
@@ -1254,8 +2992,21 @@ function SettingsPage({ s, onShielded }) {
           Why shielded is desktop-only
         </button>
       </section>
-      {/* On a phone the wallet is the whole screen (no site header), so the
-       * rest of SatoshiCore is reachable from here instead of from a nav bar. */}
+      <section className="nw-card">
+        <h2 style={{ color: 'var(--text)' }}>Appearance</h2>
+        <div className="nw-kv" style={{ marginTop: 10, alignItems: 'center' }}>
+          <span className="nw-k">Theme</span>
+          <span className="nw-v" style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <ThemeToggle />
+          </span>
+        </div>
+        <p className="nw-small nw-dim" style={{ margin: '8px 0 0' }}>
+          Follows this browser. If you opted in, the choice is also stored with your Google
+          account.
+        </p>
+      </section>
+      {/* The wallet is the whole site now — no site header above it — so the
+       * rest of SatoshiCore is reached from here instead of from a nav bar. */}
       <section className="nw-card">
         <h2 style={{ color: 'var(--text)' }}>SatoshiCore</h2>
         <div className="nw-linklist">
@@ -1264,6 +3015,9 @@ function SettingsPage({ s, onShielded }) {
           <a className="nw-linkrow" href="/docs/">Docs<span aria-hidden>›</span></a>
           <a className="nw-linkrow" href="/status/">Network status<span aria-hidden>›</span></a>
         </div>
+        <p className="nw-small nw-dim" style={{ margin: '10px 0 0' }}>
+          Non-custodial · {NSAT.baseFee} NSAT per operation · not a sale or investment offer.
+        </p>
       </section>
       <section className="nw-card">
         <h2 style={{ color: 'var(--text)' }}>Security model</h2>
@@ -1293,6 +3047,19 @@ function NetworkBadge({ net }) {
   return <span className="nw-badge err">● Offline / identity mismatch</span>;
 }
 
+/* The NSAT coin: the gold ring and N from the app icon (public/icons),
+ * redrawn as inline SVG so it stays sharp at any size and needs no raster
+ * fetch inside the wallet shell. */
+function NsatCoinMark({ className = '' }) {
+  return (
+    <svg className={className} viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+      <circle cx="32" cy="32" r="27" fill="#050a14" stroke="#f0b90b" strokeWidth="4" />
+      <path d="M21 44V20l22 24V20" fill="none" stroke="#f0b90b"
+        strokeWidth="5.5" strokeLinecap="square" strokeLinejoin="miter" />
+    </svg>
+  );
+}
+
 function EmptyState({ text }) {
   const [first, ...rest] = String(text).split('\n');
   return (
@@ -1306,7 +3073,35 @@ function EmptyState({ text }) {
   );
 }
 
+// One line per wallet in the switcher. "not on chain yet" is a real state (a
+// fresh address is invisible until its first deposit), not a failure.
+function accountBalanceLine(entry) {
+  if (!entry || entry.kind === 'loading') return '…';
+  if (entry.kind === 'missing') return 'not on chain yet';
+  if (entry.kind === 'unavailable') return 'balance unavailable';
+  return `${formatExactBalance(entry.value)} NSAT`;
+}
+
 function shortAddr(addr, keep = 8) {
   if (!addr) return '—';
   return addr.length <= keep * 2 + 3 ? addr : `${addr.slice(0, keep)}…${addr.slice(-4)}`;
+}
+
+// The explorer accepts an account ID or a transaction hash as `?q=`. Only a
+// well-formed hash is offered as a link: a local row that never got one (or a
+// malformed index row) would otherwise open the explorer on an error.
+const EXPLORER_HASH_RE = /^[0-9a-f]{64}$/i;
+const ACCOUNT_ID_RE = /^G[A-Z2-7]{55}$/;
+
+function explorerHrefFor(hash) {
+  const value = String(hash || '').trim();
+  return EXPLORER_HASH_RE.test(value) ? `/explorer/?q=${value.toLowerCase()}` : '';
+}
+
+// The same lookup takes an account ID, so the other party in a transfer is one
+// click away too. Mixed case is normalised rather than rejected: the node and
+// the indexer both answer for the upper-case form.
+function explorerAccountHref(address) {
+  const value = String(address || '').trim().toUpperCase();
+  return ACCOUNT_ID_RE.test(value) ? `/explorer/?q=${value}` : '';
 }

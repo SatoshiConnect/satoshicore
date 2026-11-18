@@ -15,6 +15,7 @@
 'use strict';
 
 const http = require('node:http');
+const net = require('node:net');
 const { URL } = require('node:url');
 
 const CONFIG = {
@@ -36,6 +37,16 @@ const CONFIG = {
     windowMs: Number(process.env.RATE_WINDOW_MS) || 60_000,
     maxRequests: Number(process.env.RATE_MAX_REQUESTS) || 120
   },
+  // Chat has its own budget: the wallet polls chain info continuously, and that
+  // read traffic must never consume the allowance a message send needs.
+  chatRateLimit: {
+    windowMs: Number(process.env.RATE_WINDOW_MS) || 60_000,
+    maxRequests: Number(process.env.CHAT_RATE_MAX_REQUESTS) || 120
+  },
+  // The gateway runs loopback behind Caddy/cloudflared, so every socket peer is
+  // 127.0.0.1. Trust the proxy's client-IP headers only for a loopback peer;
+  // a direct remote connection is always keyed by its own address.
+  trustProxyHeaders: process.env.TRUST_PROXY !== '0',
   // Timeout for upstream core calls (ms).
   coreTimeoutMs: Number(process.env.CORE_TIMEOUT_MS) || 10_000,
   // Bounded busy-retry for upstream responses carrying {"status":"busy"}
@@ -51,8 +62,15 @@ const CONFIG = {
   // (services/sponsor/sponsor-open.js).
   sponsorship: {
     enabled: process.env.NSAT_SPONSORSHIP_ENABLED === '1',
-    requiredProtocol: 30,
-    reserveUnits: 2
+    // The ledger version whose core accepts the sponsorship operations.
+    requiredProtocol: 14,
+    // The ledger version whose accounts carry no reserve at all (V_15): from
+    // here sponsorship is still permitted but nothing has to be locked.
+    zeroReserveProtocol: 15,
+    // The ledger version that accepts a fee-free self-open: one CREATE_ACCOUNT
+    // at a zero balance, sourced by the key being created, fee 0.
+    selfOpenProtocol: 16,
+    reserveUnits: 3
   },
 
   // Read-only confirmation indexer. The upstream is fixed by configuration so a
@@ -76,23 +94,48 @@ function log(level, event, fields = {}) {
   );
 }
 
-// --- rate limiting (fixed window per IP) ------------------------------------
+// --- rate limiting (fixed window per IP and request class) ------------------
 const rateBuckets = new Map();
-function rateLimited(ip) {
-  const { windowMs, maxRequests } = CONFIG.rateLimit;
+function rateLimited(bucketKey, limit = CONFIG.rateLimit) {
+  const { windowMs, maxRequests } = limit;
   const now = Date.now();
-  const bucket = rateBuckets.get(ip) || { count: 0, resetAt: now + windowMs };
+  const bucket = rateBuckets.get(bucketKey) || { count: 0, resetAt: now + windowMs };
   if (now > bucket.resetAt) {
     bucket.count = 0;
     bucket.resetAt = now + windowMs;
   }
   bucket.count += 1;
-  rateBuckets.set(ip, bucket);
+  rateBuckets.set(bucketKey, bucket);
   if (rateBuckets.size > 10_000) {
     // bounded memory: drop expired buckets
     for (const [k, b] of rateBuckets) if (now > b.resetAt) rateBuckets.delete(k);
   }
   return bucket.count > maxRequests;
+}
+
+function isLoopback(address) {
+  const value = String(address || '');
+  return value === '::1' || value === '127.0.0.1' || value.startsWith('::ffff:127.');
+}
+
+/**
+ * The address a rate limit is keyed on. Keying on the socket would put every
+ * visitor behind Caddy in one bucket (and let wallet polling starve chat), so a
+ * loopback peer may supply the real client address. The rightmost forwarded
+ * entry is the one the nearest proxy actually saw; entries to its left are
+ * client-supplied and must not let a caller choose their own bucket.
+ */
+function clientIp(req) {
+  const remote = req.socket.remoteAddress || 'unknown';
+  if (!CONFIG.trustProxyHeaders || !isLoopback(remote)) return remote;
+  const header = req.headers['x-forwarded-for'];
+  const chain = Array.isArray(header) ? header.join(',') : String(header || '');
+  const entries = chain.split(',');
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const value = entries[i].trim();
+    if (net.isIP(value)) return value;
+  }
+  return remote;
 }
 
 // --- helpers ----------------------------------------------------------------
@@ -129,7 +172,7 @@ function corsHeaders(req) {
       'Access-Control-Allow-Origin': origin,
       Vary: 'Origin',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Allow-Headers': 'Content-Type, X-NSAT-Address, X-NSAT-Ts, X-NSAT-Nonce, X-NSAT-Signature',
       'Access-Control-Max-Age': '600'
     };
   }
@@ -225,6 +268,10 @@ const TX_DETAIL_RE = /^\/v1\/tx\/([^/]+)$/;
 const ACCOUNT_TX_RE = /^\/v1\/accounts\/([^/]+)\/transactions$/;
 const CONFIRMATION_PREFIX = '/v1/confirmations/';
 const MAX_HISTORY_LIMIT = 200;
+// A history page cursor: `ledger:opIndex:txHash`, as issued by the indexer.
+// Validated here so a malformed value is a 400 instead of reaching the index
+// and coming back as a confusing empty page.
+const HISTORY_CURSOR_RE = /^\d{1,12}:\d{1,6}:[0-9a-f]{64}$/;
 
 let activeEventStreams = 0;
 let identityCache = { at: 0, network: null };
@@ -420,6 +467,9 @@ function handleIndexerRoute(req, res, pathname) {
   if (pathname === '/v1/health') {
     return handleIndexerRead(req, res, '/v1/health');
   }
+  if (pathname === '/v1/mint') {
+    return handleIndexerRead(req, res, '/v1/mint');
+  }
   const txDetail = TX_DETAIL_RE.exec(pathname);
   if (txDetail) {
     if (!TX_HASH_RE.test(txDetail[1])) {
@@ -434,10 +484,18 @@ function handleIndexerRoute(req, res, pathname) {
     }
     // Bound the page size here rather than trusting the caller: the indexer's
     // own limit is honoured but never allowed to grow the response without end.
-    const raw = new URL(req.url, 'http://x').searchParams.get('limit');
+    const params = new URL(req.url, 'http://x').searchParams;
+    const raw = params.get('limit');
     const parsed = Number.parseInt(raw ?? '', 10);
     const limit = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, MAX_HISTORY_LIMIT) : 50;
-    return handleIndexerRead(req, res, `/v1/accounts/${accountTx[1]}/transactions?limit=${limit}`);
+    const before = params.get('before');
+    if (before !== null && !HISTORY_CURSOR_RE.test(before)) {
+      return sendJson(res, 400, { error: 'before must be ledger:opIndex:txHash' }, req);
+    }
+    const query = before === null
+      ? `?limit=${limit}`
+      : `?limit=${limit}&before=${before}`;
+    return handleIndexerRead(req, res, `/v1/accounts/${accountTx[1]}/transactions${query}`);
   }
   const match = EVENT_ROUTE_RE.exec(pathname);
   if (!match) return sendJson(res, 404, { error: 'not found' }, req);
@@ -849,8 +907,10 @@ const ROUTES = {
 
   // Sponsorship policy: what the wallet needs to decide whether the flow is
   // offerable on THIS network, and how much reserve a sponsor locks. Read
-  // from the live core /info, never hard-coded, so a node on protocol 29
-  // reports 29 and the wallet keeps the flow closed.
+  // from the live core /info, never hard-coded. The gate must use the version
+  // the LEDGER is on (info.ledger.version), not info.protocol_version: the
+  // latter is the newest version the node software can run, so a node that
+  // supports 29 would otherwise advertise sponsorship on a ledger still at 2.
   'GET /api/v1/sponsorship/policy': async (req, res) => {
     try {
       const up = await coreFetchRead('/info');
@@ -863,19 +923,35 @@ const ROUTES = {
       } catch {
         return sendJson(res, 503, { error: 'core info malformed' }, req);
       }
-      const protocolVersion = Number(info && info.protocol_version);
+      const protocolVersion = Number(info && info.ledger && info.ledger.version);
       const baseReserve = Number(info && info.ledger && info.ledger.baseReserve);
       const hasProtocol = Number.isSafeInteger(protocolVersion) && protocolVersion > 0;
       const hasReserve = Number.isSafeInteger(baseReserve) && baseReserve > 0;
+      // From zeroReserveProtocol the ledger charges nothing for an account
+      // entry, so a new account needs no reserve and no sponsor for one.
+      const zeroReserve = hasProtocol
+        && protocolVersion >= CONFIG.sponsorship.zeroReserveProtocol;
+      // From selfOpenProtocol a new key opens its own account with no fee at
+      // all, so neither a sponsor nor a deposit is involved.
+      const selfOpenAvailable = hasProtocol
+        && protocolVersion >= CONFIG.sponsorship.selfOpenProtocol;
       sendJson(res, 200, {
         enabled: CONFIG.sponsorship.enabled,
         requiredProtocol: CONFIG.sponsorship.requiredProtocol,
+        zeroReserveProtocol: CONFIG.sponsorship.zeroReserveProtocol,
+        selfOpenProtocol: CONFIG.sponsorship.selfOpenProtocol,
+        selfOpenAvailable,
         protocolVersion: hasProtocol ? protocolVersion : null,
         baseReserve: hasReserve ? baseReserve : null,
         // Exact integer as a decimal string: reserves are treasury-scale.
-        reservePerAccount: hasReserve
-          ? String(BigInt(baseReserve) * BigInt(CONFIG.sponsorship.reserveUnits))
-          : null,
+        reservePerAccount: !hasReserve
+          ? null
+          : zeroReserve
+            ? '0'
+            : String(BigInt(baseReserve) * BigInt(CONFIG.sponsorship.reserveUnits)),
+        // Whether opening an account still has to lock a reserve. False from
+        // V_15 on: creates the account, not a funded balance, is free.
+        sponsorshipRequired: !zeroReserve,
         // The flow is only offerable when the deployment opted in AND the
         // ledger itself has reached the protocol that supports it.
         available: Boolean(
@@ -917,11 +993,68 @@ const ROUTES = {
   }
 };
 
+// --- encrypted chat relay (opt-in) -------------------------------------------
+// Off unless NSAT_CHAT_RELAY=1. Enabling it adds endpoints and a SQLite file,
+// which is an operator decision, not something a deploy turns on by accident
+// (docs/E2E-CHAT-DESIGN.md). The relay stores ciphertext only; the request
+// signature (wallet key) is the identity it checks.
+const CHAT_PREFIX = '/api/v1/chat/';
+const CHAT_ENABLED = process.env.NSAT_CHAT_RELAY === '1';
+let chatRelayPromise = null;
+
+function chatRelay() {
+  if (!chatRelayPromise) {
+    const dbPath = process.env.NSAT_CHAT_DB
+      || require('node:path').join(__dirname, 'data', 'chat.sqlite');
+    require('node:fs').mkdirSync(require('node:path').dirname(dbPath), { recursive: true });
+    chatRelayPromise = import('./chat-relay.mjs')
+      .then(({ createChatRelay }) => createChatRelay({ dbPath }))
+      .catch((error) => {
+        chatRelayPromise = null;
+        throw error;
+      });
+  }
+  return chatRelayPromise;
+}
+
+function handleChatRequest(req, res, pathname, searchParams) {
+  let body = Buffer.alloc(0);
+  let aborted = false;
+  req.on('data', (chunk) => {
+    if (aborted) return;
+    body = Buffer.concat([body, chunk]);
+    if (body.length > 16 * 1024) {
+      aborted = true;
+      if (req.pause) req.pause();
+      sendJson(res, 413, { error: 'body too large' }, req);
+      res.on('finish', () => { req.resume(); req.destroy(); });
+    }
+  });
+  req.on('error', () => {});
+  req.on('end', async () => {
+    if (aborted) return;
+    let parsed = null;
+    try { parsed = body.length ? JSON.parse(body.toString('utf8')) : null; } catch { parsed = null; }
+    try {
+      const relay = await chatRelay();
+      const result = relay.handle({
+        method: req.method,
+        path: pathname,
+        query: Object.fromEntries(searchParams.entries()),
+        headers: req.headers,
+        body: parsed,
+      });
+      return sendJson(res, result.status, result.body, req);
+    } catch (error) {
+      log('error', 'chat_relay_failed', { message: String(error && error.message) });
+      return sendJson(res, 500, { error: 'chat relay unavailable' }, req);
+    }
+  });
+}
+
 // --- server ------------------------------------------------------------------
 function createServer() {
   return http.createServer((req, res) => {
-    const ip = req.socket.remoteAddress || 'unknown';
-
     if (req.method === 'OPTIONS') {
       const headers = corsHeaders(req);
       if (!headers['Access-Control-Allow-Origin']) {
@@ -932,15 +1065,25 @@ function createServer() {
       return res.end();
     }
 
-    if (rateLimited(ip)) {
-      log('warn', 'rate_limited', { ip });
+    const url = new URL(req.url, 'http://x');
+    const pathname = url.pathname;
+    const chatRequest = CHAT_ENABLED && pathname.startsWith(CHAT_PREFIX);
+    const ip = clientIp(req);
+    const bucket = chatRequest ? 'chat' : 'api';
+    // Separate buckets: background wallet reads cannot exhaust the chat budget,
+    // and chat traffic cannot starve balance/history reads.
+    if (rateLimited(`${bucket}:${ip}`, chatRequest ? CONFIG.chatRateLimit : CONFIG.rateLimit)) {
+      log('warn', 'rate_limited', { ip, bucket });
       return sendJson(res, 429, { error: 'rate limit exceeded' });
     }
 
-    const pathname = new URL(req.url, 'http://x').pathname;
+    if (chatRequest) {
+      return handleChatRequest(req, res, pathname, url.searchParams);
+    }
     const isIndexerRoute =
       pathname.startsWith(CONFIRMATION_PREFIX) ||
       pathname === '/v1/health' ||
+      pathname === '/v1/mint' ||
       EVENT_ROUTE_RE.test(pathname) ||
       TX_DETAIL_RE.test(pathname) ||
       ACCOUNT_TX_RE.test(pathname);

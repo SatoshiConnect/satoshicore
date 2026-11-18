@@ -24,7 +24,9 @@ administrative endpoints are unreachable through the gateway by design.
 | `PORT` | `8787` | Listen port |
 | `NSAT_CORE_HTTP_URL` | `http://127.0.0.1:11626` | nsat-core node HTTP endpoint; run the gateway on the same host/private network as the node |
 | `ALLOWED_ORIGINS` | *(none)* | Comma-separated origin allowlist, e.g. `https://satoshicore.org,https://www.satoshicore.org`. Empty = no CORS (non-browser clients only) |
-| `RATE_WINDOW_MS` / `RATE_MAX_REQUESTS` | `60000` / `120` | Per-IP rate limit |
+| `RATE_WINDOW_MS` / `RATE_MAX_REQUESTS` | `60000` / `120` | Per-client rate limit for ordinary API routes |
+| `CHAT_RATE_MAX_REQUESTS` | `120` | Separate per-client budget for `/api/v1/chat/*`, so wallet polling cannot consume the allowance a message send needs |
+| `TRUST_PROXY` | `1` | When the socket peer is loopback (Caddy/cloudflared), key limits on the rightmost `X-Forwarded-For` client address instead of the shared proxy address. Set `0` to key on the socket only |
 | `MAX_BODY_BYTES` | `65536` | Request body cap |
 | `CORE_TIMEOUT_MS` | `10000` | Upstream timeout |
 | `CORE_BUSY_RETRIES` / `CORE_BUSY_DELAY_MS` | `4` / `150` | Bounded backoff for core `{status:"busy"}` ledger-close windows (busy is retried, never answered as a success/zero balance) |

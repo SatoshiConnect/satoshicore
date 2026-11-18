@@ -1,5 +1,5 @@
 // API Gateway tests: unit (validation) + integration (mock nsat-core node).
-// Run: node --test tests/
+// Run: npm test (explicit test files; Node 24 no longer accepts a directory).
 'use strict';
 
 const test = require('node:test');
@@ -43,11 +43,11 @@ function startMockCore() {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
 }
 
-function request(port, path, { method = 'GET', body = null, origin } = {}) {
+function request(port, path, { method = 'GET', body = null, origin, headers = {} } = {}) {
   return new Promise((resolve, reject) => {
     const req = http.request(
       { host: '127.0.0.1', port, path, method,
-        headers: { ...(origin ? { Origin: origin } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) } },
+        headers: { ...headers, ...(origin ? { Origin: origin } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) } },
       (res) => {
         let data = '';
         res.on('data', (c) => (data += c));
@@ -229,6 +229,72 @@ test('rate limit enforced per IP', async () => {
   } finally {
     gateway.close();
     mockCore.close();
+  }
+});
+
+// Behind Caddy every socket peer is loopback: the limit must key on the client
+// the proxy reports, not on 127.0.0.1 shared by every visitor.
+test('rate limit keys on the forwarded client, not the proxy socket', async () => {
+  const mockCore = await startMockCore();
+  process.env.NSAT_CORE_HTTP_URL = `http://127.0.0.1:${mockCore.address().port}`;
+  process.env.RATE_MAX_REQUESTS = '2';
+  process.env.RATE_WINDOW_MS = '60000';
+  process.env.TRUST_PROXY = '1';
+  delete require.cache[require.resolve('../server.js')];
+  const { createServer: freshCreate } = require('../server.js');
+  const gateway = freshCreate();
+  await new Promise((r) => gateway.listen(0, '127.0.0.1', r));
+  const port = gateway.address().port;
+  const clientA = { headers: { 'X-Forwarded-For': '198.51.100.10' } };
+  const clientB = { headers: { 'X-Forwarded-For': '198.51.100.11' } };
+  try {
+    assert.equal((await request(port, '/api/v1/chain/info', clientA)).status, 200);
+    assert.equal((await request(port, '/api/v1/chain/info', clientA)).status, 200);
+    assert.equal((await request(port, '/api/v1/chain/info', clientA)).status, 429);
+    // Prepending a made-up address must not escape the bucket: the rightmost
+    // entry is the one the proxy appended.
+    const spoofed = { headers: { 'X-Forwarded-For': '203.0.113.99, 198.51.100.10' } };
+    assert.equal((await request(port, '/api/v1/chain/info', spoofed)).status, 429);
+    // A second visitor must not inherit the first visitor's exhausted bucket.
+    assert.equal((await request(port, '/api/v1/chain/info', clientB)).status, 200);
+  } finally {
+    gateway.close();
+    mockCore.close();
+  }
+});
+
+// The wallet polls chain info continuously; that read traffic must not stop a
+// message send, and chat traffic must not starve balance/history reads.
+test('chat has its own rate-limit budget, separate from wallet polling', async () => {
+  const mockCore = await startMockCore();
+  process.env.NSAT_CORE_HTTP_URL = `http://127.0.0.1:${mockCore.address().port}`;
+  process.env.RATE_MAX_REQUESTS = '2';
+  process.env.CHAT_RATE_MAX_REQUESTS = '3';
+  process.env.RATE_WINDOW_MS = '60000';
+  process.env.NSAT_CHAT_RELAY = '1';
+  process.env.NSAT_CHAT_DB = ':memory:';
+  delete require.cache[require.resolve('../server.js')];
+  const { createServer: freshCreate } = require('../server.js');
+  const gateway = freshCreate();
+  await new Promise((r) => gateway.listen(0, '127.0.0.1', r));
+  const port = gateway.address().port;
+  const client = { headers: { 'X-Forwarded-For': '198.51.100.20' } };
+  try {
+    // Exhaust the ordinary API budget for this client.
+    assert.equal((await request(port, '/api/v1/chain/info', client)).status, 200);
+    assert.equal((await request(port, '/api/v1/chain/info', client)).status, 200);
+    assert.equal((await request(port, '/api/v1/chain/info', client)).status, 429);
+
+    // Chat still answers: route mounted (400 = address required), own budget.
+    assert.equal((await request(port, '/api/v1/chat/keys', client)).status, 400);
+    assert.equal((await request(port, '/api/v1/chat/keys', client)).status, 400);
+    assert.equal((await request(port, '/api/v1/chat/keys', client)).status, 400);
+    assert.equal((await request(port, '/api/v1/chat/keys', client)).status, 429);
+  } finally {
+    gateway.close();
+    mockCore.close();
+    delete process.env.NSAT_CHAT_RELAY;
+    delete process.env.NSAT_CHAT_DB;
   }
 });
 
@@ -449,5 +515,53 @@ test('explorer snapshot still reports a field the node never answered', async ()
   } finally {
     gateway.close();
     mockCore.close();
+  }
+});
+
+// History pagination + Founder Mint status.
+//
+// The cursor must reach the indexer unchanged: a gateway that dropped it would
+// answer page 1 forever, which looks like "load older" silently failing.
+test('history cursor and mint route are forwarded to the indexer', async () => {
+  const mockCore = await startMockCore();
+  const seen = [];
+  const mockIndexer = http.createServer((req, res) => {
+    seen.push(req.url);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, items: [], next_cursor: null, mint: null }));
+  });
+  await new Promise((r) => mockIndexer.listen(0, '127.0.0.1', r));
+
+  process.env.NSAT_CORE_HTTP_URL = `http://127.0.0.1:${mockCore.address().port}`;
+  process.env.NSAT_INDEXER_URL = `http://127.0.0.1:${mockIndexer.address().port}`;
+  process.env.RATE_MAX_REQUESTS = '1000';
+  delete require.cache[require.resolve('../server.js')];
+  const { createServer: freshCreate } = require('../server.js');
+  const gateway = freshCreate();
+  await new Promise((r) => gateway.listen(0, '127.0.0.1', r));
+
+  try {
+    const acc = 'GBNVPJVAP2DF4J6OFBSAHNN6CMVYKY2BVEMME2KVWNW66522BQT5G6OW';
+    const cursor = `362477:0:${'ab'.repeat(32)}`;
+    const page = await request(
+      gateway.address().port,
+      `/v1/accounts/${acc}/transactions?limit=25&before=${encodeURIComponent(cursor)}`
+    );
+    assert.equal(page.status, 200);
+    assert.ok(
+      seen.includes(`/v1/accounts/${acc}/transactions?limit=25&before=${cursor}`),
+      `indexer saw ${seen.join(', ')}`
+    );
+
+    const bad = await request(gateway.address().port, `/v1/accounts/${acc}/transactions?before=not-a-cursor`);
+    assert.equal(bad.status, 400);
+
+    const mint = await request(gateway.address().port, '/v1/mint');
+    assert.equal(mint.status, 200);
+    assert.ok(seen.includes('/v1/mint'), `indexer saw ${seen.join(', ')}`);
+  } finally {
+    gateway.close();
+    mockCore.close();
+    mockIndexer.close();
   }
 });

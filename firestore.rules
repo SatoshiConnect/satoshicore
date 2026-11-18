@@ -8,12 +8,37 @@ rules_version = '2';
 //   websitePreferences/{uid} = { theme: "light" | "dark" }
 //     The site's light/dark choice, for cross-device sync.
 //
+//   walletLinks/{uid}/addresses/{address} = { address: "G…" }
+//     One PUBLIC wallet address per document, because one person usually holds
+//     several wallets. A device without the key can show that address's balance
+//     and receive screen. A public address is not a secret and confers no
+//     spending power; signing still needs the local encrypted keystore. Adding a
+//     wallet name, balance, history, seed, password or signature to this
+//     document is a rejection, and the document id must be the address it holds.
+//
 //   walletLinks/{uid} = { address: "G…" }
-//     A PUBLIC wallet address, so a device without the key can show that
-//     address's balance and receive screen. A public address is not a secret
-//     and confers no spending power; signing still needs the local encrypted
-//     keystore. Adding a wallet name, balance, history, seed, password or
-//     signature to this document is a rejection.
+//     The single-address form written before multiple wallets were supported.
+//     Still readable, still one shape, and deleted when its address is removed.
+//
+//   profiles/{uid} = { profileId: "@alice", primaryAddress: "G…" | "" }
+//     The basic profile: the ID this person chose and the public address they
+//     chose as primary. Written only by an account whose email the identity
+//     provider has verified (`request.auth.token.email_verified`, which is part
+//     of the signed-in token and cannot be set by the page). The address field
+//     must be empty or a wallet already linked by the SAME account, proven with
+//     a get() on the walletLinks document.
+//
+//   profileIds/{profileId} = { uid: "…" }
+//     The uniqueness claim behind a profile ID. Create-only, so a second account
+//     cannot take an ID that exists. `get` is allowed to signed-in accounts so a
+//     free ID can be checked; `list` is denied, so IDs cannot be enumerated.
+//     The email is never stored here or in the profile.
+//
+//   contacts/, requests/, blocks/, discoveryEmails/
+//     The messenger's contact graph, friend requests, block list and opt-in
+//     email discovery. Uids, states and timestamps only — no email address, no
+//     wallet address, no message and no key. Details and the order of the
+//     checks are in the messenger section further down.
 //
 // Everything else is denied. The wallet engine never writes to Firestore.
 //
@@ -39,13 +64,220 @@ service cloud.firestore {
       // Owner-only read and delete, like the preferences document.
       allow read, delete: if request.auth != null && request.auth.uid == uid;
 
-      // One field, and it must be a canonical 56-character G… account id: the
-      // shape check is what stops this document from becoming a dumping ground
-      // for wallet data. Uppercase base32 with the 'G' version byte only.
+      // The legacy single-address document. One field, and it must be a
+      // canonical 56-character G… account id: the shape check is what stops this
+      // document from becoming a dumping ground for wallet data. Uppercase
+      // base32 with the 'G' version byte only.
       allow create, update: if request.auth != null
         && request.auth.uid == uid
         && request.resource.data.keys().hasOnly(['address'])
         && request.resource.data.address.matches('^G[A-Z2-7]{55}$');
+
+      // One wallet per document. Requiring the id to equal the field is what
+      // makes the shape provable without looping over a list, so every document
+      // in here is exactly one public address and nothing else.
+      match /addresses/{address} {
+        allow read, delete: if request.auth != null && request.auth.uid == uid;
+        allow create, update: if request.auth != null
+          && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['address'])
+          && request.resource.data.address == address
+          && address.matches('^G[A-Z2-7]{55}$');
+      }
+    }
+
+    // ---------------- basic profile ----------------
+    // A profile ID is a handle, never a key: nothing here can sign a transfer,
+    // and no document in this section holds an email, a seed or a password.
+    function isProfileId(value) {
+      return value is string && value.matches('^@[a-z0-9][a-z0-9_-]{2,19}$');
+    }
+
+    // The primary wallet must already belong to this account. Checking the
+    // walletLinks document is what stops a profile from claiming an address the
+    // account never linked.
+    function isLinkedAddress(owner, address) {
+      return address is string
+        && address.matches('^G[A-Z2-7]{55}$')
+        && exists(/databases/$(database)/documents/walletLinks/$(owner)/addresses/$(address))
+        && get(/databases/$(database)/documents/walletLinks/$(owner)/addresses/$(address)).data.address == address;
+    }
+
+    function verifiedEmail() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    match /profiles/{uid} {
+      // A profile is a public handle: a signed-in account may read ONE profile by
+      // uid, which is what turns @handle → wallet address (the claim document
+      // gives the uid). `list` stays closed, so the collection cannot be
+      // enumerated; you must already know the handle.
+      allow get: if request.auth != null;
+      allow list: if false;
+
+      allow delete: if request.auth != null && request.auth.uid == uid;
+
+      // Two fields, both required, both checked. The ID must be a claim held by
+      // this same account, so a profile cannot point at somebody else's ID, and
+      // the address must be empty or a wallet this account linked.
+      allow create, update: if verifiedEmail()
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['profileId', 'primaryAddress'])
+        && isProfileId(request.resource.data.profileId)
+        && (request.resource.data.primaryAddress == ''
+            || isLinkedAddress(uid, request.resource.data.primaryAddress))
+        && exists(/databases/$(database)/documents/profileIds/$(request.resource.data.profileId))
+        && get(/databases/$(database)/documents/profileIds/$(request.resource.data.profileId)).data.uid == uid;
+    }
+
+    match /profileIds/{profileId} {
+      // Exact-ID lookup only: a signed-in account can ask "is this free", and
+      // cannot list the collection to see who holds what.
+      allow get: if request.auth != null;
+      allow list: if false;
+
+      allow create: if verifiedEmail()
+        && isProfileId(profileId)
+        && request.resource.data.keys().hasOnly(['uid'])
+        && request.resource.data.uid == request.auth.uid;
+
+      // No update: a claim is created and deleted, never re-pointed, so an ID
+      // cannot be transferred by overwriting it.
+      allow update: if false;
+      allow delete: if request.auth != null && resource.data.uid == request.auth.uid;
+    }
+
+    // ---------------- messenger contacts ----------------
+    // A contact is an account-level relationship between two uids. It holds no
+    // wallet, no key and no message: messaging still authenticates with the
+    // wallet key, so nothing here can start, read or authorise a conversation
+    // on its own, and nothing here can spend.
+    //
+    //   contacts/{owner}/people/{peer} = { state: "friend", since }
+    //     Each side holds its own document, so leaving is one-sided. A document
+    //     may only be written once a request between the pair says `accepted`.
+    //   requests/{owner}/inbox/{from} and requests/{owner}/outbox/{to}
+    //     The same { state, at } on both sides: the sender lists its outbox, the
+    //     recipient lists its inbox, and neither has to read the other's tree.
+    //   blocks/{owner}/people/{peer} = { at }
+    //     Owner-only, and checked when a new request is created — so blocking
+    //     has an effect the sender cannot undo by editing the client.
+    //   discoveryEmails/{sha256(email)} = { uid }
+    //     Opt-in only. The address itself is never stored: the key is a hash the
+    //     owner publishes deliberately, `list` stays closed so the documents
+    //     cannot be enumerated, and a miss means "no consenting account".
+    function isContactUid(value) {
+      return value is string && value.size() <= 128 && value.matches('^[A-Za-z0-9_-]{1,128}$');
+    }
+
+    function isFriendDocument() {
+      return request.resource.data.keys().hasOnly(['state', 'since'])
+        && request.resource.data.state == 'friend'
+        && request.resource.data.since is number
+        && request.resource.data.since > 0;
+    }
+
+    function isRequestDocument() {
+      return request.resource.data.keys().hasOnly(['state', 'at'])
+        && request.resource.data.state in ['pending', 'accepted', 'rejected']
+        && request.resource.data.at is number
+        && request.resource.data.at > 0;
+    }
+
+    function requestIsAccepted(a, b) {
+      return (exists(/databases/$(database)/documents/requests/$(a)/inbox/$(b))
+          && get(/databases/$(database)/documents/requests/$(a)/inbox/$(b)).data.state == 'accepted')
+        || (exists(/databases/$(database)/documents/requests/$(a)/outbox/$(b))
+          && get(/databases/$(database)/documents/requests/$(a)/outbox/$(b)).data.state == 'accepted');
+    }
+
+    function hasBlocked(owner, peer) {
+      return exists(/databases/$(database)/documents/blocks/$(owner)/people/$(peer));
+    }
+
+    match /contacts/{owner}/people/{peer} {
+      // Only my own half of the graph is readable. The other side's copy is not.
+      allow read: if request.auth != null && request.auth.uid == owner;
+
+      // Written by me for my own list, or by the person who accepted me for
+      // their list — in both cases an accepted request must already exist.
+      allow create, update: if verifiedEmail()
+        && isContactUid(peer)
+        && isFriendDocument()
+        && ((request.auth.uid == owner && requestIsAccepted(owner, peer))
+            || (request.auth.uid == peer && requestIsAccepted(peer, owner)));
+
+      // Removing a contact deletes only my document; nothing of theirs moves.
+      allow delete: if request.auth != null && request.auth.uid == owner;
+    }
+
+    match /requests/{owner}/inbox/{from} {
+      // The recipient lists its inbox; the sender may read the one document it
+      // is waiting on, which is how a request being accepted becomes visible.
+      allow get: if request.auth != null
+        && (request.auth.uid == owner || request.auth.uid == from);
+      allow list: if request.auth != null && request.auth.uid == owner;
+
+      // A pending request is created by its sender and by nobody else. A block
+      // on the recipient's side refuses it here, before any document exists.
+      allow create: if verifiedEmail()
+        && request.auth.uid == from
+        && isContactUid(owner)
+        && request.resource.data.state == 'pending'
+        && isRequestDocument()
+        && !hasBlocked(owner, from);
+
+      // Only the recipient answers, and the answer is terminal in this write.
+      allow update: if request.auth.uid == owner
+        && request.resource.data.state in ['accepted', 'rejected']
+        && isRequestDocument();
+
+      // Only the sender withdraws an unanswered request.
+      allow delete: if request.auth.uid == from
+        && resource.data.state == 'pending';
+    }
+
+    match /requests/{owner}/outbox/{to} {
+      // My own outbox: I list what I asked, and the recipient's answer lands
+      // here so my screen does not have to read their inbox.
+      allow read: if request.auth != null && request.auth.uid == owner;
+
+      allow create: if verifiedEmail()
+        && request.auth.uid == owner
+        && isContactUid(to)
+        && request.resource.data.state == 'pending'
+        && isRequestDocument();
+
+      allow update: if request.auth.uid == to
+        && request.resource.data.state in ['accepted', 'rejected']
+        && isRequestDocument();
+
+      allow delete: if request.auth.uid == owner
+        && resource.data.state == 'pending';
+    }
+
+    match /blocks/{owner}/people/{peer} {
+      allow read: if request.auth != null && request.auth.uid == owner;
+      allow create, update: if request.auth.uid == owner
+        && isContactUid(peer)
+        && request.resource.data.keys().hasOnly(['at'])
+        && request.resource.data.at is number
+        && request.resource.data.at > 0;
+      allow delete: if request.auth != null && request.auth.uid == owner;
+    }
+
+    match /discoveryEmails/{emailHash} {
+      // Exact hash only. A signed-in account can ask about one address it already
+      // knows; it cannot list who opted in, and the document holds a uid only.
+      allow get: if request.auth != null;
+      allow list: if false;
+
+      allow create, update: if verifiedEmail()
+        && emailHash.matches('^[a-f0-9]{64}$')
+        && request.resource.data.keys().hasOnly(['uid'])
+        && request.resource.data.uid == request.auth.uid;
+
+      allow delete: if request.auth != null && resource.data.uid == request.auth.uid;
     }
 
     // No other collection or document is reachable from the browser.
