@@ -27,6 +27,10 @@ const EmojiPicker = dynamic(
   { ssr: false },
 );
 
+// Presentation adapted from SaeedNix/telegram-clone (MIT); see the component
+// header and THIRD-PARTY-NOTICES.md for what was kept and what was dropped.
+import UpstreamMessage from './chat/UpstreamMessage';
+
 import { createChatClient, createClientId } from '../lib/chatClient';
 import {
   enqueueOutbox, markOutboxFailure, readOutbox, removeOutbox,
@@ -2592,7 +2596,15 @@ export default function ChatPanel({
           const savedCopy = kept.saved.has(keepId);
           const expiry = isKept || historyOn ? '' : expiryLabel(message);
           return (
-            <li key={message.id} className={'nw-chat-bubble' + (message.own ? ' is-own' : '')}>
+            <UpstreamMessage
+              key={message.id}
+              own={message.own}
+              author={message.own ? '' : peerName}
+              time={clock(message.at)}
+              status={message.pending ? 'pending' : ''}
+              receipt={receipt}
+              showAvatar={!message.own}
+              avatarLabel={peerName.slice(0, 1).toUpperCase()}>
               {cardInThisChat(transactionCard, message, address, peer) ? (
                 <ChatTransactionCard card={transactionCard} sentAt={message.at} />
               ) : transactionCard ? (
@@ -2666,11 +2678,8 @@ export default function ChatPanel({
                 <div className="nw-chat-text">{message.text}</div>
               )}
               <div className="nw-chat-meta">
-                {clock(message.at)}
                 {message.pending ? (
                   <span className="nw-small nw-dim" role="status">Queued — retrying</span>
-                ) : receipt ? (
-                  <span className="nw-small nw-dim" role="status">{receipt}</span>
                 ) : null}
                 {expiry ? <span className="nw-small nw-dim">{expiry}</span> : null}
                 {!message.pending && !readOnly && Number(relayIdOf(message)) > 0 ? (
@@ -2748,7 +2757,7 @@ export default function ChatPanel({
                   {copyResult === 'done' ? 'Message copied' : 'Copy failed'}
                 </span>
               ) : null}
-            </li>
+            </UpstreamMessage>
           );
         })}
       </ul>

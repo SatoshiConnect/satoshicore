@@ -285,3 +285,22 @@ is untested here.
    and use cashu.me only as an interaction reference.
 4. Unchanged blockers: no Firebase/world env in this checkout; character wallet
    binding still absent.
+
+## 10. Update — upstream message row adapted into the chat (2026-11-19)
+
+`telegram-clone`'s `src/components/middleBar/Message.tsx` (MIT, commit
+`618e4164…`) was adapted, not copied: the presentation (avatar column, sender
+name, bubble shape, footer line) now lives in `components/chat/UpstreamMessage.jsx`
+and its Tailwind/daisyUI utilities were translated to the existing `nw-` tokens in
+`app/wallet/wallet.css`.
+
+Dropped with the port, because they belong to that project's data layer: the
+Mongoose `MessageModel`/`Voice` classes, the Zustand stores and Socket.io emits.
+Kept, because the product already has them: encrypted text, replies, payment
+cards, transaction cards, keep/copy/forward/reply/edit actions, read receipts and
+the queued-retry state. `THIRD-PARTY-NOTICES.md` records the source commit, the
+licence and the exact modifications.
+
+Validation: `npm run build` passes; the wallet/chat screen itself was not
+clicked through, because it needs an unlocked wallet and Firebase config that
+this checkout does not have.

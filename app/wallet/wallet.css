@@ -2045,3 +2045,77 @@ label.nw-chip-btn:focus-within { outline: 2px solid var(--accent); outline-offse
 @media (max-width: 420px) {
   .nw-emoji-pop { width: min(300px, 86vw); }
 }
+
+/* Message row adapted from telegram-clone's Message.tsx (MIT). Its Tailwind
+   utilities are expressed here with the existing nw- tokens, so light mode and
+   the theme contrast checks keep applying. */
+.nw-msg {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.nw-msg.is-own {
+  flex-direction: row-reverse;
+}
+
+.nw-msg-avatar {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--accent-tint);
+  color: var(--link);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.nw-msg-avatar.is-empty {
+  background: transparent;
+}
+
+.nw-msg-bubble {
+  position: relative;
+  min-width: 7rem;
+  max-width: 80%;
+  padding: 7px 10px 6px;
+  border-radius: 14px 14px 14px 4px;
+  background: var(--card);
+  border: 1px solid var(--row-border);
+}
+
+.nw-msg.is-own .nw-msg-bubble {
+  border-radius: 14px 14px 4px 14px;
+  background: var(--accent-tint);
+  border-color: var(--accent);
+}
+
+.nw-msg-author {
+  margin: 0 0 3px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--link);
+}
+
+.nw-msg-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.nw-msg-meta {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.nw-msg-meta .is-failed {
+  color: var(--danger);
+}
