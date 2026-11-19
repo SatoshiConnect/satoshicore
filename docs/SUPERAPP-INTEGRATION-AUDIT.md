@@ -132,3 +132,17 @@ A Colyseus world server (`services/world-server/`) with:
    verified by two clients in a local run.
 
 Then the Create Character flow that writes the document this slice defines.
+
+## 7. Update — world service slice landed (2026-11-19)
+
+Items 1–3 above are implemented in `services/world-server/` (see its README):
+Firebase ID token verified locally against Google's certificates, single-use
+HMAC join tickets, one Colyseus room per city in the catalog, presence in memory,
+server-side `resolveRecipient` on `/api/world/recipient`, and movement that is
+clamped and speed-budgeted. Validated by 21 passing tests, including an
+end-to-end run with two real Colyseus clients, a spent-ticket replay, a
+wrong-city ticket and a refused teleport, plus a boot/health/401 smoke check of
+the real entry point.
+
+Still open: item 4 (renderer, tile map, collision), the Create Character flow, and
+the chat/Pixel World entry points. No performance numbers have been measured yet.

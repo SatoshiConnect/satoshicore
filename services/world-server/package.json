@@ -1,0 +1,22 @@
+{
+  "name": "satoshicore-world-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SatoshiCore Pixel World — Colyseus room server for city presence. Holds no keys and no wallet state.",
+  "type": "module",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test tests/"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@colyseus/schema": "^5.0.50",
+    "@colyseus/sdk": "^0.18.10",
+    "colyseus": "^0.18.12",
+    "express": "^5.3.0",
+    "tweetnacl": "^1.0.3"
+  }
+}
