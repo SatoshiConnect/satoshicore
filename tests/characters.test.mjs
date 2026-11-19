@@ -13,6 +13,7 @@ import {
   BACKUP_MAX_AGE_MS,
   CHARACTER_ID_RE,
   CHARACTER_LIMIT,
+  addressHolder,
   bindWallet,
   bindingBytes,
   canCreateCharacter,
@@ -42,6 +43,7 @@ const ALICE_SEED = seedOf(7);
 const ALICE_ADDRESS = addressOf(ALICE_SEED);
 const BOB_ADDRESS = addressOf(seedOf(9));
 const ID = `ch_${'ab'.repeat(16)}`;
+const ID_B = `ch_${'cd'.repeat(16)}`;
 
 const bindingFor = (over = {}) => createWalletBinding({
   walletSeed32: ALICE_SEED, characterId: ID, owner: OWNER, address: ALICE_ADDRESS,
@@ -145,6 +147,81 @@ test('binding refuses another account, an unverified binding and a silent re-poi
     () => bindWallet({ character: bound, owner: OWNER, binding: otherBinding }),
     (error) => error.code === 'already-bound',
   );
+});
+
+test('one address cannot be bound to two live characters', () => {
+  const first = bindWallet({ character: characterWith(), owner: OWNER, binding: bindingFor() });
+  const secondBase = characterDocument({
+    characterId: ID_B, owner: OWNER, name: 'Somsak', createdAt: 1_700_000_000_000,
+  });
+  const secondBinding = bindingFor({ characterId: ID_B });
+
+  assert.throws(
+    () => bindWallet({
+      character: secondBase, owner: OWNER, binding: secondBinding, characters: [first, secondBase],
+    }),
+    (error) => error.code === 'address-in-use',
+  );
+  // The holder keeps its binding untouched.
+  assert.equal(first.walletBinding.address, ALICE_ADDRESS);
+  assert.equal(addressHolder([first, secondBase], ALICE_ADDRESS).characterId, ID);
+  assert.equal(addressHolder([first], ALICE_ADDRESS, { exceptCharacterId: ID }), null);
+
+  // Re-binding the same address to the same character stays a no-op, not a clash.
+  const again = bindWallet({ character: first, owner: OWNER, binding: bindingFor(), characters: [first] });
+  assert.equal(again.walletBinding.address, ALICE_ADDRESS);
+
+  // A different address is fine on a second character.
+  const otherBinding = bindingFor({
+    walletSeed32: seedOf(9), characterId: ID_B, address: BOB_ADDRESS,
+  });
+  const second = bindWallet({
+    character: secondBase, owner: OWNER, binding: otherBinding, characters: [first, secondBase],
+  });
+  assert.equal(second.walletBinding.address, BOB_ADDRESS);
+});
+
+test('a deleted character releases its address for a new character', () => {
+  const now = 1_700_000_000_000;
+  const first = bindWallet({ character: characterWith(), owner: OWNER, binding: bindingFor() });
+  const tombstone = planDeleteCharacter({ character: first, backupVerifiedAt: now, now });
+  assert.equal(tombstone.deletedAt, now);
+
+  // The tombstone no longer counts as a holder, even though it remembers where
+  // the assets are, so the same wallet can be bound to a new character.
+  assert.equal(addressHolder([tombstone], ALICE_ADDRESS), null);
+  const replacement = characterDocument({
+    characterId: ID_B, owner: OWNER, name: 'Mali II', createdAt: now,
+  });
+  const rebound = bindWallet({
+    character: replacement,
+    owner: OWNER,
+    binding: bindingFor({ characterId: ID_B }),
+    characters: [tombstone, replacement],
+    now,
+  });
+  assert.equal(rebound.walletBinding.address, ALICE_ADDRESS);
+  assert.equal(rebound.lastWallet, ALICE_ADDRESS);
+});
+
+test('unlinking a wallet also releases the address', () => {
+  const now = 1_700_000_000_000;
+  const first = bindWallet({ character: characterWith(), owner: OWNER, binding: bindingFor() });
+  const unlinked = planUnlinkWallet({
+    character: first, address: ALICE_ADDRESS, backupVerifiedAt: now, now,
+  });
+  const secondBase = characterDocument({
+    characterId: ID_B, owner: OWNER, name: 'Somsak', createdAt: now,
+  });
+  assert.equal(addressHolder([unlinked], ALICE_ADDRESS), null);
+  const second = bindWallet({
+    character: secondBase,
+    owner: OWNER,
+    binding: bindingFor({ characterId: ID_B }),
+    characters: [unlinked, secondBase],
+    now,
+  });
+  assert.equal(second.walletBinding.address, ALICE_ADDRESS);
 });
 
 test('renaming and restyling keep the verified wallet intact', () => {
