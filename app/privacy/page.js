@@ -4,7 +4,7 @@ import PageHeader from '../../components/PageHeader';
 export const metadata = {
   title: 'Privacy — NSAT Wallet (draft)',
   description:
-    'Draft privacy disclosure: optional Google sign-in for the website only; wallet keys stay on the device, alongside chain reads and signed-envelope relay.'
+    'Draft privacy disclosure: website account sign-in is required to access the wallet; wallet keys stay on the device, alongside chain reads and signed-envelope relay.'
 };
 
 const STORED = [
@@ -26,8 +26,8 @@ const STORED = [
   },
   {
     what: 'Google website sign-in session (optional)',
-    where: 'Firebase Authentication, browser-session persistence',
-    detail: 'When you choose Google sign-in, Firebase stores the website identity session for this browser session. It is not connected to the wallet keystore and does not sync or recover signing keys.'
+    where: 'Firebase Authentication, browser session or this browser only',
+    detail: 'By default, the session ends when the browser session closes. If you check Remember this device, Firebase keeps the website sign-in on this browser until you sign out or clear site data. This remembers only website identity: it never unlocks the wallet, remembers its password, or syncs/recover signing keys. Do not enable it on a shared device.'
   },
   {
     what: 'Theme and session preferences',
@@ -38,6 +38,16 @@ const STORED = [
     what: 'Linked wallet address (optional)',
     where: 'Firebase · only if you link one',
     detail: 'The public address you choose to link to your website account, so another device can show its balance and receive screen after Google sign-in. An address is public and confers no spending power — sending still needs the wallet password and key on the device that signs. No balance, history, wallet name, seed or password is stored with it, and unlinking deletes it.'
+  },
+  {
+    what: 'Google Drive backup (optional)',
+    where: 'your own Google Drive, app-private folder · only if you press Backup to Drive',
+    detail: 'The encrypted keystore file. Each seed is AES-GCM ciphertext under that wallet’s password, so Google and this site cannot open one; the same file necessarily holds wallet names, public addresses, KDF salt and nonce in readable form so the wallets can be listed again. Signing in alone uploads nothing, and the file is written only to the drive.appdata folder of the account you chose.'
+  },
+  {
+    what: 'Device-unlock copy (optional)',
+    where: 'this browser only',
+    detail: 'If you enable supported WebAuthn device unlock, a second AES-GCM encrypted copy of the seed is stored locally. It can be opened only with the enrolled device authenticator (which may use face, fingerprint, security key or device PIN). The site gets no biometric image/template and the PRF-derived unlock key is not stored or sent. Removing browser data or the authenticator may remove this unlock option; the original password and encrypted backup remain the recovery path.'
   }
 ];
 
@@ -65,6 +75,10 @@ const TRANSMITTED = [
   {
     what: 'Wallet address link (only when you link one)',
     why: 'Stores one public G… address under your own signed-in account so a device without the key can show its balance and receive screen. Only the address is written: no balance, history, wallet name, seed or password, and unlinking deletes the entry.'
+  },
+  {
+    what: 'Device unlock (only if you turn it on)',
+    why: 'WebAuthn asks your platform authenticator to verify you. No face or fingerprint image/template is available to or sent by this site. A separate locally encrypted copy stays in this browser; no PRF output or wallet key is uploaded.'
   },
   {
     what: 'Theme sync (only when you turn it on)',
@@ -104,16 +118,16 @@ export default function PrivacyPage() {
       <section className="panel">
         <div className="panel-head">
           <h2 className="panel-title">What we do not collect</h2>
-          <span className="panel-meta">optional account · no analytics</span>
+          <span className="panel-meta">account sign-in required · no analytics</span>
         </div>
         <div className="panel-body">
           <ul className="status-list">
-            <li>No wallet account is required. Google sign-in is optional and only identifies a website session.</li>
+            <li>A website account sign-in is required to open the wallet and view local wallet details. It identifies the website session; it does not unlock the wallet or upload wallet keys. Signing out ends that session: the wallet locks and the next person on this device starts at the sign-in screen. Wallets on the device are not deleted by signing out.</li>
             <li>Theme sync is off by default and separate from sign-in: nothing is uploaded unless you turn it on, and it covers the light or dark theme only.</li>
-            <li>No analytics, advertising or fingerprinting. Firebase Auth code is bundled locally; authentication requests may restore an existing browser-session login and interactive sign-in starts only after you choose Google.</li>
+            <li>No analytics, advertising or fingerprinting. Firebase Auth code is bundled locally. The website session is browser-session-only by default, or persists on this browser only if you opt into Remember this device.</li>
             <li>The site does not set its own cookies. Google/Firebase may use their own authentication cookies during sign-in.</li>
             <li>No seed, wallet password or private key transmitted to Google/Firebase, logged or stored in plaintext.</li>
-            <li>Google/Firebase receive account identity data only if you opt into sign-in; SatoshiCore does not use it to access your Gmail mailbox or wallet keys.</li>
+            <li>Google/Firebase receive account identity data when you sign in; SatoshiCore does not use it to access your Gmail mailbox or wallet keys. Remember this device stores the sign-in session in this browser, not a wallet unlock.</li>
           </ul>
         </div>
       </section>

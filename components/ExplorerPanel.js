@@ -8,7 +8,8 @@ import {
   getIndexerHealth,
   getTxDetail,
   isGatewayConfigured,
-  isIndexerConfigured
+  isIndexerConfigured,
+  readAccountBalance
 } from '../lib/nsatClient';
 
 // NSAT account IDs are 56-character public keys starting with G; transaction
@@ -88,6 +89,25 @@ export default function ExplorerPanel() {
     [walletReady]
   );
 
+  // Arriving from a wallet row with `?q=<hash>` (or an account) should show the
+  // result, not an empty search box the person has to fill in again. Read from
+  // location rather than useSearchParams so the static export needs no Suspense
+  // boundary, and only ever use a value the field would accept anyway.
+  useEffect(() => {
+    const raw = new URLSearchParams(window.location.search).get('q');
+    const value = String(raw || '').trim();
+    if (ACCOUNT_RE.test(value)) {
+      setQuery(value);
+      load({ kind: 'account', value });
+    } else if (HASH_RE.test(value)) {
+      setQuery(value);
+      load({ kind: 'tx', value });
+    }
+    // Intentionally once per navigation: re-running on `load` would repeat the
+    // request every time the wallet-ready flag settles.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   function submit(event) {
     event.preventDefault();
     const value = query.trim();
@@ -107,8 +127,10 @@ export default function ExplorerPanel() {
 
   // The node answers { balance, id, seqnum, status }; newer builds also carry
   // balance128. Both are exact decimal strings, never floats — take whichever
-  // the node sent so a funded account never reads as "unavailable".
-  const balance = result.account?.balance128 ?? result.account?.balance ?? null;
+  // the node sent so a funded account never reads as "unavailable". A 200 with
+  // status: not_found means the account is simply not on chain yet, which is not
+  // the same as an unreachable node.
+  const balanceState = readAccountBalance(result.account);
 
   return (
     <div>
@@ -155,9 +177,11 @@ export default function ExplorerPanel() {
           <ul className="status-list">
             <li>
               <strong>Balance:</strong>{' '}
-              {balance
-                ? `${formatExactBalance(balance)} NSAT`
-                : 'live balance unavailable (node not reachable) — history below is from the indexer'}
+              {balanceState.kind === 'exact'
+                ? `${formatExactBalance(balanceState.value)} NSAT`
+                : balanceState.kind === 'missing'
+                  ? 'not on chain yet — an account is created by its first deposit (2× base reserve)'
+                  : 'live balance unavailable (node not reachable) — history below is from the indexer'}
             </li>
             {result.account && (
               <li>

@@ -37,7 +37,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: '20'
+  # The messenger relay tests import node:sqlite; Node 20 does not provide it.
+  NODE_VERSION: '24'
 
 jobs:
   gateway:
@@ -163,6 +164,16 @@ jobs:
       - name: Dependency audit (advisory)
         run: npm audit --omit=dev --audit-level=high || echo '::warning::npm audit reported vulnerabilities (see log) — tracked in WEB-WALLET-SECURITY-REVIEW.md'
 
+      # Preserve the exact provenance file that passed this job's tests so the
+      # post-deploy job can compare the live bytes against this tested build.
+      - name: Upload tested build manifest for production verification
+        uses: actions/upload-artifact@v4
+        with:
+          name: tested-build-manifest-${{ github.sha }}
+          path: out/build-manifest.json
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Upload static output
         uses: actions/upload-pages-artifact@v3
         with:
@@ -195,6 +206,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Download tested build manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: tested-build-manifest-${{ github.sha }}
+          path: out
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -213,7 +230,7 @@ jobs:
       - name: Verify deployed URLs
         env:
           SITE_URL: ${{ inputs.custom_domain_name != '' && format('https://{0}', inputs.custom_domain_name) || 'https://satoshicore.org' }}
-        run: node scripts/verify-deployed-site.mjs "$SITE_URL"
+        run: node scripts/verify-deployed-site.mjs "$SITE_URL" --expect-manifest out/build-manifest.json
 
       - name: Write verification summary
         if: always()

@@ -1,0 +1,45 @@
+name: Browser extension CI
+
+on:
+  push:
+    paths:
+      - 'extension/**'
+      - 'scripts/build-extension.mjs'
+      - 'scripts/extension-release.mjs'
+      - 'tests/extension.test.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/extension-ci.yml'
+  pull_request:
+    paths:
+      - 'extension/**'
+      - 'scripts/build-extension.mjs'
+      - 'scripts/extension-release.mjs'
+      - 'tests/extension.test.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/extension-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  extension:
+    name: Build and test Chromium + Firefox extensions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build and test both extension targets
+        run: npm run test:extension

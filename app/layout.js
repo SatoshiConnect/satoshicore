@@ -97,7 +97,7 @@ export default function RootLayout({ children }) {
             wallet's Install button can replay it on a real user gesture. */}
         <script
           dangerouslySetInnerHTML={{
-            __html: "window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();window.__nsatInstallPrompt=e;window.dispatchEvent(new Event('nsat:installable'));});"
+            __html: "window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();window.__nsatInstallPrompt=e;window.dispatchEvent(new Event('nsat:installable'));});window.addEventListener('appinstalled',function(){window.__nsatInstallPrompt=null;});"
           }}
         />
       </head>

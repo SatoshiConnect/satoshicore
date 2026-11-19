@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import ThemeToggle from './ThemeToggle';
+import PwaInstallButton from './PwaInstallButton';
 
 // One navigation for the whole site. "Explorer" is the live dashboard, and
 // "Search" is the account/transaction lookup that used to be called Explorer
@@ -59,6 +60,7 @@ export default function Header() {
               </Link>
             ))}
           </nav>
+          <PwaInstallButton />
           <ThemeToggle />
         </div>
       </div>

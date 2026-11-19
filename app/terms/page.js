@@ -16,7 +16,7 @@ const SECTIONS = [
   {
     title: 'What this software is',
     body: [
-      'An independent, non-commercial study project. The wallet is non-custodial: it generates and encrypts keys on your device and signs locally. No company, operator or developer holds your keys, funds, or the ability to move them. Optional Google sign-in identifies a website session only; it does not unlock, sync or recover a wallet. There is no wallet login or recovery service.'
+      'An independent, non-commercial study project. The wallet is non-custodial: it generates and encrypts keys on your device and signs locally. No company, operator or developer holds your keys, funds, or the ability to move them. A website account sign-in is required to open the wallet and identifies the website session; it does not unlock, sync or recover a wallet. Signing out ends that session; you may choose to remember the sign-in on this browser, but it does not unlock the wallet. There is no wallet-key login or recovery service.'
     ]
   },
   {

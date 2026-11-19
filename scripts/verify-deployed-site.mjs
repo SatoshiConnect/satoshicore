@@ -4,8 +4,8 @@
 // Run this against the URL that will actually serve users — after a deploy, or
 // before one to prove what is currently live:
 //
-//   node scripts/verify-deployed-site.mjs https://satoshicore.org
-//   node scripts/verify-deployed-site.mjs ${{ steps.deployment.outputs.page_url }}
+//   node scripts/verify-deployed-site.mjs https://satoshicore.org --expect-manifest out/build-manifest.json
+//   node scripts/verify-deployed-site.mjs https://satoshicore.org --expect-commit <40-char-sha>
 //
 // It only reads. It stores nothing, signs nothing and never contacts the
 // gateway with a transaction. Exit code 1 means at least one check failed, so
@@ -13,16 +13,43 @@
 // not actually being served (an old build, a cached HTML shell, a 404 on PWA
 // assets, or HTML served with the wrong content type).
 //
-// No dependencies: Node 20+ has global fetch.
+// No dependencies: Node 24+ has global fetch.
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { validateBuildManifest, verifyRemoteBuild } from './build-manifest-verification.mjs';
 
 const SITE_TIMEOUT_MS = 15_000;
 
-const args = process.argv.slice(2).filter((a) => a !== '--');
-const rawBase = args[0];
+const args = process.argv.slice(2).filter((arg) => arg !== '--');
+const rawBase = args.shift();
+const options = new Map();
+for (let i = 0; i < args.length; i += 1) {
+  const arg = args[i];
+  const equal = arg.indexOf('=');
+  const key = equal >= 0 ? arg.slice(0, equal) : arg;
+  const value = equal >= 0 ? arg.slice(equal + 1) : args[++i];
+  if (!['--expect-manifest', '--expect-commit'].includes(key) || !value) {
+    console.error(`unknown or incomplete option: ${arg}`);
+    process.exit(2);
+  }
+  options.set(key, value);
+}
 if (!rawBase || !/^https?:\/\//.test(rawBase)) {
-  console.error('usage: node scripts/verify-deployed-site.mjs <https://site-origin[/basepath]>');
+  console.error('usage: node scripts/verify-deployed-site.mjs <https://site-origin[/basepath]> [--expect-manifest out/build-manifest.json] [--expect-commit <sha>]');
   process.exit(2);
 }
+
+let expectedManifest;
+const manifestPath = options.get('--expect-manifest');
+if (manifestPath) {
+  try {
+    expectedManifest = validateBuildManifest(JSON.parse(readFileSync(resolve(manifestPath), 'utf8')));
+  } catch (error) {
+    console.error(`invalid expected build manifest ${manifestPath}: ${error.message}`);
+    process.exit(2);
+  }
+}
+const expectedCommit = options.get('--expect-commit') || process.env.EXPECTED_BUILD_COMMIT || '';
 
 const base = new URL(rawBase.endsWith('/') ? rawBase : `${rawBase}/`);
 const basePath = base.pathname.replace(/\/$/, ''); // '' at a domain root, '/repo' on github.io
@@ -96,17 +123,29 @@ function contains(path, needles) {
 async function main() {
   console.log(`Verifying ${base.href}\n`);
 
+  await check('Production artifact matches the tested build manifest', async () => {
+    const verified = await verifyRemoteBuild({
+      base, expectedManifest, expectedCommit, timeoutMs: SITE_TIMEOUT_MS,
+    });
+    return `commit ${verified.commit}${verified.workingTreeDirty ? ' (dirty working tree)' : ''}; `
+      + `index.html sha256 ${verified.hashes['index.html']}; sw.js sha256 ${verified.hashes['sw.js']}`;
+  });
+
   // --- The site itself -----------------------------------------------------
   await check('Homepage is the wallet itself, not a landing page', async () => {
     const { status, type, body } = await get('/');
     assert(status === 200, `GET / returned HTTP ${status}`);
     assert(isHtml(type), `GET / served ${type || 'no content-type'} instead of HTML`);
     assert(body.includes('nw-root'), 'homepage does not render the wallet shell');
-    assert(body.includes('Create a New Wallet'), 'homepage has no create-wallet action');
-    assert(body.includes('Import Existing Wallet'), 'homepage has no import action');
+    // A visitor who has chosen neither Google nor standalone gets the wallet's
+    // own gate. The create/import forms are client-side and must not be served
+    // before that choice.
+    assert(body.includes('nw-gate'), 'signed-out homepage is missing the wallet gate');
+    assert(!body.includes('Create a New Wallet'), 'wallet forms are served before sign-in');
+    assert(!body.includes('Import Existing Wallet'), 'wallet import is served before sign-in');
     assert(/href="[^"]*\/download\/?"/.test(body), 'homepage has no extension download action');
     assert(!body.includes('Open NSAT Wallet'), 'the old landing CTA is still being served');
-    return 'wallet-first homepage served';
+    return 'wallet-first homepage served, signed out at the gate';
   });
 
   await check('Wallet page renders', page('/wallet/'));

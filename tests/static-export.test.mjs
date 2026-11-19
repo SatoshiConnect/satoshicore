@@ -3,6 +3,7 @@
 // plain static files, correct asset paths, and no server-only artifacts.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readdirSync, statSync, existsSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
@@ -19,6 +20,7 @@ const files = walk(OUT);
 test('static export exists', () => {
   assert.ok(statSync(OUT).isDirectory(), 'out/ directory missing');
   assert.ok(existsSync(join(OUT, 'index.html')), 'index.html missing');
+  assert.ok(existsSync(join(OUT, 'build-manifest.json')), 'build-manifest.json missing');
 });
 
 test('no Node.js server artifacts in output', () => {
@@ -84,15 +86,37 @@ test('no obvious secrets or key material in output', () => {
 // The wallet is installable from the static export: a manifest, an offline
 // shell service worker and icons must ship as plain files next to the pages.
 
+test('build provenance identifies commit, safe flags and exact page/SW hashes', () => {
+  const manifest = JSON.parse(readFileSync(join(OUT, 'build-manifest.json'), 'utf8'));
+  assert.equal(manifest.schemaVersion, 1);
+  assert.match(manifest.commit, /^[a-f0-9]{40}$/);
+  assert.equal(typeof manifest.workingTreeDirty, 'boolean');
+  assert.equal(typeof manifest.environment.chatRelayEnabled, 'boolean');
+  assert.equal(typeof manifest.environment.firebaseConfigured, 'boolean');
+  assert.equal(typeof manifest.environment.webPushConfigured, 'boolean');
+  for (const name of ['index.html', 'sw.js']) {
+    assert.match(manifest.files?.[name] || '', /^[a-f0-9]{64}$/, `missing hash for ${name}`);
+    const actual = createHash('sha256').update(readFileSync(join(OUT, name))).digest('hex');
+    assert.equal(manifest.files[name], actual, `${name} hash must match exported bytes`);
+  }
+  assert.doesNotMatch(JSON.stringify(manifest), /AIza|private|secret|token/i,
+    'manifest must not serialize credentials or secret values');
+});
+
 test('PWA manifest is present, installable and subpath-safe', () => {
   // .json deliberately: the production static host serves unknown extensions
   // as text/plain, which is not a manifest MIME type.
   const manifestPath = join(OUT, 'manifest.json');
   assert.ok(existsSync(manifestPath), 'manifest.json missing from export');
-  assert.ok(
-    readFileSync(join(OUT, 'index.html'), 'utf8').includes('manifest.json'),
-    'layout must link the manifest as manifest.json'
-  );
+  const homepage = readFileSync(join(OUT, 'index.html'), 'utf8');
+  assert.ok(homepage.includes('manifest.json'), 'layout must link the manifest as manifest.json');
+  assert.match(homepage, /Install app|Add to Home Screen/, 'install control and iOS instructions must ship');
+  const walletBundle = files
+    .filter((f) => f.endsWith('.js'))
+    .map((f) => readFileSync(f, 'utf8'))
+    .join('\\n');
+  assert.match(walletBundle, /Protect this device’s storage/, 'storage persistence control must ship');
+  assert.match(walletBundle, /Used by this site/, 'local storage usage must be visible');
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
 
   assert.equal(manifest.display, 'standalone');
@@ -101,6 +125,23 @@ test('PWA manifest is present, installable and subpath-safe', () => {
   assert.equal(manifest.scope, './', 'scope must stay relative for subpath hosting');
   assert.equal(manifest.id, './', 'the installed app identity is the site root');
   assert.ok(!manifest.start_url.startsWith('/'), 'absolute start_url breaks the base path');
+
+  assert.ok(Array.isArray(manifest.shortcuts) && manifest.shortcuts.length >= 2,
+    'launcher shortcuts should ship in the manifest');
+  for (const shortcut of manifest.shortcuts) {
+    assert.ok(shortcut.name && shortcut.url, 'each shortcut needs a name and URL');
+    assert.ok(!shortcut.url.startsWith('/'), `shortcut must work under a basePath: ${shortcut.url}`);
+  }
+  assert.deepEqual(manifest.share_target, {
+    action: 'share/',
+    method: 'POST',
+    enctype: 'application/x-www-form-urlencoded',
+    params: { title: 'title', text: 'text', url: 'url' },
+  }, 'share target POST is rendered by the service worker without reaching the host');
+  assert.ok(existsSync(join(OUT, 'share/index.html')), 'share review page missing from export');
+  assert.ok(existsSync(join(OUT, 'share-copy.js')), 'share copy script missing from export');
+  assert.ok(existsSync(join(OUT, 'share-copy.js')), 'share copy script missing from export');
+  assert.ok(existsSync(join(OUT, 'share-copy.js')), 'safe share renderer must ship as a same-origin asset');
 
   const sizes = new Set(manifest.icons.map((i) => i.sizes));
   assert.ok(sizes.has('192x192') && sizes.has('512x512'), '192 and 512 icons required');
@@ -126,7 +167,7 @@ test('service worker never intercepts same-origin API or dynamic core routes', (
   assert.match(sw, /\/\(\?:api\|v1\)/, 'API and indexer prefixes must be excluded');
   assert.match(sw, /if \(isDynamicApiPath\(url\.pathname\)\) return;/,
     'API paths must bypass respondWith and all Cache API paths');
-  assert.match(sw, /nsat-pwa-v4/, 'cache version must change when offline behavior changes');
+  assert.match(sw, /nsat-pwa-v6/, 'cache version must change when offline behavior changes');
 });
 
 test('offline shell precache list resolves inside the export', () => {
@@ -146,6 +187,7 @@ test('offline shell precache list resolves inside the export', () => {
     assert.ok(existsSync(join(OUT, rel)), `SHELL precaches ${p} but ${rel} is not in the export`);
   }
   assert.ok(paths.includes('wallet/'), 'the wallet itself must be part of the offline shell');
+  assert.ok(paths.includes('share/'), 'the share review page must be available offline after a share is received');
   assert.ok(paths.includes('offline.html'), 'offline.html must be part of the offline shell');
 });
 
@@ -174,21 +216,42 @@ test('security, terms and privacy pages ship and are linked from the footer', ()
 
 test('Google sign-in disclosures, setup UI, and targeted CSP ship in the static export', () => {
   const privacy = readFileSync(join(OUT, 'privacy/index.html'), 'utf8');
-  assert.match(privacy, /Google sign-in is optional/);
+  assert.match(privacy, /website account sign-in is required to open the wallet/i);
+  assert.doesNotMatch(privacy, /Google sign-in is optional|wallet also opens without a website account|sign-in optionally identifies/i);
+  assert.match(privacy, /Signing out ends that session/);
   assert.match(privacy, /does not request Gmail mailbox access/);
   // Sign-in itself sends no wallet data; a public address is stored only when
   // the user links one, and the disclosure has to say both things.
   assert.match(privacy, /does not send the wallet name, seed, password, balance or history/);
   assert.match(privacy, /a wallet address is stored only if you choose to link one/);
+  assert.match(privacy, /Remember this device/);
+  assert.match(privacy, /never unlocks the wallet/);
+  assert.match(privacy, /Do not enable it on a shared device/);
   assert.match(privacy, /Linked wallet address \(optional\)/);
   assert.match(privacy, /Wallet address link \(only when you link one\)/);
+  assert.match(privacy, /Device unlock \(only if you turn it on\)/);
+  assert.match(privacy, /no face or fingerprint image\/template is available to or sent by this site/i);
+  const security = readFileSync(join(OUT, 'security/index.html'), 'utf8');
+  const terms = readFileSync(join(OUT, 'terms/index.html'), 'utf8');
+  assert.match(terms, /website account sign-in is required/i);
+  assert.doesNotMatch(terms, /Google sign-in is optional|wallet also opens without an account/i);
+  assert.match(security, /website account sign-in is not wallet custody/i);
+  assert.doesNotMatch(security, /Google sign-in is optional|wallet also opens without a website account/i);
+  assert.match(security, /Optional device unlock/);
+  assert.match(security, /Face ID, fingerprint, Windows Hello/);
+
   const clientBundles = files
     .filter((f) => f.endsWith('.js'))
     .map((f) => readFileSync(f, 'utf8'))
     .join('\n');
   assert.match(clientBundles, /Website account/);
   assert.match(clientBundles, /This does not unlock, back up, or sync your NSAT wallet/);
-  assert.match(clientBundles, /Google sign-in is not configured in this build yet/);
+  assert.match(clientBundles, /Account sign-in is not configured in this build/);
+  assert.match(clientBundles, /wallet cannot be opened until it is enabled/);
+  assert.match(clientBundles, /Remember this device/);
+  assert.match(clientBundles, /stay signed in to this website on this browser/);
+  assert.match(clientBundles, /Set up Face ID \/ device unlock/);
+  assert.match(clientBundles, /Unlock with this device/);
   assert.match(clientBundles, /Watch only/);
   assert.match(clientBundles, /sending still needs the wallet password and key on the device that signs/);
 
@@ -208,11 +271,33 @@ test('Google sign-in disclosures, setup UI, and targeted CSP ship in the static 
 test('the homepage IS the wallet, not a landing page', () => {
   const home = readFileSync(join(OUT, 'index.html'), 'utf8');
 
-  // The wallet shell and its first-time onboarding render at "/" itself.
+  // The wallet shell renders at "/" itself. A signed-out browser gets the
+  // required account gate. Create/import forms exist in the bundle but must
+  // not render before account sign-in.
   assert.match(home, /nw-root/, 'homepage does not render the wallet shell');
-  assert.match(home, /Create a New Wallet/, 'homepage has no create-wallet action');
-  assert.match(home, /Import Existing Wallet/, 'homepage has no import action');
+  assert.match(home, /nw-gate/, 'signed-out homepage does not offer the wallet gate');
+  assert.match(home, /Open your wallet/, 'the gate must name what it does');
+  // The buttons themselves are client-side (the gate reports the in-flight
+  // session check in the static HTML), so they are asserted in the bundle below.
+  assert.match(home, /Checking sign-in session|Account sign-in is not configured/,
+    'the gate must show auth loading or an explicit configuration blocker');
+  assert.doesNotMatch(home, /Create a New Wallet/, 'wallet forms must not render before sign-in');
+  assert.doesNotMatch(home, /Import Existing Wallet/, 'wallet import must not render before sign-in');
   assert.match(home, /href="\/download\/?"/, 'homepage has no browser-extension action');
+
+  // The actions still ship in the client bundle, so signing in needs no reload.
+  const walletBundle = files
+    .filter((f) => f.endsWith('.js'))
+    .map((f) => readFileSync(f, 'utf8'))
+    .join('\n');
+  assert.match(walletBundle, /Continue with Google/, 'wallet bundle cannot start a session');
+  assert.doesNotMatch(walletBundle, /Use without an account/, 'account gate must not offer a bypass');
+  assert.doesNotMatch(walletBundle, /onUseStandalone|setStandalone/,
+    'wallet bundle must not contain a client-side account-gate bypass');
+  assert.match(walletBundle, /Account sign-in is not configured in this build/,
+    'unconfigured auth must show a blocker instead of opening an accountless wallet');
+  assert.match(walletBundle, /Create a New Wallet/, 'wallet bundle lost its create action');
+  assert.match(walletBundle, /Import Existing Wallet/, 'wallet bundle lost its import action');
 
   // No intermediate marketing/entry page may sit in front of the wallet.
   assert.doesNotMatch(home, /Open NSAT Wallet/, 'the old landing CTA is still on the homepage');

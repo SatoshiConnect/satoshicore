@@ -62,10 +62,32 @@ const NETWORK_ID = process.env.NSAT_EXT_NETWORK_ID
 const IDLE_LOCK_MS = process.env.NSAT_EXT_IDLE_LOCK_MS || String(5 * 60_000);
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 
+// Never reachable in the popup (no Firebase config is compiled in); the shapes
+// only exist so the module graph resolves without the real SDK.
+const FIREBASE_STUB = `
+const noop = () => {};
+const app = { name: '[DEFAULT]' };
+export const getApps = () => [];
+export const getApp = () => app;
+export const initializeApp = () => app;
+export const initializeAuth = () => ({});
+export const getFirestore = () => ({});
+export const browserLocalPersistence = {};
+export const browserSessionPersistence = {};
+export const browserPopupRedirectResolver = {};
+export const signOut = noop;
+export default { getApps, getApp, initializeApp, initializeAuth, getFirestore };
+`;
+
 const define = {
   'process.env.NODE_ENV': '"production"',
   'process.env.NEXT_PUBLIC_API_SAME_ORIGIN': '"0"',
   'process.env.NEXT_PUBLIC_EXTENSION_BUILD': '"1"',
+  // The MV3 popup has no site origin and the gateway allowlists browser origins,
+  // so the chat surface stays off here. It must still be *defined*: a bare
+  // process.env read would throw ReferenceError at popup load (no `process` in
+  // an extension page) and blank the whole wallet.
+  'process.env.NEXT_PUBLIC_CHAT_RELAY': '"0"',
   'process.env.NEXT_PUBLIC_FIREBASE_API_KEY': '""',
   'process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN': '""',
   'process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID': '""',
@@ -95,20 +117,41 @@ await build({
   logLevel: 'info',
   legalComments: 'none',
   // The website's optional Google login is not supported in the MV3 popup.
-  // Stub only that web-only component for this build to avoid bundling Firebase
-  // Auth, browser OAuth domains, or Google account UI into the extension.
+  // Stub the web-account-only components for this build to avoid bundling
+  // Firebase Auth, browser OAuth domains, or Google account UI into the
+  // extension. Both are rendered only when SHOW_GOOGLE_ACCOUNT is on, which is
+  // false for every extension build.
   plugins: [{
     name: 'exclude-web-google-login-from-extension',
     setup(builder) {
-      builder.onResolve({ filter: /^\.\/GoogleAccount$/ }, (args) => {
+      builder.onResolve({ filter: /^\.\/(GoogleAccount|ProfileCard)$/ }, (args) => {
         if (args.importer.endsWith('/components/WalletPanel.js')) {
-          return { path: 'google-account-stub', namespace: 'wallet-extension' };
+          const profile = args.path.endsWith('ProfileCard');
+          return {
+            path: profile ? 'profile-card-stub' : 'google-account-stub',
+            namespace: 'wallet-extension',
+          };
         }
         return null;
       });
-      builder.onLoad({ filter: /.*/, namespace: 'wallet-extension' }, () => ({
-        contents: 'export default function GoogleAccount() { return null; }',
+      builder.onLoad({ filter: /.*/, namespace: 'wallet-extension' }, (args) => ({
+        contents: args.path === 'profile-card-stub'
+          ? 'export default function ProfileCard() { return null; }'
+          : 'export default function GoogleAccount() { return null; }',
         loader: 'jsx',
+      }));
+      // Bundled components (WalletPanel, ContactsCard, ProfileCard,
+      // DriveBackupCard, …) still import lib/firebaseAuth.js, whose dynamic
+      // imports would otherwise pull the whole Firebase SDK — and with it the
+      // OAuth loopback constant and identitytoolkit hosts — into the MV3
+      // bundle. The popup builds with an empty Firebase config, so
+      // isFirebaseWebConfigured() is false and none of it can ever run.
+      builder.onResolve({ filter: /^firebase\/(app|auth|firestore)$/ }, () => ({
+        path: 'firebase-stub', namespace: 'wallet-extension-firebase',
+      }));
+      builder.onLoad({ filter: /.*/, namespace: 'wallet-extension-firebase' }, () => ({
+        contents: FIREBASE_STUB,
+        loader: 'js',
       }));
     },
   }],

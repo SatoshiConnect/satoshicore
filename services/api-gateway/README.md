@@ -24,7 +24,10 @@ administrative endpoints are unreachable through the gateway by design.
 | `PORT` | `8787` | Listen port |
 | `NSAT_CORE_HTTP_URL` | `http://127.0.0.1:11626` | nsat-core node HTTP endpoint; run the gateway on the same host/private network as the node |
 | `ALLOWED_ORIGINS` | *(none)* | Comma-separated origin allowlist, e.g. `https://satoshicore.org,https://www.satoshicore.org`. Empty = no CORS (non-browser clients only) |
-| `RATE_WINDOW_MS` / `RATE_MAX_REQUESTS` | `60000` / `120` | Per-IP rate limit |
+| `RATE_WINDOW_MS` / `RATE_MAX_REQUESTS` | `60000` / `120` | Per-IP limit for wallet/API routes (not chat) |
+| `RATE_CHAT_READ_MAX` | `300` | Per-IP chat reads (mailbox, tombstones, receipts, presence, blocks) per `RATE_CHAT_READ_WINDOW_MS` |
+| `RATE_CHAT_WRITE_MAX` | `120` | Per-IP chat sends/acks/typing per `RATE_CHAT_WRITE_WINDOW_MS`; never above the API budget |
+| `RATE_CHAT_CONNECT_MAX` | `30` | Per-IP event-stream handshakes per `RATE_CHAT_CONNECT_WINDOW_MS` (bounds reconnect loops) |
 | `MAX_BODY_BYTES` | `65536` | Request body cap |
 | `CORE_TIMEOUT_MS` | `10000` | Upstream timeout |
 | `CORE_BUSY_RETRIES` / `CORE_BUSY_DELAY_MS` | `4` / `150` | Bounded backoff for core `{status:"busy"}` ledger-close windows (busy is retried, never answered as a success/zero balance) |

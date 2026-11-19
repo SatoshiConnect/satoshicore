@@ -15,6 +15,7 @@
 'use strict';
 
 const http = require('node:http');
+const net = require('node:net');
 const { URL } = require('node:url');
 
 const CONFIG = {
@@ -32,9 +33,32 @@ const CONFIG = {
     .map((s) => s.trim())
     .filter(Boolean),
   maxBodyBytes: Number(process.env.MAX_BODY_BYTES) || 64 * 1024,
+  // Transport limits, counted per client IP and per route class. The wallet's
+  // chain reads and the chat relay have different request shapes, so they no
+  // longer share one bucket: an open chat must not spend the wallet's
+  // allowance, and a burst of chain polling must not close a conversation.
+  // Messaging abuse stays bounded by the relay's signed-request checks, the
+  // per-sender daily quota, the mailbox ceiling and the block list.
   rateLimit: {
     windowMs: Number(process.env.RATE_WINDOW_MS) || 60_000,
-    maxRequests: Number(process.env.RATE_MAX_REQUESTS) || 120
+    maxRequests: Number(process.env.RATE_MAX_REQUESTS) || 120,
+    chat: {
+      // Mailbox reads, tombstones, receipts, presence reads, block reads.
+      read: {
+        windowMs: Number(process.env.RATE_CHAT_READ_WINDOW_MS) || 60_000,
+        maxRequests: Number(process.env.RATE_CHAT_READ_MAX) || 300
+      },
+      // Sends, acks, deletes, typing, presence beats and block edits.
+      write: {
+        windowMs: Number(process.env.RATE_CHAT_WRITE_WINDOW_MS) || 60_000,
+        maxRequests: Number(process.env.RATE_CHAT_WRITE_MAX) || 120
+      },
+      // Event-stream handshakes: a reconnect loop must not open a stream a second.
+      connect: {
+        windowMs: Number(process.env.RATE_CHAT_CONNECT_WINDOW_MS) || 60_000,
+        maxRequests: Number(process.env.RATE_CHAT_CONNECT_MAX) || 30
+      }
+    }
   },
   // Timeout for upstream core calls (ms).
   coreTimeoutMs: Number(process.env.CORE_TIMEOUT_MS) || 10_000,
@@ -76,23 +100,88 @@ function log(level, event, fields = {}) {
   );
 }
 
-// --- rate limiting (fixed window per IP) ------------------------------------
-const rateBuckets = new Map();
-function rateLimited(ip) {
-  const { windowMs, maxRequests } = CONFIG.rateLimit;
-  const now = Date.now();
-  const bucket = rateBuckets.get(ip) || { count: 0, resetAt: now + windowMs };
+// --- client address ---------------------------------------------------------
+// Caddy is the only public listener and reaches this process over loopback.
+// Without reading its X-Forwarded-For, every browser shares 127.0.0.1 and one
+// 120 req/min bucket, so a handful of tabs can lock the whole site out with
+// 429s. Trust the header only from a loopback peer; a direct remote request
+// cannot spoof its bucket.
+const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+function clientIp(req) {
+  const remote = String(req.socket?.remoteAddress || 'unknown');
+  if (!LOOPBACK_ADDRESSES.has(remote)) return remote;
+  const forwarded = String(req.headers?.['x-forwarded-for'] || '')
+    .split(',')[0]
+    .trim();
+  return net.isIP(forwarded) ? forwarded : remote;
+}
+
+// --- rate limiting (fixed window per client IP, per route class) -------------
+// A spoofed-IP flood must not grow a map without bound. Once the limit is
+// reached, expired buckets go first, then the oldest insertion-order entries;
+// an evicted IP simply starts a fresh window.
+const RATE_BUCKET_LIMIT = 10_000;
+
+/** One bounded fixed-window counter. Returns the verdict and the wait left. */
+function countRequest(buckets, ip, now, windowMs, maxRequests) {
+  const bucket = buckets.get(ip) || { count: 0, resetAt: now + windowMs };
   if (now > bucket.resetAt) {
     bucket.count = 0;
     bucket.resetAt = now + windowMs;
   }
   bucket.count += 1;
-  rateBuckets.set(ip, bucket);
-  if (rateBuckets.size > 10_000) {
-    // bounded memory: drop expired buckets
-    for (const [k, b] of rateBuckets) if (now > b.resetAt) rateBuckets.delete(k);
+  buckets.set(ip, bucket);
+  if (buckets.size > RATE_BUCKET_LIMIT) {
+    for (const [key, entry] of buckets) {
+      if (now > entry.resetAt) buckets.delete(key);
+    }
+    for (const key of buckets.keys()) {
+      if (buckets.size <= RATE_BUCKET_LIMIT) break;
+      buckets.delete(key);
+    }
   }
-  return bucket.count > maxRequests;
+  return {
+    limited: bucket.count > maxRequests,
+    retryAfterMs: Math.max(0, bucket.resetAt - now)
+  };
+}
+
+const rateBuckets = new Map();
+const rateChatBuckets = { read: new Map(), write: new Map(), connect: new Map() };
+
+/** Wallet/API calls keep exactly the previous single-window behaviour. */
+function rateLimited(ip, now = Date.now(), buckets = rateBuckets) {
+  const { windowMs, maxRequests } = CONFIG.rateLimit;
+  return countRequest(buckets, ip, now, windowMs, maxRequests).limited;
+}
+
+/**
+ * Which limit a chat path is charged to. Sending, reading history and opening
+ * the event stream have separate budgets on purpose: a hundred polls must never
+ * block a message, and a reconnect storm must never close a room.
+ */
+const CHAT_READ_PATHS = new Set([
+  '/api/v1/chat/messages',
+  '/api/v1/chat/tombstones',
+  '/api/v1/chat/read',
+  '/api/v1/chat/presence',
+  '/api/v1/chat/blocks',
+  '/api/v1/chat/keys'
+]);
+function chatRouteClass(method, pathname) {
+  if (pathname === '/api/v1/chat/events') return 'connect';
+  if (String(method).toUpperCase() === 'GET' && CHAT_READ_PATHS.has(pathname)) return 'read';
+  return 'write';
+}
+
+/** The limit for one request; `api` covers everything outside the relay. */
+function rateLimitFor(limitClass, ip, now = Date.now()) {
+  if (limitClass === 'api') {
+    const { windowMs, maxRequests } = CONFIG.rateLimit;
+    return countRequest(rateBuckets, ip, now, windowMs, maxRequests);
+  }
+  const config = CONFIG.rateLimit.chat[limitClass];
+  return countRequest(rateChatBuckets[limitClass], ip, now, config.windowMs, config.maxRequests);
 }
 
 // --- helpers ----------------------------------------------------------------
@@ -110,11 +199,12 @@ function securityHeaders() {
   };
 }
 
-function sendJson(res, status, body, req) {
+function sendJson(res, status, body, req, extraHeaders = null) {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
     ...(req ? corsHeaders(req) : {}),
     ...securityHeaders(),
+    ...(extraHeaders || {}),
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(payload)
   });
@@ -129,7 +219,7 @@ function corsHeaders(req) {
       'Access-Control-Allow-Origin': origin,
       Vary: 'Origin',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Allow-Headers': 'Content-Type, X-NSAT-Address, X-NSAT-Device, X-NSAT-Chat-Pub, X-NSAT-Chat-Delegation, X-NSAT-Ts, X-NSAT-Nonce, X-NSAT-Signature',
       'Access-Control-Max-Age': '600'
     };
   }
@@ -225,6 +315,10 @@ const TX_DETAIL_RE = /^\/v1\/tx\/([^/]+)$/;
 const ACCOUNT_TX_RE = /^\/v1\/accounts\/([^/]+)\/transactions$/;
 const CONFIRMATION_PREFIX = '/v1/confirmations/';
 const MAX_HISTORY_LIMIT = 200;
+// A history page cursor: `ledger:opIndex:txHash`, as issued by the indexer.
+// Validated here so a malformed value is a 400 instead of reaching the index
+// and coming back as a confusing empty page.
+const HISTORY_CURSOR_RE = /^\d{1,12}:\d{1,6}:[0-9a-f]{64}$/;
 
 let activeEventStreams = 0;
 let identityCache = { at: 0, network: null };
@@ -420,6 +514,9 @@ function handleIndexerRoute(req, res, pathname) {
   if (pathname === '/v1/health') {
     return handleIndexerRead(req, res, '/v1/health');
   }
+  if (pathname === '/v1/mint') {
+    return handleIndexerRead(req, res, '/v1/mint');
+  }
   const txDetail = TX_DETAIL_RE.exec(pathname);
   if (txDetail) {
     if (!TX_HASH_RE.test(txDetail[1])) {
@@ -434,10 +531,18 @@ function handleIndexerRoute(req, res, pathname) {
     }
     // Bound the page size here rather than trusting the caller: the indexer's
     // own limit is honoured but never allowed to grow the response without end.
-    const raw = new URL(req.url, 'http://x').searchParams.get('limit');
+    const params = new URL(req.url, 'http://x').searchParams;
+    const raw = params.get('limit');
     const parsed = Number.parseInt(raw ?? '', 10);
     const limit = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, MAX_HISTORY_LIMIT) : 50;
-    return handleIndexerRead(req, res, `/v1/accounts/${accountTx[1]}/transactions?limit=${limit}`);
+    const before = params.get('before');
+    if (before !== null && !HISTORY_CURSOR_RE.test(before)) {
+      return sendJson(res, 400, { error: 'before must be ledger:opIndex:txHash' }, req);
+    }
+    const query = before === null
+      ? `?limit=${limit}`
+      : `?limit=${limit}&before=${before}`;
+    return handleIndexerRead(req, res, `/v1/accounts/${accountTx[1]}/transactions${query}`);
   }
   const match = EVENT_ROUTE_RE.exec(pathname);
   if (!match) return sendJson(res, 404, { error: 'not found' }, req);
@@ -917,10 +1022,141 @@ const ROUTES = {
   }
 };
 
+// --- encrypted chat relay (opt-in) -------------------------------------------
+// Off unless NSAT_CHAT_RELAY=1. Enabling it adds endpoints and a SQLite file,
+// which is an operator decision, not something a deploy turns on by accident
+// (docs/E2E-CHAT-DESIGN.md). The relay stores ciphertext only; the request
+// signature (wallet key) is the identity it checks.
+const CHAT_PREFIX = '/api/v1/chat/';
+const CHAT_ENABLED = process.env.NSAT_CHAT_RELAY === '1';
+// Web Push (chat wake-ups while the app is closed) is opt-in at the operator
+// level too: without a VAPID keypair the relay simply does not queue alerts and
+// the UI hides the control. The private key never leaves this process.
+const PUSH_CONFIG = {
+  publicKey: String(process.env.NSAT_VAPID_PUBLIC_KEY || '').trim(),
+  privateKey: String(process.env.NSAT_VAPID_PRIVATE_KEY || '').trim(),
+  subject: String(process.env.NSAT_VAPID_SUBJECT || '').trim() || undefined,
+  // 0 disables the drain timer (tests that only inspect the queue use this).
+  intervalMs: Number(process.env.NSAT_PUSH_INTERVAL_MS) >= 0
+    ? Number(process.env.NSAT_PUSH_INTERVAL_MS)
+    : 2_500
+};
+let chatRelayPromise = null;
+let pushDrainTimer = null;
+
+function chatRelay() {
+  if (!chatRelayPromise) {
+    const dbPath = process.env.NSAT_CHAT_DB
+      || require('node:path').join(__dirname, 'data', 'chat.sqlite');
+    require('node:fs').mkdirSync(require('node:path').dirname(dbPath), { recursive: true });
+    // Operator-tunable safety valves: a mailbox ceiling that can be raised for a
+    // busy relay, and how often expired mail is collected. Both have documented
+    // defaults in chat-relay.mjs.
+    const maxPerRecipient = Number(process.env.NSAT_CHAT_MAX_PENDING) || undefined;
+    const gcIntervalMs = Number(process.env.NSAT_CHAT_GC_MS) || undefined;
+    chatRelayPromise = Promise.all([import('./chat-relay.mjs'), import('./push.mjs')])
+      .then(([{ createChatRelay }, { createPushTransport }]) => {
+        const push = createPushTransport(PUSH_CONFIG);
+        const relay = createChatRelay({ dbPath, maxPerRecipient, gcIntervalMs, push });
+        // One drain pass at a time; `pushTick` claims rows so an overlapping
+        // timer cannot deliver the same alert twice.
+        if (push.configured && PUSH_CONFIG.intervalMs > 0 && !pushDrainTimer) {
+          pushDrainTimer = setInterval(() => {
+            relay.pushTick().catch(() => {});
+          }, PUSH_CONFIG.intervalMs);
+          if (typeof pushDrainTimer.unref === 'function') pushDrainTimer.unref();
+        }
+        return relay;
+      })
+      .catch((error) => {
+        chatRelayPromise = null;
+        throw error;
+      });
+  }
+  return chatRelayPromise;
+}
+
+function handleChatRequest(req, res, pathname, searchParams) {
+  let body = Buffer.alloc(0);
+  let aborted = false;
+  req.on('data', (chunk) => {
+    if (aborted) return;
+    body = Buffer.concat([body, chunk]);
+    if (body.length > 16 * 1024) {
+      aborted = true;
+      if (req.pause) req.pause();
+      sendJson(res, 413, { error: 'body too large' }, req);
+      res.on('finish', () => { req.resume(); req.destroy(); });
+    }
+  });
+  req.on('error', () => {});
+  req.on('end', async () => {
+    if (aborted) return;
+    let parsed = null;
+    try { parsed = body.length ? JSON.parse(body.toString('utf8')) : null; } catch { parsed = null; }
+    try {
+      const relay = await chatRelay();
+      const result = relay.handle({
+        method: req.method,
+        path: pathname,
+        query: Object.fromEntries(searchParams.entries()),
+        headers: req.headers,
+        body: parsed,
+      });
+      return sendJson(res, result.status, result.body, req);
+    } catch (error) {
+      // A stable code only. An error message can carry input fragments, and a
+      // private message must never reach the log through a failure path.
+      log('error', 'chat_relay_failed', { code: String(error?.code || error?.name || 'unknown') });
+      return sendJson(res, 500, { error: 'chat relay unavailable' }, req);
+    }
+  });
+}
+
+async function handleChatEvents(req, res, pathname) {
+  let relay;
+  try {
+    relay = await chatRelay();
+  } catch {
+    return sendJson(res, 503, { error: 'chat relay unavailable' }, req);
+  }
+  const auth = relay.authenticate({ method: req.method, path: pathname, headers: req.headers });
+  if (!auth) return sendJson(res, 401, { error: 'unauthorized' }, req);
+
+  res.writeHead(200, {
+    ...corsHeaders(req),
+    ...securityHeaders(),
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+  res.write('retry: 3000\n\n');
+  res.write('event: ready\ndata: {}\n\n');
+
+  const unsubscribe = relay.subscribe((event) => {
+    if (event.recipient !== auth.address) return;
+    const { recipient, ...payload } = event;
+    res.write(`event: ${payload.type || 'message'}\ndata: ${JSON.stringify(payload)}\n\n`);
+  });
+  // A comment keeps the connection alive through proxies without inventing an
+  // application event. It contains no address, message id or ciphertext.
+  const ping = setInterval(() => {
+    try { res.write(': ping\n\n'); } catch { /* closed */ }
+  }, 25_000);
+  const cleanup = () => {
+    clearInterval(ping);
+    unsubscribe();
+  };
+  req.on('close', cleanup);
+  req.on('error', cleanup);
+  res.on('close', cleanup);
+}
+
 // --- server ------------------------------------------------------------------
 function createServer() {
   return http.createServer((req, res) => {
-    const ip = req.socket.remoteAddress || 'unknown';
+    const ip = clientIp(req);
 
     if (req.method === 'OPTIONS') {
       const headers = corsHeaders(req);
@@ -932,15 +1168,35 @@ function createServer() {
       return res.end();
     }
 
-    if (rateLimited(ip)) {
-      log('warn', 'rate_limited', { ip });
-      return sendJson(res, 429, { error: 'rate limit exceeded' });
+    const url = new URL(req.url, 'http://x');
+    const pathname = url.pathname;
+    // Chat is charged to its own class, so opening a conversation cannot be
+    // refused because wallet polling already used the API allowance.
+    const limitClass = CHAT_ENABLED && pathname.startsWith(CHAT_PREFIX)
+      ? chatRouteClass(req.method, pathname)
+      : 'api';
+    const limit = rateLimitFor(limitClass, ip);
+    if (limit.limited) {
+      const retryAfter = Math.max(1, Math.ceil(limit.retryAfterMs / 1000));
+      log('warn', 'rate_limited', { ip, class: limitClass, retry_after: retryAfter });
+      return sendJson(
+        res, 429,
+        { error: 'rate limit exceeded', retryAfter },
+        req,
+        { 'Retry-After': String(retryAfter) }
+      );
     }
-
-    const pathname = new URL(req.url, 'http://x').pathname;
+    if (CHAT_ENABLED && pathname === '/api/v1/chat/events') {
+      if (req.method !== 'GET') return sendJson(res, 405, { error: 'method not allowed' }, req);
+      return handleChatEvents(req, res, pathname);
+    }
+    if (CHAT_ENABLED && pathname.startsWith(CHAT_PREFIX)) {
+      return handleChatRequest(req, res, pathname, url.searchParams);
+    }
     const isIndexerRoute =
       pathname.startsWith(CONFIRMATION_PREFIX) ||
       pathname === '/v1/health' ||
+      pathname === '/v1/mint' ||
       EVENT_ROUTE_RE.test(pathname) ||
       TX_DETAIL_RE.test(pathname) ||
       ACCOUNT_TX_RE.test(pathname);
@@ -997,5 +1253,16 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createServer, validateEnvelope, validAccountId, CONFIG };
+module.exports = {
+  createServer,
+  validateEnvelope,
+  validAccountId,
+  CONFIG,
+  // Exported for the bounded-memory and proxy-address tests; not a public HTTP surface.
+  clientIp,
+  rateLimited,
+  rateLimitFor,
+  chatRouteClass,
+  RATE_BUCKET_LIMIT,
+};
 

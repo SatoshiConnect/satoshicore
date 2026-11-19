@@ -1,5 +1,5 @@
 // API Gateway tests: unit (validation) + integration (mock nsat-core node).
-// Run: node --test tests/
+// Run: npm test (explicit test files; Node 24 no longer accepts a directory).
 'use strict';
 
 const test = require('node:test');
@@ -90,6 +90,14 @@ test('gateway: health, chain info proxy, signed tx relay, CORS, 404', async () =
     // CORS rejected for unknown origin
     const badOrigin = await request(gwPort, '/api/v1/chain/info', { origin: 'https://evil.example' });
     assert.equal(badOrigin.headers['access-control-allow-origin'], undefined);
+
+    // The chat device id travels as its own signed header, so preflight must
+    // allow it alongside the signature headers.
+    const preflight = await request(gwPort, '/api/v1/chat/messages', {
+      method: 'OPTIONS', origin: 'https://satoshicore.org',
+    });
+    assert.equal(preflight.status, 204);
+    assert.match(preflight.headers['access-control-allow-headers'], /X-NSAT-Device/);
 
     // signed tx relay — envelope forwarded verbatim to core
     const tx = await request(gwPort, '/api/v1/tx', {
@@ -449,5 +457,53 @@ test('explorer snapshot still reports a field the node never answered', async ()
   } finally {
     gateway.close();
     mockCore.close();
+  }
+});
+
+// History pagination + Founder Mint status.
+//
+// The cursor must reach the indexer unchanged: a gateway that dropped it would
+// answer page 1 forever, which looks like "load older" silently failing.
+test('history cursor and mint route are forwarded to the indexer', async () => {
+  const mockCore = await startMockCore();
+  const seen = [];
+  const mockIndexer = http.createServer((req, res) => {
+    seen.push(req.url);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, items: [], next_cursor: null, mint: null }));
+  });
+  await new Promise((r) => mockIndexer.listen(0, '127.0.0.1', r));
+
+  process.env.NSAT_CORE_HTTP_URL = `http://127.0.0.1:${mockCore.address().port}`;
+  process.env.NSAT_INDEXER_URL = `http://127.0.0.1:${mockIndexer.address().port}`;
+  process.env.RATE_MAX_REQUESTS = '1000';
+  delete require.cache[require.resolve('../server.js')];
+  const { createServer: freshCreate } = require('../server.js');
+  const gateway = freshCreate();
+  await new Promise((r) => gateway.listen(0, '127.0.0.1', r));
+
+  try {
+    const acc = 'GBNVPJVAP2DF4J6OFBSAHNN6CMVYKY2BVEMME2KVWNW66522BQT5G6OW';
+    const cursor = `362477:0:${'ab'.repeat(32)}`;
+    const page = await request(
+      gateway.address().port,
+      `/v1/accounts/${acc}/transactions?limit=25&before=${encodeURIComponent(cursor)}`
+    );
+    assert.equal(page.status, 200);
+    assert.ok(
+      seen.includes(`/v1/accounts/${acc}/transactions?limit=25&before=${cursor}`),
+      `indexer saw ${seen.join(', ')}`
+    );
+
+    const bad = await request(gateway.address().port, `/v1/accounts/${acc}/transactions?before=not-a-cursor`);
+    assert.equal(bad.status, 400);
+
+    const mint = await request(gateway.address().port, '/v1/mint');
+    assert.equal(mint.status, 200);
+    assert.ok(seen.includes('/v1/mint'), `indexer saw ${seen.join(', ')}`);
+  } finally {
+    gateway.close();
+    mockCore.close();
+    mockIndexer.close();
   }
 });

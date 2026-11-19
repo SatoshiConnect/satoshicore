@@ -9,10 +9,40 @@
   "id": "./",
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui"],
-  "orientation": "portrait-primary",
+  "orientation": "any",
   "background_color": "#0a0c11",
   "theme_color": "#0a0c11",
   "categories": ["finance", "utilities"],
+  "shortcuts": [
+    {
+      "name": "Open wallet",
+      "short_name": "Wallet",
+      "description": "Open the NSAT wallet",
+      "url": "./"
+    },
+    {
+      "name": "Chats",
+      "short_name": "Chats",
+      "description": "Open encrypted chats",
+      "url": "./?view=chat"
+    },
+    {
+      "name": "Receive NSAT",
+      "short_name": "Receive",
+      "description": "Open the receive screen",
+      "url": "./?view=receive"
+    }
+  ],
+  "share_target": {
+    "action": "share/",
+    "method": "POST",
+    "enctype": "application/x-www-form-urlencoded",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  },
   "icons": [
     {
       "src": "icons/icon-192.png",
