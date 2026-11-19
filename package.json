@@ -54,6 +54,7 @@
   },
   "dependencies": {
     "@colyseus/sdk": "0.18.10",
+    "emoji-picker-react": "4.14.1",
     "firebase": "12.14.0",
     "next": "14.2.15",
     "qrcode": "^1.5.4",

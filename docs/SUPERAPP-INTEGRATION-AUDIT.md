@@ -230,3 +230,58 @@ itself is covered by the two-client integration test with an injected verifier.
    with a single private-chat screen, and only then expand.
 5. Still unmeasured: CPU/memory per room and concurrent capacity. No capacity
    claim is made.
+
+## 9. Update — upstream repositories cloned, verified and first UI source adopted (2026-11-19)
+
+All five upstream projects were cloned outside the Git working tree at
+`_upstream_sources/` (project root, one level above this repo), so no external
+source can be committed accidentally. Each hash is `git rev-parse HEAD` after a
+`--depth 1` clone; each licence was read from the file itself.
+
+| Directory | Upstream | Commit | Licence | Stack measured | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| `telegram-web/` | TelegramOrg/Telegram-web-z | `293ede7b20390d04934f4beee6304c3560bbb5d6` | **GPL-3.0** | TypeScript, Vite 13.0.1, MTProto | **Cannot link.** Copyleft would relicense this bundle; also speaks Telegram's API, not our relay. |
+| `telegram-clone/` | SaeedNix/telegram-clone | `618e4164e623086883deceada713e302e9a648f3` | MIT | **Next 16, React 19**, Tailwind 4, Zustand, Socket.io, Mongoose | Runs (build below). Its screens import their stores/Mongoose models/Socket.io hooks, so lifting a screen without duplicating our chat backend is not possible. Permissive **components** are reusable. |
+| `wallet-pwa/` | cashubtc/cashu.me | `002a0a367966ffda04bb29d1ca888fcbcd070e16` | MIT | Quasar + Vue/Vite, Cashu protocol | Not a React component set; protocol is not NSAT. Not imported. |
+| `pixel-world-rpg/` | RSamaium/RPG-JS | `b6350fe6f55ff6a7e08b1490ccace312e242a451` | MIT | pnpm monorepo, `@rpgjs/client` 5.4.0, `@rpgjs/vite`, Pixi, `@signe/room` | Needs its Vite pipeline and its own room server; this repo is Next 14 webpack and already runs Colyseus rooms. Not imported this slice. |
+| `pixel-world-social/` | PhatBanhGH/TheGathering | `484fa7f8ce81b8e15a6ca5c0a7de11e4845fddba` | **none** | Phaser + React + Vite | **No licence file = all rights reserved.** Not used. (Phaser itself is MIT and may be adopted from npm later.) |
+
+### 9.1 Source actually in the build
+
+- `emoji-picker-react@4.14.1` (**MIT**, the picker the inspected `telegram-clone`
+  depends on). Used in `components/ChatPanel.js`: a composer button opens the
+  upstream picker, lazily imported so it is a separate chunk, and the chosen
+  emoji is inserted into the encrypted draft.
+- `colyseus@0.18.12` / `@colyseus/sdk@0.18.10` (**MIT**) — already in the build
+  from section 8.3.
+
+No upstream application source was copied into this repo: the three UI apps are
+incompatible stacks (GPL, React 19 + their own data layer, Vue), and the world
+engines need their own build pipeline and room server.
+
+### 9.2 Evidence run
+
+```
+$ (cd _upstream_sources/telegram-clone && npm install && npm run build)
+✓ Generating static pages (9/9)   routes: / /api/auth/* /api/users/*
+$ npm run build        # satoshicore-web, with the upstream picker
+Static export built; /world 11.9 kB
+```
+
+Not verified: the picker was not clicked in a browser, because the composer only
+renders after a wallet is unlocked and this checkout has no wallet/Firebase env.
+The bundle builds and the picker is a lazily loaded chunk; the interaction itself
+is untested here.
+
+### 9.3 Next executable tasks
+
+1. **Chat parity:** the only legally usable Telegram-class source is Tinode
+   (Apache-2.0, React 19, own model) or `telegram-clone`'s permissive components.
+   Next slice: adopt its message-bubble and composer presentation into
+   `ChatPanel` behind the existing data layer, one screen, with its MIT notice.
+2. **World engine:** run the RPG-JS playground and evaluate serving its built
+   client as the world renderer while keeping our ticket-authenticated rooms.
+3. **Wallet UI:** nothing importable from cashu.me; keep the existing wallet UI
+   and use cashu.me only as an interaction reference.
+4. Unchanged blockers: no Firebase/world env in this checkout; character wallet
+   binding still absent.

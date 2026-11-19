@@ -17,6 +17,15 @@
 // wallet-specific details (address, blocking, payment request) sit behind the
 // details panel instead of in the middle of the conversation.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
+
+// Upstream UI, not a lookalike: emoji-picker-react (MIT, v4.14.1) is the picker
+// the inspected telegram-clone uses. Loaded lazily so a person who never opens
+// it never downloads it.
+const EmojiPicker = dynamic(
+  () => import('emoji-picker-react').then((module) => module.default),
+  { ssr: false },
+);
 
 import { createChatClient, createClientId } from '../lib/chatClient';
 import {
@@ -203,6 +212,14 @@ export default function ChatPanel({
   const threadStateRef = useRef([]);
   useEffect(() => { threadStateRef.current = thread; }, [thread]);
   const [draft, setDraft] = useState('');
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const [emojiTheme, setEmojiTheme] = useState('dark');
+
+  useEffect(() => {
+    if (!emojiOpen) return;
+    // The library follows its own theme prop, not our data-theme attribute.
+    setEmojiTheme(document.documentElement.dataset.theme === 'light' ? 'light' : 'dark');
+  }, [emojiOpen]);
   const [state, setState] = useState({ busy: false, note: '', published: false });
   const [inboxError, setInboxError] = useState('');
   const [relayNotice, setRelayNotice] = useState(null);
@@ -2928,6 +2945,27 @@ export default function ChatPanel({
             disabled={gate.blocked || (!onSendCoins && !onSendTo)}
             onClick={() => setSheet((value) => (value === 'none' ? 'menu' : 'none'))}>＋</button>
         )}
+        <div className="nw-emoji">
+          <button type="button" className="nw-chat-iconbtn" aria-label="Insert emoji"
+            aria-expanded={emojiOpen}
+            disabled={readOnly || state.busy || gate.blocked}
+            onClick={() => setEmojiOpen((value) => !value)}>☺</button>
+          {emojiOpen ? (
+            <div className="nw-emoji-pop" role="dialog" aria-label="Emoji picker">
+              <EmojiPicker
+                theme={emojiTheme}
+                width="100%"
+                height={340}
+                lazyLoadEmojis
+                searchPlaceHolder="Search emoji"
+                onEmojiClick={(emoji) => {
+                  setDraft((current) => `${current}${emoji.emoji}`.slice(0, MAX_TEXT_LENGTH));
+                  setEmojiOpen(false);
+                }}
+              />
+            </div>
+          ) : null}
+        </div>
         <textarea className="nw-chat-input" value={draft} maxLength={MAX_TEXT_LENGTH}
           placeholder={identityLoading
             ? 'Preparing encrypted chat…'

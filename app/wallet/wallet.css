@@ -2012,3 +2012,36 @@ label.nw-chip-btn:focus-within { outline: 2px solid var(--accent); outline-offse
     touch-action: manipulation;
   }
 }
+
+/* Emoji picker: the upstream emoji-picker-react component, wrapped so it opens
+   above the composer instead of pushing the message list around. */
+.nw-emoji {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+}
+
+.nw-emoji-pop {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 0;
+  z-index: 40;
+  width: min(330px, 78vw);
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid var(--border-input);
+  background: var(--card);
+  box-shadow: var(--shadow-card);
+}
+
+.nw-emoji-pop .epr-main {
+  border: 0;
+}
+
+.nw-emoji-pop .epr-search {
+  border-radius: 10px;
+}
+
+@media (max-width: 420px) {
+  .nw-emoji-pop { width: min(300px, 86vw); }
+}
