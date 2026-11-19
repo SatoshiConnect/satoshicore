@@ -179,6 +179,93 @@ service cloud.firestore {
       allow delete: if request.auth != null && resource.data.uid == request.auth.uid;
     }
 
+    // ---------------- characters ----------------
+    // characters/{owner}/list/{characterId} = {
+    //   characterId: "ch_…", owner: uid, name, appearance: {v, skin, hair, outfit, accessory},
+    //   walletBinding: {v, address, issuedAt, sig} | null, lastWallet: "G…" | null,
+    //   createdAt, updatedAt, deletedAt: null | int
+    // }
+    //
+    // One account, many characters; one character, one verified wallet address.
+    // The signature inside `walletBinding` is checked by the client and by every
+    // consumer of `resolveRecipient`; the rules enforce the parts a modified page
+    // could otherwise fake: the owning account, the exact shape, the range of
+    // every appearance index, and a canonical public address. Nothing in here is
+    // a key, a seed, a password or a real-world location.
+    //
+    //   - get: any signed-in account may read one character by its id, which is
+    //     what makes "meet a player, open their verified profile" work.
+    //   - list: closed, so characters cannot be enumerated; the world server
+    //     keeps presence, and discovery goes through an explicit id.
+    //   - delete: denied. Deleting a character writes a tombstone instead, so a
+    //     hard delete can never remove the only pointer to a funded wallet.
+    //   - create/update: owner only, with id, owner and createdAt immutable and a
+    //     tombstone impossible to revive.
+    function isCharacterId(value) {
+      return value is string && value.matches('^ch_[0-9a-f]{32}$');
+    }
+
+    function isAppearance(value) {
+      return value is map
+        && value.keys().hasOnly(['v', 'skin', 'hair', 'outfit', 'accessory'])
+        && value.v == 1
+        && value.skin is int && value.skin >= 0 && value.skin < 6
+        && value.hair is int && value.hair >= 0 && value.hair < 10
+        && value.outfit is int && value.outfit >= 0 && value.outfit < 12
+        && value.accessory is int && value.accessory >= 0 && value.accessory < 8;
+    }
+
+    function isWalletBinding(value) {
+      return value is map
+        && value.keys().hasOnly(['v', 'address', 'issuedAt', 'sig'])
+        && value.v == 1
+        && value.address is string && value.address.matches('^G[A-Z2-7]{55}$')
+        && value.issuedAt is int && value.issuedAt > 0
+        && value.sig is string && value.sig.size() >= 84 && value.sig.size() <= 96;
+    }
+
+    function isOptionalAddress(value) {
+      return value == null || (value is string && value.matches('^G[A-Z2-7]{55}$'));
+    }
+
+    match /characters/{owner}/list/{characterId} {
+      allow get: if request.auth != null;
+      allow list: if false;
+      allow delete: if false;
+
+      allow create, update: if request.auth != null
+        && request.auth.uid == owner
+        && isCharacterId(characterId)
+        && request.resource.data.keys().hasOnly([
+             'characterId', 'owner', 'name', 'appearance', 'walletBinding',
+             'lastWallet', 'createdAt', 'updatedAt', 'deletedAt'
+           ])
+        && request.resource.data.characterId == characterId
+        && request.resource.data.owner == owner
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 2
+        && request.resource.data.name.size() <= 24
+        && (request.resource.data.appearance == null
+            || isAppearance(request.resource.data.appearance))
+        && (request.resource.data.walletBinding == null
+            || isWalletBinding(request.resource.data.walletBinding))
+        && isOptionalAddress(request.resource.data.lastWallet)
+        && request.resource.data.createdAt is int
+        && request.resource.data.updatedAt is int
+        && (request.resource.data.deletedAt == null
+            || request.resource.data.deletedAt is int)
+        // A tombstone is final, keeps no binding, and has no name to pay by.
+        && (request.resource.data.deletedAt == null
+            || (request.resource.data.name == ''
+                && request.resource.data.walletBinding == null))
+        && (request.method == 'create'
+            || (request.resource.data.characterId == resource.data.characterId
+                && request.resource.data.owner == resource.data.owner
+                && request.resource.data.createdAt == resource.data.createdAt
+                && (resource.data.deletedAt == null
+                    || request.resource.data.deletedAt == resource.data.deletedAt)));
+    }
+
     // ---------------- messenger contacts ----------------
     // A contact is an account-level relationship between two uids. It holds no
     // wallet, no key and no message: messaging still authenticates with the
