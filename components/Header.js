@@ -12,6 +12,7 @@ import PwaInstallButton from './PwaInstallButton';
 // points at / and the rest are the tools people actually open.
 const NAV = [
   { href: '/', label: 'Wallet' },
+  { href: '/world', label: 'World' },
   { href: '/dashboard', label: 'Explorer' },
   { href: '/explorer', label: 'Search' },
   { href: '/download', label: 'Download' },

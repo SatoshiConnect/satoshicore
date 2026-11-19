@@ -47,15 +47,24 @@ function originOf(value) {
     return null;
   }
 }
-const PLAIN_HTTP_ORIGINS = [
+const PLAIN_HTTP_ORIGIN_LIST = [
   originOf(process.env.NEXT_PUBLIC_API_GATEWAY_URL),
   originOf(process.env.NEXT_PUBLIC_INDEXER_URL),
+  // The world server is a plain-HTTP loopback service in development; its own
+  // origin comes from NEXT_PUBLIC_WORLD_URL in any other deployment.
+  originOf(process.env.NEXT_PUBLIC_WORLD_URL),
   'http://127.0.0.1:8787',
   'http://127.0.0.1:8789',
+  'http://127.0.0.1:8790',
   'http://localhost:8787',
-  'http://localhost:8789'
-]
-  .filter((origin) => origin && origin.startsWith('http://'))
+  'http://localhost:8789',
+  'http://localhost:8790'
+].filter((origin) => origin && origin.startsWith('http://'));
+const PLAIN_HTTP_ORIGINS = PLAIN_HTTP_ORIGIN_LIST.join(' ');
+// connect-src is scheme-strict: http:// does not authorise the ws:// socket the
+// world room opens, so the same loopback origins are listed for WebSocket too.
+const PLAIN_WS_ORIGINS = PLAIN_HTTP_ORIGIN_LIST
+  .map((origin) => origin.replace(/^http:/, 'ws:'))
   .join(' ');
 
 const SITE_CSP = [
@@ -64,7 +73,7 @@ const SITE_CSP = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data:",
   "font-src 'self'",
-  `connect-src 'self' https: ${PLAIN_HTTP_ORIGINS}`.trim(),
+  `connect-src 'self' https: ${PLAIN_HTTP_ORIGINS} ${PLAIN_WS_ORIGINS}`.trim(),
   `frame-src 'self' https://accounts.google.com ${FIREBASE_AUTH_FRAME} https://*.firebaseapp.com`.trim(),
   "object-src 'none'",
   "base-uri 'self'",

@@ -328,6 +328,9 @@ test('failures are described in words a person can act on', () => {
 test('firestore rules keep characters owner-scoped and never hard-deleted', () => {
   assert.match(RULES, /match \/characters\/\{owner\}\/list\/\{characterId\}/);
   assert.match(RULES, /allow delete: if false/);
+  // Listing is scoped to the owner so the character picker works without
+  // opening the collection to enumeration.
+  assert.match(RULES, /allow list: if request\.auth != null && request\.auth\.uid == owner/);
   assert.match(RULES, /request\.auth\.uid == owner/);
   // The address shape is enforced in the rules, not only in the module.
   assert.match(RULES, /value\.address\.matches\('\^G\[A-Z2-7\]\{55\}\$'\)/);

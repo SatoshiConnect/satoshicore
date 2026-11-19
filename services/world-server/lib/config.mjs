@@ -14,6 +14,9 @@ export function loadConfig(env = process.env) {
   const projectId = String(env.FIREBASE_PROJECT_ID || '').trim();
   const ticketSecret = String(env.WORLD_TICKET_SECRET || '');
   const ttl = Number(env.WORLD_TICKET_TTL_MS || DEFAULT_TICKET_TTL_MS);
+  // Development-only read-only view. Off unless an operator turns it on, and the
+  // route also refuses anything that is not loopback.
+  const devSpectator = String(env.WORLD_DEV_SPECTATOR || '') === '1';
   const allowedOrigins = String(env.WORLD_ALLOWED_ORIGINS || '')
     .split(',')
     .map((value) => value.trim())
@@ -34,7 +37,8 @@ export function loadConfig(env = process.env) {
   }
 
   return {
-    port, host, projectId, ticketSecret, allowedOrigins, ticketTtlMs: ttl, problems,
+    port, host, projectId, ticketSecret, allowedOrigins, ticketTtlMs: ttl,
+    devSpectator, problems,
     // Bind on loopback unless an operator deliberately exposes the service.
     exposed: host !== '127.0.0.1' && host !== 'localhost',
   };

@@ -20,6 +20,7 @@ import { CHARACTER_ID_RE, resolveRecipient } from '../../lib/characters.js';
 import { CITIES, cityCatalog, cityRoomName, findCity } from './lib/cities.mjs';
 import { createFirebaseVerifier } from './lib/firebaseToken.mjs';
 import { createFirestoreReader } from './lib/firestore.mjs';
+import { createPresenceRegistry } from './lib/presence.mjs';
 import { createTicketStore } from './lib/tickets.mjs';
 import { createCityRoom } from './rooms/CityRoom.mjs';
 
@@ -77,8 +78,17 @@ function applyCors(app, allowedOrigins) {
  *
  * Exported separately so a test can drive the HTTP surface without a socket.
  */
+const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+
+/** The development view only ever answers the machine that runs the server. */
+function isLoopback(req) {
+  const address = req.socket?.remoteAddress || '';
+  return LOOPBACK.has(address);
+}
+
 export function mountWorldRoutes(app, {
   tickets, verifyIdToken, readCharacter, allowedOrigins = [],
+  presence = null, devSpectator = false,
   now = Date.now, limiter = createTicketLimiter({ now }),
 }) {
   if (allowedOrigins.length) applyCors(app, allowedOrigins);
@@ -106,6 +116,21 @@ export function mountWorldRoutes(app, {
 
   app.get('/api/world/health', (_req, res) => {
     res.json({ ok: true, service: 'satoshicore-world', cities: cityCatalog() });
+  });
+
+  // Read-only development view of one city's presence, for the in-browser
+  // renderer. Disabled unless WORLD_DEV_SPECTATOR=1, loopback only, and it can
+  // only read: no join, no movement, no ticket, no wallet.
+  app.get('/api/world/spectate', (req, res) => {
+    if (!devSpectator || !presence) return res.status(404).json({ error: 'not-found' });
+    if (!isLoopback(req)) return forbidden(res, 'loopback-only');
+    const city = findCity(req.query.city);
+    if (!city) return badRequest(res, 'unknown-city');
+    res.setHeader('cache-control', 'no-store');
+    return res.json({
+      city: city.id, width: city.width, height: city.height,
+      at: Date.now(), players: presence.snapshot(city.id),
+    });
   });
 
   app.post('/api/world/ticket', async (req, res) => {
@@ -190,17 +215,19 @@ export async function startWorldServer({
     || createFirebaseVerifier({ projectId: config.projectId, now });
   const read = readCharacter || createFirestoreReader({ projectId: config.projectId });
   const tickets = createTicketStore({ secret: config.ticketSecret, ttlMs: config.ticketTtlMs, now });
+  const presence = createPresenceRegistry();
 
   const gameServer = new Server({
     greet: false,
     express: (app) => mountWorldRoutes(app, {
-      tickets, verifyIdToken: verify, readCharacter: read,
+      tickets, verifyIdToken: verify, readCharacter: read, presence,
+      devSpectator: Boolean(config.devSpectator),
       allowedOrigins: config.allowedOrigins, now,
     }),
   });
 
   for (const city of cities) {
-    gameServer.define(cityRoomName(city.id), createCityRoom({ city, tickets, now }), city);
+    gameServer.define(cityRoomName(city.id), createCityRoom({ city, tickets, presence, now }), city);
   }
 
   await gameServer.listen(config.port, config.host);

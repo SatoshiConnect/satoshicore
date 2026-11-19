@@ -195,8 +195,9 @@ service cloud.firestore {
     //
     //   - get: any signed-in account may read one character by its id, which is
     //     what makes "meet a player, open their verified profile" work.
-    //   - list: closed, so characters cannot be enumerated; the world server
-    //     keeps presence, and discovery goes through an explicit id.
+    //   - list: the owner only, so the character picker can read an account's
+    //     own characters. Nobody can enumerate another account's list: an owner
+    //     uid is not guessable and the top-level collection stays closed.
     //   - delete: denied. Deleting a character writes a tombstone instead, so a
     //     hard delete can never remove the only pointer to a funded wallet.
     //   - create/update: owner only, with id, owner and createdAt immutable and a
@@ -230,7 +231,7 @@ service cloud.firestore {
 
     match /characters/{owner}/list/{characterId} {
       allow get: if request.auth != null;
-      allow list: if false;
+      allow list: if request.auth != null && request.auth.uid == owner;
       allow delete: if false;
 
       allow create, update: if request.auth != null

@@ -8,17 +8,30 @@
   "scope": "./",
   "id": "./",
   "display": "standalone",
-  "display_override": ["standalone", "minimal-ui"],
+  "display_override": [
+    "standalone",
+    "minimal-ui"
+  ],
   "orientation": "any",
   "background_color": "#0a0c11",
   "theme_color": "#0a0c11",
-  "categories": ["finance", "utilities"],
+  "categories": [
+    "finance",
+    "utilities",
+    "games"
+  ],
   "shortcuts": [
     {
       "name": "Open wallet",
       "short_name": "Wallet",
       "description": "Open the NSAT wallet",
       "url": "./"
+    },
+    {
+      "name": "Pixel World",
+      "short_name": "World",
+      "description": "Open the pixel world",
+      "url": "./world/"
     },
     {
       "name": "Chats",

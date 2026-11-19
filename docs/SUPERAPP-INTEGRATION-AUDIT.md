@@ -146,3 +146,87 @@ the real entry point.
 
 Still open: item 4 (renderer, tile map, collision), the Create Character flow, and
 the chat/Pixel World entry points. No performance numbers have been measured yet.
+
+## 8. Update — playable city slice landed (2026-11-19)
+
+Item 4 is implemented, together with the smallest Create Character flow the world
+needs. This section also records the reuse decision the newer candidates require,
+because "reused" is only accurate when upstream code is actually in the build.
+
+### 8.1 What ships now
+
+| Piece | File | Nature |
+| --- | --- | --- |
+| Deterministic city tile grid (river/shore, road grid, bridges, building blocks, parks, plaza, fountain) + foot-box collision, sliding and spawn search | `lib/worldMap.js` | New, project-authored. One city is 40×30 to 32×24 tiles; scenes are explicitly fictional and derived only from the city name and bounds. |
+| Server-enforced collision and legal spawn | `services/world-server/rooms/CityRoom.mjs` | New rules on top of upstream Colyseus rooms. A reported position inside a building or the water is dropped even when it is within the speed budget. |
+| Browser join client | `lib/worldClient.js` | New adapter: Firebase ID token → single-use ticket → `@colyseus/sdk` room. The socket never sees the ID token. |
+| Character list/create against Firestore | `lib/charactersClient.js` | New adapter over the existing `lib/characters.js` document layer. Owner-scoped list rule added to `firestore.rules`; enumeration of other accounts stays impossible. |
+| Playable renderer, character creator, city switching, keyboard + touch controls | `app/world/page.js`, `app/world/world.css` | New renderer on a plain canvas. It draws the shared map, an animated 4-direction sprite per character (appearance comes from the verified character document via the room state) and the nameplates. |
+| Room schema | `CityRoom.mjs` | `skin/hair/outfit/accessory` added so every client draws the same character; values come from the character document, never from the client. |
+
+Validation run in this workspace:
+
+```
+$ node --test tests/world-map.test.mjs tests/world-client.test.mjs tests/characters.test.mjs
+17 + 18 passing (map/collision, join client, character rules)
+$ (cd services/world-server && npm test)
+21 passing, including the two-client join and the new collision rejection
+$ npm run build
+Static export built; /world bundle 11.9 kB, the Colyseus SDK stays a lazy chunk
+$ npm run check:css
+Only the pre-existing app/wallet/wallet.css ratchet overage remains (1 literal at line 1534, already in HEAD)
+```
+
+Browser check: `/world` renders, the canvas is painted (sampled every pixel on a
+1194×692 backing store, 100% non-background), and the console shows no exception
+after the missing `T_BRIDGE` import was fixed.
+
+Not verified here: signing in and actually joining a room from the browser. This
+checkout has no `NEXT_PUBLIC_FIREBASE_*` values and no world-server env, so the
+page honestly reports "Sign-in is not configured for this build." The room join
+itself is covered by the two-client integration test with an injected verifier.
+
+### 8.2 Upstream re-check (GitHub API, 2026-11-19)
+
+| Repository | License | Stars / pushed | Decision |
+| --- | --- | --- | --- |
+| `TelegramOrg/Telegram-web-z` | **GPL-3.0** | 69, 2026-11-13 | **Not imported.** Same copyleft boundary as `-k`: importing the UI into this bundle would relicense the combined work, and it speaks MTProto to Telegram, not to our relay. Reference for behaviour only. |
+| `TelegramOrg/Telegram-web-k` | **GPL-3.0** | 79, 2026-11-13 | **Not imported.** As above. |
+| `SaeedNix/telegram-clone` | MIT | 64, 2025-12-12 | **Candidate.** Permissive and web-native, but a demo client without our E2E envelope model; adopting it means replacing its transport and losing its demo backend. Not chosen this slice. |
+| `tinode/webapp` | Apache-2.0 | 362, 2026-11-08 | **Best messaging-UI candidate.** Real React chat UI, permissive licence, but its data layer is Tinode gRPC-web; the adapter work (threads, E2E envelopes, payments) is a full slice of its own. |
+| `cashubtc/cashu.me` | MIT | 222, 2026-11-15 | **Not imported.** A Svelte Cashu wallet; its UI cannot be dropped into a React/Next bundle, and the protocol is not NSAT. UI ideas only. |
+| `PhatBanhGH/TheGathering` | **none** | 0, 2026-02-17 | **Rejected.** No licence file means all rights reserved. |
+| `RSamaium/RPG-JS` | MIT | 1,719, 2026-11-19 | **Still the fallback for authored maps.** Adopting its client means replacing the current renderer and its Tiled pipeline; kept as the migration path if hand-authored scenes become the bottleneck. |
+| `colyseus/colyseus` + `@colyseus/sdk` | MIT | 7,561, 2026-11-18 | **Adopted (actual upstream code in the build).** Room server 0.18.12 pinned in `services/world-server/package.json`; browser SDK 0.18.10 pinned in the web `package.json`. |
+
+### 8.3 Provenance record — Colyseus
+
+- Repository: `https://github.com/colyseus/colyseus`, MIT.
+- Packages actually in the build: `colyseus@^0.18.12`, `@colyseus/schema@^5.0.50`
+  (server) and `@colyseus/sdk@0.18.10` (browser, lazy chunk).
+- Destination: `services/world-server/` (rooms, transport) and
+  `lib/worldClient.js` (join adapter).
+- Modifications: none to upstream source. Project code extends `Room` and defines
+  two `schema()` classes; no vendored files.
+- Not adopted, and therefore not claimed as reused: Telegram Web UI, Tinode UI,
+  cashu.me UI, RPG-JS, TheGathering.
+
+### 8.4 Blockers and next task
+
+1. **Blocker — browser sign-in cannot be exercised in this checkout.** No Firebase
+   public config and no `WORLD_TICKET_SECRET` / `FIREBASE_PROJECT_ID` are present.
+   The page and the client adapter are complete; the end-to-end browser join needs
+   those values in `.env.local` (never committed).
+2. **Blocker — the world still cannot pay anyone.** The character creator leaves
+   `walletBinding` empty, and presence carries no owner uid, so there is no
+   verified address to show. This is deliberate until the binding step exists.
+3. **Next executable task (P3.1):** bind the active web wallet to the selected
+   character through the existing `createWalletBinding` + `bindWallet` path, with a
+   backup gate, then add a character card in the world that resolves
+   `/api/world/recipient` before offering "Send NSAT".
+4. **Next executable task (P1.1):** the messaging-UI reuse decision above is
+   Tinode (Apache-2.0). The slice is an adapter surface first: map the existing
+   relay/E2EE envelope functions onto one Tinode screen's data needs, prove it
+   with a single private-chat screen, and only then expand.
+5. Still unmeasured: CPU/memory per room and concurrent capacity. No capacity
+   claim is made.

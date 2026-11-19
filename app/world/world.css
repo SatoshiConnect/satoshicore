@@ -1,0 +1,343 @@
+/* The world stage is its own dark surface, like the explorer's neon panels: the
+   map is drawn on a canvas that supplies its own colours. */
+.world {
+  /* The stage is its own dark surface in both themes, like the explorer's neon
+     panels; these are its palette, declared once here rather than inline. */
+  --world-ink: #e6edf7;
+  --world-muted: #a9b7c9;
+  --world-accent: #0f766e;
+  --world-accent-ink: #f0fdfa;
+  --world-accent-soft: #5eead4;
+  --world-deep: #0f172a;
+  --world-error: #fca5a5;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 32px 20px 64px;
+}
+
+.world-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.world-kicker {
+  margin: 0 0 6px;
+  font: 600 12px/1.2 ui-monospace, monospace;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+}
+
+.world-head h1 {
+  margin: 0;
+  font-size: clamp(28px, 4vw, 40px);
+  letter-spacing: -0.02em;
+}
+
+.world-sub {
+  margin: 8px 0 0;
+  max-width: 60ch;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.world-badge {
+  border-radius: 999px;
+  padding: 6px 12px;
+  font: 600 12px/1 ui-monospace, monospace;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+
+.world-badge-ok { color: var(--ok); }
+.world-badge-bad { color: var(--warn); }
+.world-badge-wait { color: var(--warn); }
+
+.world-cities {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 20px 0 14px;
+}
+
+.world-cities button {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: inherit;
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.world-cities button.is-active {
+  border-color: var(--world-accent);
+  background: rgba(15, 118, 110, 0.12);
+  font-weight: 600;
+}
+
+.world-stage {
+  position: relative;
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid rgba(94, 234, 212, 0.18);
+  background: var(--world-deep);
+  box-shadow: 0 20px 50px rgba(11, 16, 32, 0.28);
+}
+
+.world-stage canvas {
+  display: block;
+  width: 100%;
+}
+
+.world-canvas {
+  cursor: default;
+  image-rendering: pixelated;
+  touch-action: none;
+}
+
+/* The gate sits over the map while a person is signing in, picking a character
+   or waiting for the room, so the city is always visible behind it. */
+.world-gate {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  transform: translate(-50%, -50%);
+  width: min(92%, 440px);
+  padding: 20px;
+  border-radius: 14px;
+  background: rgba(9, 13, 22, 0.92);
+  border: 1px solid rgba(94, 234, 212, 0.25);
+  color: var(--world-ink);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+}
+
+.world-gate h2 {
+  margin: 0 0 6px;
+  font-size: 18px;
+}
+
+.world-gate p {
+  margin: 0 0 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--world-muted);
+}
+
+.world-gate-text {
+  position: absolute;
+  inset: auto 0 18px;
+  margin: 0;
+  text-align: center;
+  color: var(--world-muted);
+  font-size: 13px;
+}
+
+.world-gate-error {
+  color: var(--world-error) !important;
+}
+
+.world-gate-hint {
+  font-size: 12px;
+  color: var(--world-muted) !important;
+}
+
+.world-primary {
+  width: 100%;
+  border: 0;
+  border-radius: 10px;
+  padding: 11px 16px;
+  background: var(--world-accent);
+  color: var(--world-accent-ink);
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.world-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.world-characters {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 14px;
+}
+
+.world-characters button {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(15, 23, 42, 0.6);
+  color: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.world-characters button span {
+  font-size: 11px;
+  color: var(--world-muted);
+}
+
+.world-characters button.is-active {
+  border-color: var(--world-accent-soft);
+  background: rgba(15, 118, 110, 0.28);
+}
+
+.world-create {
+  display: grid;
+  gap: 12px;
+}
+
+.world-create label {
+  display: grid;
+  gap: 5px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--world-muted);
+}
+
+.world-create input,
+.world-create select {
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(2, 6, 23, 0.7);
+  color: var(--world-ink);
+  padding: 8px 10px;
+  font-size: 14px;
+}
+
+.world-create-slots {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.world-preview {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: var(--world-deep);
+  image-rendering: pixelated;
+}
+
+.world-hud {
+  position: absolute;
+  inset: 10px 12px auto 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  font: 600 11px/1 ui-monospace, monospace;
+  color: var(--world-ink);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+
+.world-hud button {
+  pointer-events: auto;
+  border: 1px solid rgba(215, 226, 240, 0.5);
+  background: rgba(9, 13, 22, 0.7);
+  color: inherit;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.world-pad {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  display: grid;
+  grid-template-columns: repeat(3, 40px);
+  grid-template-rows: repeat(2, 40px);
+  gap: 6px;
+}
+
+.world-pad button {
+  border-radius: 10px;
+  border: 1px solid rgba(215, 226, 240, 0.35);
+  background: rgba(9, 13, 22, 0.65);
+  color: var(--world-ink);
+  font-size: 14px;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.world-pad button:nth-child(1) { grid-column: 2; grid-row: 1; }
+.world-pad button:nth-child(2) { grid-column: 1; grid-row: 2; }
+.world-pad button:nth-child(3) { grid-column: 2; grid-row: 2; }
+.world-pad button:nth-child(4) { grid-column: 3; grid-row: 2; }
+
+@media (hover: hover) and (pointer: fine) {
+  .world-pad { display: none; }
+}
+
+.world-message {
+  margin: 12px 0 0;
+  font-size: 13px;
+  color: var(--world-accent);
+}
+
+.world-note {
+  margin: 18px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.world-roster-empty {
+  color: var(--muted);
+  font-size: 13px;
+  border-style: dashed !important;
+}
+
+.world-empty {
+  position: absolute;
+  inset: auto 0 18px;
+  text-align: center;
+  margin: 0;
+  color: var(--world-muted);
+  font-size: 13px;
+}
+
+.world-roster {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.world-roster li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 14px;
+}
+
+.world-roster li span:last-child {
+  margin-left: auto;
+  color: var(--muted);
+  font: 500 12px/1 ui-monospace, monospace;
+}
+
+.world-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  display: inline-block;
+}

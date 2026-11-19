@@ -14,7 +14,7 @@
  * works offline".
  */
 
-const VERSION = 'nsat-pwa-v6';
+const VERSION = 'nsat-pwa-v7';
 // Only caches this worker owns may be deleted on activate. Another tool on the
 // same origin (a previous PWA, a docs site) keeps its caches.
 const CACHE_PREFIX = 'nsat-pwa-';
@@ -27,6 +27,9 @@ const MAX_ENTRIES = 120;
 const SHELL = [
   '',
   'wallet/',
+  // The pixel world is part of the app shell: offline it opens and says the
+  // world server is unreachable, exactly like the wallet says it is offline.
+  'world/',
   'share/',
   'share-copy.js',
   'download/',

@@ -167,7 +167,7 @@ test('service worker never intercepts same-origin API or dynamic core routes', (
   assert.match(sw, /\/\(\?:api\|v1\)/, 'API and indexer prefixes must be excluded');
   assert.match(sw, /if \(isDynamicApiPath\(url\.pathname\)\) return;/,
     'API paths must bypass respondWith and all Cache API paths');
-  assert.match(sw, /nsat-pwa-v6/, 'cache version must change when offline behavior changes');
+  assert.match(sw, /nsat-pwa-v7/, 'cache version must change when offline behavior changes');
 });
 
 test('offline shell precache list resolves inside the export', () => {

@@ -8,6 +8,7 @@ import nacl from 'tweetnacl';
 import { Client } from '@colyseus/sdk';
 import { createWalletBinding } from '../../../lib/characters.js';
 import { encodeG } from '../../../lib/nsatCodec.js';
+import { isWalkablePixel, mapForCity } from '../../../lib/worldMap.js';
 import { startWorldServer } from '../app.mjs';
 import { CITIES } from '../lib/cities.mjs';
 
@@ -144,15 +145,41 @@ test('world service: tickets, presence, movement and recipient checks', async (t
   assert.equal(seenByB[roomB.sessionId].name, 'Somsak');
 
   // A move is accepted within the walking budget and reaches the other client.
+  // The server now checks the shared tile map, so the step is chosen from the
+  // directions the map says are open instead of assuming the spawn is clear.
+  const cityMap = mapForCity({ id: 'bangkok', width: 1280, height: 960 });
   const start = { x: both[roomA.sessionId].x, y: both[roomA.sessionId].y };
-  roomA.send('move', { x: start.x + 20, y: start.y, facing: 'right' });
-  await waitFor(() => playersOf(roomB)[roomA.sessionId]?.x === start.x + 20);
-  assert.equal(playersOf(roomB)[roomA.sessionId].facing, 'right');
+  const candidates = [[20, 0, 'right'], [-20, 0, 'left'], [0, 20, 'down'], [0, -20, 'up']];
+  const step = candidates.find(([dx, dy]) => isWalkablePixel(cityMap, start.x + dx, start.y + dy));
+  assert.ok(step, 'a legal step exists at the spawn');
+  const [dx, dy, facing] = step;
+  roomA.send('move', { x: start.x + dx, y: start.y + dy, facing });
+  await waitFor(() => {
+    const seen = playersOf(roomB)[roomA.sessionId];
+    return seen && seen.x === start.x + dx && seen.y === start.y + dy;
+  });
+  assert.equal(playersOf(roomB)[roomA.sessionId].facing, facing);
+
+  // The collision check is the server's, not the page's: a point inside a
+  // blocked tile is dropped even when it is close enough for the walking budget.
+  const blockedNearby = [];
+  for (let oy = -12; oy <= 12; oy += 4) {
+    for (let ox = -12; ox <= 12; ox += 4) {
+      const target = { x: start.x + dx + ox, y: start.y + dy + oy };
+      if (!isWalkablePixel(cityMap, target.x, target.y)) blockedNearby.push(target);
+    }
+  }
+  if (blockedNearby.length) {
+    roomA.send('move', { ...blockedNearby[0], facing });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const after = playersOf(roomB)[roomA.sessionId];
+    assert.deepEqual({ x: after.x, y: after.y }, { x: start.x + dx, y: start.y + dy });
+  }
 
   // A teleport is dropped by the server, so the other client never sees it.
   roomA.send('move', { x: start.x + 900, y: start.y, facing: 'right' });
   await new Promise((resolve) => setTimeout(resolve, 250));
-  assert.equal(playersOf(roomB)[roomA.sessionId].x, start.x + 20);
+  assert.equal(playersOf(roomB)[roomA.sessionId].x, start.x + dx);
 
   // A spent ticket cannot open a second connection.
   const replayClient = new Client(`ws://127.0.0.1:${port}`);

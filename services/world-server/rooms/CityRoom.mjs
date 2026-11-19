@@ -11,7 +11,8 @@
 // shows are the ones the ticket carries from the verified document.
 import { Room } from 'colyseus';
 import { schema, t } from '@colyseus/schema';
-import { applyMove, spawnPoint } from '../lib/movement.mjs';
+import { applyMove } from '../lib/movement.mjs';
+import { isWalkablePixel, mapForCity, spawnForCharacter } from '../../../lib/worldMap.js';
 
 // `schema()` rather than decorators: this service is plain JavaScript, and the
 // decorator form needs a compiler configuration that does not exist here.
@@ -21,6 +22,13 @@ export const Player = schema({
   x: t.number(),
   y: t.number(),
   facing: t.string(),
+  // Appearance indexes from the verified character document, so every client
+  // draws the same sprite the owner chose. Bounded by the character module and
+  // the Firestore rules; the room copies, it does not invent.
+  skin: t.uint8(),
+  hair: t.uint8(),
+  outfit: t.uint8(),
+  accessory: t.uint8(),
 }, 'Player');
 
 export const CityState = schema({
@@ -45,13 +53,18 @@ function readMove(message) {
  * ticket verifier in the closure, so nothing global can be pointed at the wrong
  * city by mistake.
  */
-export function createCityRoom({ city, tickets, now = Date.now }) {
+export function createCityRoom({ city, tickets, presence = null, now = Date.now }) {
   return class CityRoom extends Room {
     onCreate() {
       this.maxClients = city.maxPlayers;
       this.setState(new CityState());
+      // The development spectator reads this room's live state; nothing is copied.
+      if (presence) presence.attach(city.id, this);
       // Last accepted position per session; the reference the speed budget uses.
       this.references = new Map();
+      // The same tile grid the browser draws. The server keeps it so a reported
+      // position can be checked against the city, not only against its bounds.
+      this.map = mapForCity(city);
 
       this.onMessage('move', (client, message) => this.handleMove(client, message));
       // Unknown message types are ignored rather than echoed or logged: a probe
@@ -87,10 +100,15 @@ export function createCityRoom({ city, tickets, now = Date.now }) {
         if (stale) stale.leave(4001);
       }
 
-      const spawn = spawnPoint(claims.characterId, city);
+      const spawn = spawnForCharacter(this.map, claims.characterId);
       const player = new Player();
       player.characterId = claims.characterId;
       player.name = typeof claims.name === 'string' ? claims.name : '';
+      const look = claims.appearance && typeof claims.appearance === 'object' ? claims.appearance : {};
+      player.skin = Number.isInteger(look.skin) ? look.skin : 0;
+      player.hair = Number.isInteger(look.hair) ? look.hair : 0;
+      player.outfit = Number.isInteger(look.outfit) ? look.outfit : 0;
+      player.accessory = Number.isInteger(look.accessory) ? look.accessory : 0;
       player.x = spawn.x;
       player.y = spawn.y;
       player.facing = 'down';
@@ -108,6 +126,9 @@ export function createCityRoom({ city, tickets, now = Date.now }) {
         x: move.x, y: move.y, facing: move.facing, now: now(), reference, city,
       });
       if (!result.ok) return;
+      // The rectangle is not the whole rule: a building or the river is not a
+      // legal standing place, and only the server's copy of the map decides.
+      if (!isWalkablePixel(this.map, result.x, result.y)) return;
       player.x = result.x;
       player.y = result.y;
       player.facing = result.facing;
@@ -120,6 +141,7 @@ export function createCityRoom({ city, tickets, now = Date.now }) {
     }
 
     onDispose() {
+      if (presence) presence.detach(city.id, this);
       if (this.state?.players) this.state.players.clear();
       if (this.references) this.references.clear();
     }
