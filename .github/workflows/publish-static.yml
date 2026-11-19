@@ -38,7 +38,10 @@ env:
   NEXT_PUBLIC_BASE_PATH: ''
   NEXT_PUBLIC_API_GATEWAY_URL: https://gateway.satoshicore.org
   NEXT_PUBLIC_INDEXER_URL: https://gateway.satoshicore.org
-  NEXT_PUBLIC_NSAT_NETWORK_ID: NSAT Mainnet ; October 2026 ; bc3098829fffc717
+  # The Mainnet identity fingerprint is set on the build step only. Keeping it
+  # at job level would hand it to `npm test`, whose e2e-send guard refuses to
+  # start when the fingerprint is present (it is there to stop an accidental
+  # Mainnet run), failing the package step for the wrong reason.
 
 jobs:
   build:
@@ -58,6 +61,8 @@ jobs:
         run: npm ci
 
       - name: Build static export
+        env:
+          NEXT_PUBLIC_NSAT_NETWORK_ID: NSAT Mainnet ; October 2026 ; bc3098829fffc717
         run: npm run build
 
       - name: Static-export verification tests
