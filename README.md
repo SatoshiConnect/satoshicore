@@ -1,7 +1,7 @@
 # satoshicore
 
 Official NSAT Web Wallet (non-custodial) and SatoshiCore Web Platform v24.0 —
-Next.js static-export site deployed to GitHub Pages at
+a Next.js static-export website hosted on the owner's iMac with Caddy at
 `https://wallet.satoshicore.org/`. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
 for the architecture, custom-domain setup and activation checklist, and
 [SECURITY.md](SECURITY.md) for the security invariants. The security audit

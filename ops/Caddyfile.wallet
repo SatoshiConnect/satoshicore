@@ -1,0 +1,47 @@
+# Browser-based NSAT Wallet on its own origin. The site is a static Next.js
+# export; signing stays in the browser and the API proxy exposes only the
+# allowlisted routes shared with the satoshicore.org site.
+wallet.satoshicore.org {
+	encode zstd gzip
+
+	import Caddyfile.api
+
+	root * /Users/migssa-ngakhaonu/nsat-ops/wallet-webroot
+	try_files {path} {path}.html {path}/index.html
+	file_server
+
+	handle_errors {
+		rewrite * /404.html
+		file_server
+	}
+
+	@walletFrameProtection {
+		path / /wallet /wallet/*
+		not path /wallet/game-embed /wallet/game-embed/*
+	}
+	header @walletFrameProtection X-Frame-Options "DENY"
+
+	@walletEmbed path /wallet/game-embed /wallet/game-embed/*
+	header @walletEmbed {
+		-X-Frame-Options
+		Content-Security-Policy "frame-ancestors https://world.satoshicore.org"
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+	header /_next/* Cache-Control "public, max-age=31536000, immutable"
+
+	log {
+		output file /Users/migssa-ngakhaonu/nsat-ops/caddy-logs/caddy-wallet-access.log {
+			roll_size 25MiB
+			roll_keep 4
+			roll_keep_for 720h
+			roll_interval 24h
+		}
+		format json
+	}
+}

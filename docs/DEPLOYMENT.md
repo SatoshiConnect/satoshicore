@@ -142,27 +142,19 @@ owner-managed, so a stale entry is reported rather than failing a site deploy.
 The same check can be run without deploying: Actions → **Verify deployed site
 (read-only, no deploy)** with a `site_url` input.
 
-## Custom domain — `wallet.satoshicore.org` (production decision 2026-10-31)
+## Production domain — `wallet.satoshicore.org` (iMac Caddy)
 
-> Production uses `wallet.satoshicore.org`. Its DNS (`CNAME` →
-> `satoshiconnect.github.io`) was already in place, and the repo Pages
-> configuration binds this domain (legacy-site divergence resolved by this
-> decision). The apex `satoshicore.org` remains a documented future option
-> (it needs 3 more apex A records plus a `www` CNAME before it can equal
-> Pages coverage); the apex is NOT the deployed wallet origin as of this
-> cycle.
+As of 2026-11-23, DNS points `wallet.satoshicore.org` to the owner's iMac at
+`87.124.102.86`. The site is a browser-based static export, not a native app or
+a GitHub Pages deployment. Caddy on the iMac must import
+[`ops/Caddyfile.wallet`](../ops/Caddyfile.wallet), with static files in
+`/Users/migssa-ngakhaonu/nsat-ops/wallet-webroot`. The exact host setup,
+same-origin API setting, install/validate/restart commands, verification, and
+rollback are in [`DOMAINS.md`](./DOMAINS.md).
 
-**DNS additions for apex/www (future option) require owner action; nothing
-here is automated.**
-
-1. At the DNS provider for `satoshicore.org`, add:
-   - Apex `A` records → GitHub Pages IPs:
-     `185.199.108.153`, `185.199.109.153`, `185.199.110.153`, `185.199.111.153`
-   - `www` `CNAME` → `SatoshiConnect.github.io`.
-2. Verify the domain in Repository → Settings → Pages → Custom domain:
-   `wallet.satoshicore.org`; enable **Enforce HTTPS** only after GitHub issues
-   a certificate and a normal TLS client validates it.
-3. The deployed artifact contains the `CNAME` file (`wallet.satoshicore.org`).
+The GitHub Pages workflow remains an alternative pipeline only. Do not change
+DNS to GitHub Pages unless the owner explicitly chooses to move Wallet off the
+iMac host.
 
 ## Offline / experimental state
 
