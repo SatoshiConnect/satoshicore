@@ -1,7 +1,7 @@
-# Domains and hosting — verified state and the two deploy paths
+# Domains and hosting — verified state
 
-Checked 2026-11-13 from a clean resolver and HTTP client. Everything below is
-observed, not planned.
+Checked 2026-11-23 from this iMac and its configured resolver. Everything
+below is observed, not planned.
 
 ## What is actually serving
 
@@ -9,7 +9,7 @@ observed, not planned.
 |---|---|---|---|
 | `satoshicore.org` | A → `87.124.102.86` | `server: Caddy` | Let's Encrypt certificate (`CN=satoshicore.org`), `alt-svc: h3`, `strict-transport-security: max-age=31536000; includeSubDomains`, `x-frame-options: DENY`, `x-content-type-options: nosniff`, `referrer-policy: no-referrer`. 404s are the static export's own Next.js page. |
 | `www.satoshicore.org` | **no A, no CNAME** | — | Does not resolve at all (`curl` exit 6). |
-| `wallet.satoshicore.org` | **no A, no CNAME** | — | Does not resolve, although `CNAME` in this repo names it and older notes called it the production origin. |
+| `wallet.satoshicore.org` | A → `87.124.102.86` | iMac Caddy | DNS reaches this iMac, but its active Caddy config had no `wallet.satoshicore.org` site block. A local TLS request returned an internal TLS alert and an external browser request timed out. The static web root and Caddy host route still need to be installed. |
 | `gateway.satoshicore.org` | resolves | `via: 1.1 Caddy` | `/health` 200; CORS preflight already allowed `https://satoshicore.org`. |
 
 **GitHub Pages is not in the serving path.** There is no `185.199.*` address, no
@@ -17,16 +17,21 @@ observed, not planned.
 that says the site "is deployed by GitHub Pages" describes the intended
 pipeline, not the live one.
 
-## Path A — keep Caddy (no DNS change, recommended)
+## Wallet domain — keep Caddy (no DNS change)
 
 The build is a plain static export, so publishing is copying files.
 
 Caddy is a launchd job on this machine, configured by
-`/usr/local/etc/satoshicore/Caddyfile.all` (it imports `Caddyfile.site` for the
-site and `Caddyfile.api` for same-origin `/api/v1/*`, `/v1/*`). The served
-directory is **not** fixed in the repo — it comes from `NSAT_WEB_ROOT` in
-`/Library/LaunchDaemons/com.satoshicore.caddy-standard-ports.plist`. Read it
-before publishing instead of assuming a path:
+`/usr/local/etc/satoshicore/Caddyfile.all`. It currently imports
+`Caddyfile.site` for `satoshicore.org` and `Caddyfile.nsat-messenger` for
+`chat.satoshicore.org`; neither handles `wallet.satoshicore.org`. Keep the
+existing chat/site root intact and give Wallet its own static root at
+`/Users/migssa-ngakhaonu/nsat-ops/wallet-webroot`. The web build must use
+`NEXT_PUBLIC_API_SAME_ORIGIN=1`; the Wallet host block imports
+`ops/Caddyfile.wallet` so API requests stay on the Wallet origin.
+
+The current `satoshicore.org` root is **not** the Wallet root — it comes from
+`NSAT_WEB_ROOT` in `/Library/LaunchDaemons/com.satoshicore.caddy-standard-ports.plist`:
 
 ```bash
 plutil -p /Library/LaunchDaemons/com.satoshicore.caddy-standard-ports.plist | grep NSAT_WEB_ROOT
@@ -36,31 +41,30 @@ At the time of writing that value is
 `/Users/migssa-ngakhaonu/nsat-ops/satoshicore-webroot`. The publish itself:
 
 ```bash
-# 1. Build for production: same-origin API, or the wallet would call another
-#    origin and lose the same-domain CORS-free path.
+# Build for production: same-origin API keeps Wallet requests on this hostname.
 NEXT_PUBLIC_API_SAME_ORIGIN=1 npm run build
-node tests/static-export.test.mjs && node tests/security-scan.mjs out
+mkdir -p /Users/migssa-ngakhaonu/nsat-ops/wallet-webroot
+rsync -a --delete out/ /Users/migssa-ngakhaonu/nsat-ops/wallet-webroot/
 
-# 2. Back up what is live right now (rollback = copy it back)
-ROOT=$(plutil -extract EnvironmentVariables.NSAT_WEB_ROOT raw -o - \
-  /Library/LaunchDaemons/com.satoshicore.caddy-standard-ports.plist)
-rsync -a "$ROOT/" "$ROOT.bak-$(date +%Y%m%d-%H%M%S)/"
+# Install the Wallet host route. The script backs up the host config,
+# validates it, restores it if validation/restart fails, then restarts Caddy.
+sudo ./ops/install-wallet-host.sh
 
-# 3. Publish
-rsync -a --delete out/ "$ROOT/"
+# Verify the Wallet host after Caddy has obtained its TLS certificate.
+curl -sI https://wallet.satoshicore.org/
+curl -s https://wallet.satoshicore.org/build-manifest.json
 
-# 4. Prove what is live (curl only; no browser needed)
-node scripts/verify-deployed-site.mjs https://satoshicore.org
-curl -s -o /dev/null -w '%{http_code}\n' https://satoshicore.org/api/v1/chain/info
+# Rollback: use the timestamped backup path printed by the installer.
+sudo cp /usr/local/etc/satoshicore/Caddyfile.all.bak-wallet-TIMESTAMP \
+  /usr/local/etc/satoshicore/Caddyfile.all
+sudo rm -f /usr/local/etc/satoshicore/Caddyfile.wallet
+sudo launchctl kickstart -k system/com.satoshicore.caddy-standard-ports
 ```
 
-Caddy serves files immediately — no reload is needed for a static publish, and
-none should be attempted: reloading renders the config from the environment of
-the calling shell, and a missing `NSAT_WEB_ROOT` would repoint the site at
-`./out`.
-
-Rollback is one command: point `current` back at the previous release
-directory. Nothing is deleted, so a bad build costs seconds, not data.
+The static file copy is reversible by restoring the previous `wallet-webroot`
+directory. The virtual-host change is reversible with the saved Caddyfile and
+restart command shown above. This operation does not change DNS, the existing
+chat/site root, or the gateway service.
 
 CI equivalent: Actions → **Publish static export (build, package, optional
 rsync)** → run with `publish=false` for a downloadable, checksummed archive, or

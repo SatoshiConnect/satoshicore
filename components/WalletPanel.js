@@ -12,7 +12,7 @@ import {
   keystoreExport, keystoreRestore, keystoreRemove, zeroSeed, MIN_PASSWORD_LENGTH,
   buildSignedTx, historyLoad, historyClear, historyPush, historyPatch,
 } from '../lib/nsatWallet';
-import { decodeSeed, encodeG } from '../lib/nsatCodec';
+import { decodeSeed, encodeG, ed25519Sign } from '../lib/nsatCodec';
 import nacl from 'tweetnacl';
 // Shared send gate (mirror of the desktop/prototype reason contract — one
 // source of truth for WHY a send is blocked; see NSAT-WALLET-BUTTON-STATES).
@@ -68,6 +68,7 @@ import { NSAT } from '../lib/nsatToken';
 // from the gateway's session-truth responses.
 
 const ACCOUNT_RE = /^G[A-Z2-7]{55}$/;
+const MESSENGER_ORIGIN = 'https://chat.satoshicore.org';
 const SHOW_GOOGLE_ACCOUNT = process.env.NEXT_PUBLIC_EXTENSION_BUILD !== '1';
 // Chat is the landing tab only on builds configured for the encrypted relay.
 const CHAT_RELAY_ENABLED = process.env.NEXT_PUBLIC_CHAT_RELAY === '1';
@@ -134,6 +135,34 @@ function supplyAndMinted(totalCoins) {
 
 const historyKey = (item) => `${item.hash}:${item.op_index ?? 0}`;
 
+function readMessengerLinkChallenge() {
+  if (typeof window === 'undefined' || !window.location.hash) return null;
+  const params = new URLSearchParams(window.location.hash.slice(1));
+  const token = params.get('token') || '';
+  const message = params.get('message') || '';
+  if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return null;
+  const lines = message.split('\n');
+  const issued = Number(lines[4]?.replace(/^Issued: /, ''));
+  const expires = Number(lines[5]?.replace(/^Expires: /, ''));
+  const valid = lines.length === 6
+    && lines[0] === 'SatoshiCore Messenger wallet link v1'
+    && lines[1] === `Origin: ${MESSENGER_ORIGIN}`
+    && /^Account: @[A-Za-z0-9._-]{1,64}$/.test(lines[2] || '')
+    && lines[3] === `Challenge: ${token}`
+    && Number.isInteger(issued) && Number.isInteger(expires)
+    && issued <= Math.floor(Date.now() / 1000) + 30
+    && expires - issued === 300
+    && expires > Math.floor(Date.now() / 1000);
+  if (!valid) return { invalid: true };
+  return { token, message, account: lines[2].slice('Account: '.length), expires };
+}
+
+function signatureBase64Url(bytes) {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
 function mergeHistory(prev, doc) {
   const seen = new Set(prev.map(historyKey));
   const add = (Array.isArray(doc?.items) ? doc.items : []).filter((item) => !seen.has(historyKey(item)));
@@ -187,6 +216,7 @@ export default function WalletPanel() {
   const [profileId, setProfileId] = useState('');
   // ui
   const [page, setPage] = useState(CHAT_RELAY_ENABLED ? 'chat' : 'overview');
+  const [messengerLink, setMessengerLink] = useState(null);
   // Manifest shortcuts are plain query parameters. Accept only known internal
   // destinations, then remove the parameter so it is not replayed on refresh.
   useEffect(() => {
@@ -195,10 +225,94 @@ export default function WalletPanel() {
     const target = sharePageForShortcut(params.get('view'));
     if (!target) return;
     setPage(target);
+    // A Messenger may prefill its verified chat recipient. Treat URL data as
+    // display-only input: never submit or sign until the wallet owner reviews
+    // the amount and explicitly approves the transaction.
+    if (target === 'send') {
+      const recipient = params.get('to') || '';
+      if (ACCOUNT_RE.test(recipient)) setDest(recipient);
+      const requestedAmount = params.get('amount') || '';
+      if (/^[1-9]\d{0,29}$/.test(requestedAmount)) setAmount(requestedAmount);
+    }
     params.delete('view');
+    params.delete('to');
+    params.delete('amount');
     const query = params.toString();
     window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`);
   }, []);
+  useEffect(() => {
+    const challenge = readMessengerLinkChallenge();
+    const hasChallengeFragment = new URLSearchParams(window.location.hash.slice(1)).has('token');
+    if (hasChallengeFragment) {
+      // Keep the one-use capability out of the address bar/history as soon as
+      // the Wallet has captured it in memory.
+      window.history.replaceState({}, '', `${window.location.pathname}${window.location.search}`);
+      setPage('overview');
+      setMessengerLink(challenge?.invalid
+        ? { phase: 'invalid', challenge: null }
+        : challenge ? { phase: 'ready', challenge } : null);
+    }
+  }, []);
+
+  useEffect(() => {
+    const onMessengerResult = (event) => {
+      if (event.origin !== MESSENGER_ORIGIN || event.source !== window.parent
+        || event.data?.type !== 'satoshicore:wallet-link-result') return;
+      if (event.data.ok) {
+        setMessengerLink((current) => current?.challenge
+          ? { phase: 'done', challenge: current.challenge }
+          : current);
+      } else {
+        setMessengerLink((current) => current?.challenge
+          ? {
+            phase: 'error',
+            challenge: current.challenge,
+            error: event.data.code === 'expired'
+              ? 'This connection request expired. Return to chat and start again.'
+              : 'Messenger could not verify this wallet. Nothing was linked.',
+          }
+          : current);
+      }
+    };
+    window.addEventListener('message', onMessengerResult);
+    return () => window.removeEventListener('message', onMessengerResult);
+  }, []);
+
+  const approveMessengerLink = useCallback(() => {
+    const challenge = messengerLink?.challenge;
+    if (!challenge || !active?.seed32 || messengerLink.phase === 'pending') return;
+    if (challenge.expires <= Math.floor(Date.now() / 1000)) {
+      setMessengerLink({ phase: 'invalid', challenge: null });
+      return;
+    }
+    try {
+      const signature = ed25519Sign(
+        active.seed32,
+        new TextEncoder().encode(challenge.message),
+      );
+      const proof = {
+        type: 'satoshicore:wallet-link-proof',
+        token: challenge.token,
+        address: active.pubkey,
+        signature: signatureBase64Url(signature),
+      };
+      signature.fill(0);
+      if (window.parent === window) {
+        setMessengerLink({
+          phase: 'error', challenge,
+          error: 'Open this Wallet from the Messenger Wallet tab to complete linking here.',
+        });
+        return;
+      }
+      setMessengerLink({ phase: 'pending', challenge });
+      window.parent.postMessage(proof, MESSENGER_ORIGIN);
+    } catch {
+      setMessengerLink({
+        phase: 'error', challenge,
+        error: 'Could not sign the connection request. Your key was not sent.',
+      });
+    }
+  }, [active, messengerLink]);
   // Total "new" messages shown on the Chats tab. It is derived from the same
   // local snapshot as the Chats list (addresses and integer counts only) and is
   // refreshed whenever a poll writes a new snapshot.
@@ -212,6 +326,10 @@ export default function WalletPanel() {
   // sign-up creates a wallet without typing one; the password stays the user's.
   const [accountEmail, setAccountEmail] = useState('');
   const [accountUid, setAccountUid] = useState('');
+  // A memory-only anonymous session keeps the wallet usable when account
+  // sign-in is not configured. The normal account filter still hides any
+  // wallets bound to another website account.
+  const [anonymousSession, setAnonymousSession] = useState(false);
   // Every web wallet session requires an identified account. Keep the gate up
   // while Firebase restores its session so local wallet names never flash first.
   const signInRequired = SHOW_GOOGLE_ACCOUNT;
@@ -1622,13 +1740,13 @@ export default function WalletPanel() {
 
   // Signed out: the gate is the whole screen. Nothing from a local wallet is
   // reachable until the required website account session is established.
-  if (signInRequired && (!accountReady || !accountUid)) {
+  if (signInRequired && (!accountReady || (!accountUid && !anonymousSession))) {
     return (
       <div className="nw-root">
         <div className="nw-phone">
           <main className="nw-content">
             <h1 className="nw-visually-hidden">NSAT Wallet</h1>
-            <GoogleAccount variant="gate" />
+            <GoogleAccount variant="gate" onUseWithoutAccount={() => setAnonymousSession(true)} />
           </main>
         </div>
       </div>
@@ -1683,6 +1801,51 @@ export default function WalletPanel() {
             <p className="nw-dim nw-small" style={{ marginTop: 0 }}>
               Offline: no gateway configured for this build.
             </p>
+          )}
+
+          {messengerLink && (
+            <section className="nw-card" aria-live="polite" aria-labelledby="nw-messenger-link-title">
+              {messengerLink.phase === 'done' ? (
+                <>
+                  <h2 id="nw-messenger-link-title">Wallet connected to Messenger</h2>
+                  <p className="nw-small nw-dim" style={{ marginBottom: 0 }}>
+                    You are still in chat. Your wallet key stayed in this Wallet, and no NSAT was sent.
+                  </p>
+                </>
+              ) : messengerLink.phase === 'invalid' ? (
+                <>
+                  <h2 id="nw-messenger-link-title">Connection request expired</h2>
+                  <p className="nw-small nw-dim" style={{ marginBottom: 0 }}>
+                    Return to the Messenger Wallet tab and start again. No wallet was linked.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <h2 id="nw-messenger-link-title">Connect this Wallet to Messenger</h2>
+                  <p className="nw-small nw-dim">
+                    Messenger account: <strong>{messengerLink.challenge.account}</strong>. This signs a one-time ownership check
+                    for your public address only. It does not send NSAT, and your private key stays in this Wallet.
+                  </p>
+                  {active ? (
+                    <p className="nw-small nw-dim">Selected wallet: <strong>{active.name}</strong> · {shortAddr(active.pubkey, 8)}</p>
+                  ) : (
+                    <p className="nw-small nw-dim">Unlock the wallet you want to connect below, then approve here.</p>
+                  )}
+                  {messengerLink.error ? (
+                    <p className="nw-small" role="alert" style={{ color: 'var(--danger, #d33)' }}>{messengerLink.error}</p>
+                  ) : null}
+                  {messengerLink.phase === 'pending' ? (
+                    <p className="nw-small" role="status">Verifying the signed request in Messenger…</p>
+                  ) : (
+                    <button type="button" className="nw-send-btn"
+                      disabled={!active || busy || messengerLink.phase === 'pending'}
+                      onClick={approveMessengerLink}>
+                      {messengerLink.phase === 'error' ? 'Try connection again' : 'Approve connection'}
+                    </button>
+                  )}
+                </>
+              )}
+            </section>
           )}
 
           {/* Chats carries its own header, so it does not repeat the page title
@@ -2658,11 +2821,22 @@ function SendPage({ state, gate, busy, active, balance, funded, linkedRecipients
 
 /* -------------------------------- Receive -------------------------------- */
 function ReceivePage({ activePubkey, notify }) {
+  const [qr, setQr] = useState('');
+  useEffect(() => {
+    let alive = true;
+    setQr('');
+    if (!activePubkey) return undefined;
+    import('qrcode').then(({ toDataURL }) => toDataURL(activePubkey, {
+      errorCorrectionLevel: 'M', margin: 1, width: 224, color: { dark: '#102a32', light: '#ffffff' },
+    })).then((value) => { if (alive) setQr(value); }).catch(() => { if (alive) setQr(''); });
+    return () => { alive = false; };
+  }, [activePubkey]);
   return (
     <section className="nw-card" style={{ textAlign: 'center' }}>
       {!activePubkey
         ? <EmptyState text="No wallet selected" />
         : (<>
+          {qr ? <img className="nw-share-qr" src={qr} alt="QR code for receiving NSAT" width="224" height="224" /> : null}
           <div className="nw-mono"
             style={{ wordBreak: 'break-all', padding: '12px 0', color: 'var(--cyan)' }}>
             {activePubkey}
