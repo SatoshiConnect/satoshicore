@@ -20,6 +20,8 @@ const NAV = [
   { href: '/status', label: 'Status' }
 ];
 
+const MESSENGER_URL = 'https://chat.satoshicore.org/';
+
 // The mark is the same gem as the iPhone app icon (flat table, brilliant
 // crown, pointed pavilion) drawn once so header and favicon stay in sync.
 export function GemMark() {
@@ -60,6 +62,9 @@ export default function Header() {
                 {item.label}
               </Link>
             ))}
+            <a href={MESSENGER_URL} target="_blank" rel="noopener noreferrer">
+              Messenger
+            </a>
           </nav>
           <PwaInstallButton />
           <ThemeToggle />
