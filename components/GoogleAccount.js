@@ -53,7 +53,7 @@ function accountFromUser(nextUser) {
 // `variant="row"` is the wallet-screen entry point: one line with the account
 // state and its single action, so signing in does not require Settings.
 // The full card stays in Settings, where there is room to explain each choice.
-export default function GoogleAccount({ variant = 'card' } = {}) {
+export default function GoogleAccount({ variant = 'card', onUseWithoutAccount = null } = {}) {
   const [user, setUser] = useState(null);
   const [ready, setReady] = useState(!configured);
   const [busy, setBusy] = useState(false);
@@ -340,9 +340,16 @@ export default function GoogleAccount({ variant = 'card' } = {}) {
           </p>
         ) : null}
         {!configured ? (
-          <p className="nw-small nw-dim" role="status">
-            Account sign-in is not configured in this build. The wallet cannot be opened until it is enabled.
-          </p>
+          <>
+            <p className="nw-small nw-dim" role="status">
+              Google sign-in is not configured in this build. You can still use wallets stored on this device without an account.
+            </p>
+            {onUseWithoutAccount ? (
+              <button type="button" className="nw-chip-btn nw-gate-skip" onClick={onUseWithoutAccount}>
+                Use without an account
+              </button>
+            ) : null}
+          </>
         ) : !ready ? (
           <p className="nw-small nw-dim" role="status">Checking sign-in session…</p>
         ) : user ? (
@@ -368,6 +375,11 @@ export default function GoogleAccount({ variant = 'card' } = {}) {
               </span>
             </label>
             <EmailAccount variant="gate" />
+            {onUseWithoutAccount ? (
+              <button type="button" className="nw-chip-btn nw-gate-skip" onClick={onUseWithoutAccount}>
+                Use without an account
+              </button>
+            ) : null}
           </>
         )}
         {error ? <p className="nw-small nw-google-error" role="alert">{error}</p> : null}

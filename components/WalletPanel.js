@@ -212,6 +212,10 @@ export default function WalletPanel() {
   // sign-up creates a wallet without typing one; the password stays the user's.
   const [accountEmail, setAccountEmail] = useState('');
   const [accountUid, setAccountUid] = useState('');
+  // A memory-only anonymous session keeps the wallet usable when account
+  // sign-in is not configured. The normal account filter still hides any
+  // wallets bound to another website account.
+  const [anonymousSession, setAnonymousSession] = useState(false);
   // Every web wallet session requires an identified account. Keep the gate up
   // while Firebase restores its session so local wallet names never flash first.
   const signInRequired = SHOW_GOOGLE_ACCOUNT;
@@ -1622,13 +1626,13 @@ export default function WalletPanel() {
 
   // Signed out: the gate is the whole screen. Nothing from a local wallet is
   // reachable until the required website account session is established.
-  if (signInRequired && (!accountReady || !accountUid)) {
+  if (signInRequired && (!accountReady || (!accountUid && !anonymousSession))) {
     return (
       <div className="nw-root">
         <div className="nw-phone">
           <main className="nw-content">
             <h1 className="nw-visually-hidden">NSAT Wallet</h1>
-            <GoogleAccount variant="gate" />
+            <GoogleAccount variant="gate" onUseWithoutAccount={() => setAnonymousSession(true)} />
           </main>
         </div>
       </div>
