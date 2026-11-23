@@ -16,8 +16,8 @@ wallet.satoshicore.org {
 	}
 
 	@walletFrameProtection {
-		path / /wallet /wallet/*
-		not path /wallet/game-embed /wallet/game-embed/*
+		path / /wallet /wallet/* /messenger-embed /messenger-embed/*
+		not path /wallet/game-embed /wallet/game-embed/* /messenger-embed /messenger-embed/*
 	}
 	header @walletFrameProtection X-Frame-Options "DENY"
 
@@ -25,6 +25,12 @@ wallet.satoshicore.org {
 	header @walletEmbed {
 		-X-Frame-Options
 		Content-Security-Policy "frame-ancestors https://world.satoshicore.org"
+	}
+
+	@messengerWalletEmbed path /messenger-embed /messenger-embed/*
+	header @messengerWalletEmbed {
+		-X-Frame-Options
+		Content-Security-Policy "frame-ancestors https://chat.satoshicore.org"
 	}
 
 	header {

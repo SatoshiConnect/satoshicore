@@ -195,7 +195,18 @@ export default function WalletPanel() {
     const target = sharePageForShortcut(params.get('view'));
     if (!target) return;
     setPage(target);
+    // A Messenger may prefill its verified chat recipient. Treat URL data as
+    // display-only input: never submit or sign until the wallet owner reviews
+    // the amount and explicitly approves the transaction.
+    if (target === 'send') {
+      const recipient = params.get('to') || '';
+      if (ACCOUNT_RE.test(recipient)) setDest(recipient);
+      const requestedAmount = params.get('amount') || '';
+      if (/^[1-9]\d{0,29}$/.test(requestedAmount)) setAmount(requestedAmount);
+    }
     params.delete('view');
+    params.delete('to');
+    params.delete('amount');
     const query = params.toString();
     window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`);
   }, []);
@@ -2662,11 +2673,22 @@ function SendPage({ state, gate, busy, active, balance, funded, linkedRecipients
 
 /* -------------------------------- Receive -------------------------------- */
 function ReceivePage({ activePubkey, notify }) {
+  const [qr, setQr] = useState('');
+  useEffect(() => {
+    let alive = true;
+    setQr('');
+    if (!activePubkey) return undefined;
+    import('qrcode').then(({ toDataURL }) => toDataURL(activePubkey, {
+      errorCorrectionLevel: 'M', margin: 1, width: 224, color: { dark: '#102a32', light: '#ffffff' },
+    })).then((value) => { if (alive) setQr(value); }).catch(() => { if (alive) setQr(''); });
+    return () => { alive = false; };
+  }, [activePubkey]);
   return (
     <section className="nw-card" style={{ textAlign: 'center' }}>
       {!activePubkey
         ? <EmptyState text="No wallet selected" />
         : (<>
+          {qr ? <img className="nw-share-qr" src={qr} alt="QR code for receiving NSAT" width="224" height="224" /> : null}
           <div className="nw-mono"
             style={{ wordBreak: 'break-all', padding: '12px 0', color: 'var(--cyan)' }}>
             {activePubkey}

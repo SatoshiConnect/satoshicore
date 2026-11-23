@@ -47,6 +47,7 @@ function fakeIndexedDb() {
 test('manifest shortcut values map only to known internal views', () => {
   assert.equal(sharePageForShortcut('chat'), 'chat');
   assert.equal(sharePageForShortcut('receive'), 'receive');
+  assert.equal(sharePageForShortcut('send'), 'send');
   assert.equal(sharePageForShortcut('wallet'), 'overview');
   assert.equal(sharePageForShortcut('https://evil.test'), null);
   assert.equal(sharePageForShortcut('../send'), null);
