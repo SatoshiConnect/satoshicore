@@ -1,0 +1,44 @@
+.messenger-link-page {
+  min-height: calc(100svh - var(--chrome-h) - 2rem);
+  display: grid;
+  place-items: center;
+  padding: 28px 16px;
+}
+
+.messenger-link-card {
+  width: min(100%, 520px);
+  padding: clamp(22px, 5vw, 38px);
+  border: 1px solid var(--border-strong);
+  border-radius: 24px;
+  background: var(--card-grad);
+  box-shadow: var(--shadow-card);
+}
+
+.messenger-link-mark {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 15px;
+  color: var(--brand-ink);
+  background: var(--brand-grad);
+  font-size: 22px;
+  font-weight: 800;
+}
+
+.messenger-link-eyebrow { margin: 22px 0 6px; color: var(--muted); font-size: 13px; }
+.messenger-link-card h1 { margin: 0; color: var(--fg); font-size: clamp(26px, 6vw, 34px); letter-spacing: -0.03em; }
+.messenger-link-lead { color: var(--muted); line-height: 1.55; overflow-wrap: anywhere; }
+.messenger-link-lead strong { color: var(--fg); }
+.messenger-link-warning { margin: 18px 0; padding: 14px; border: 1px solid var(--border); border-radius: 14px; background: var(--fill); color: var(--muted); font-size: 14px; line-height: 1.5; }
+.messenger-link-form { display: grid; gap: 10px; }
+.messenger-link-form label { margin-top: 6px; color: var(--muted); font-size: 13px; font-weight: 600; }
+.messenger-link-form input,
+.messenger-link-form select { width: 100%; min-width: 0; padding: 12px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface); color: var(--fg); font: inherit; }
+.messenger-link-form select { text-overflow: ellipsis; }
+.messenger-link-form button { min-height: 48px; margin-top: 8px; padding: 10px 16px; border: 0; border-radius: 999px; background: var(--accent); color: var(--on-accent); font: inherit; font-weight: 700; cursor: pointer; }
+.messenger-link-form button:disabled { opacity: 0.55; cursor: wait; }
+.messenger-link-error { color: var(--danger); line-height: 1.45; }
+.messenger-link-empty { color: var(--muted); line-height: 1.5; }
+.messenger-link-foot { margin: 20px 0 10px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+.messenger-link-back { display: inline-block; padding-block: 8px; color: var(--link); text-decoration: none; }
