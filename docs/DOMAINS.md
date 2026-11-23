@@ -46,24 +46,18 @@ NEXT_PUBLIC_API_SAME_ORIGIN=1 npm run build
 mkdir -p /Users/migssa-ngakhaonu/nsat-ops/wallet-webroot
 rsync -a --delete out/ /Users/migssa-ngakhaonu/nsat-ops/wallet-webroot/
 
-# Back up the current Caddy host map before adding Wallet.
-sudo cp /usr/local/etc/satoshicore/Caddyfile.all \
-  /usr/local/etc/satoshicore/Caddyfile.all.bak-before-wallet
-sudo install -o root -g wheel -m 644 ops/Caddyfile.wallet \
-  /usr/local/etc/satoshicore/Caddyfile.wallet
-sudo sh -c 'printf "\nimport Caddyfile.wallet\n" >> /usr/local/etc/satoshicore/Caddyfile.all'
-sudo /opt/homebrew/bin/caddy validate \
-  --config /usr/local/etc/satoshicore/Caddyfile.all --adapter caddyfile
-sudo launchctl kickstart -k system/com.satoshicore.caddy-standard-ports
+# Install the Wallet host route. The script backs up the host config,
+# validates it, restores it if validation/restart fails, then restarts Caddy.
+sudo ./ops/install-wallet-host.sh
 
 # Verify the Wallet host after Caddy has obtained its TLS certificate.
 curl -sI https://wallet.satoshicore.org/
 curl -s https://wallet.satoshicore.org/build-manifest.json
 
-# Rollback: restore the saved Caddy host map and restart Caddy.
-sudo cp /usr/local/etc/satoshicore/Caddyfile.all.bak-before-wallet \
+# Rollback: use the timestamped backup path printed by the installer.
+sudo cp /usr/local/etc/satoshicore/Caddyfile.all.bak-wallet-TIMESTAMP \
   /usr/local/etc/satoshicore/Caddyfile.all
-sudo rm /usr/local/etc/satoshicore/Caddyfile.wallet
+sudo rm -f /usr/local/etc/satoshicore/Caddyfile.wallet
 sudo launchctl kickstart -k system/com.satoshicore.caddy-standard-ports
 ```
 
